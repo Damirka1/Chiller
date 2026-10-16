@@ -2,7 +2,7 @@
 
 ## Current scope
 
-The current repository contains planning documents. Do not start application implementation solely because this file exists. Follow the user's active request. A future explicit implementation/night-run request authorizes delegation as described in docs/AGENT_RUNBOOK.md.
+The user authorized implementation and overnight continuation on 16 October 2026. Read docs/RUN_REPORT.md first and continue the existing implementation instead of restarting from the plan. Night heartbeat chiller-10-00 continues this thread until 17 October 2026 10:00 Asia/Almaty. Keep the branch master. Use economical gpt-6-luna workers for bounded independent tasks; no more than three workers and no recursive delegation. Follow docs/AGENT_RUNBOOK.md with the actual frozen source contracts in contracts/src/main/kotlin/dev/chiller/contracts/Contracts.kt taking precedence over draft API sketches.
 
 ## Project decisions
 
