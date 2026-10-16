@@ -1,0 +1,30 @@
+# Gradle / Kotlin / IDE output
+.gradle/
+.kotlin/
+**/build/
+out/
+.idea/
+*.iml
+.DS_Store
+
+# Local credentials and machine-specific configuration
+.env
+.env.*
+!.env.example
+local.properties
+*.local.json
+*.local.properties
+*.pem
+*.key
+
+# Runtime data and generated reports
+.chiller/local/
+.chiller/sessions/
+.chiller/artifacts/
+artifacts/
+reports/local/
+*.hprof
+hs_err_pid*
+
+# Keep Gradle wrapper binaries trackable when bootstrap creates them.
+!gradle/wrapper/gradle-wrapper.jar
