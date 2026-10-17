@@ -17,6 +17,7 @@ import java.util.UUID
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.ConcurrentHashMap
+import java.util.LinkedHashMap
 
 /**
  * Local filesystem implementation. Path policy is not an OS sandbox against other processes.
@@ -48,6 +49,17 @@ class LocalWorkspace(
     private data class Applied(val file: TextFile, val observed: Set<Int>)
     private data class SearchEntry(val kind: String, val path: String, val line: Int, val text: String)
     private data class Captured(val stdout: ByteArray, val stderr: ByteArray, val exitCode: Int, val truncated: Boolean)
+    private data class PageQuery(val kind: String, val path: String, val glob: String?, val query: String?, val regex: Boolean, val context: Int)
+    private data class PageCapture(val id: String, val query: PageQuery, val items: List<JsonElement>, val truncated: Boolean, val expiresAtNanos: Long)
+    private data class PageCursor(val captureId: String, val offset: Int, val expiresAt: Long)
+    private val pageLock = Any()
+    private val pageCaptures = LinkedHashMap<String, PageCapture>()
+    private val pageCursors = LinkedHashMap<String, PageCursor>()
+    private val pageTtlNanos = 120_000_000_000L
+    private val maxPageCaptures = 8
+    private val maxPageCursors = 128
+    private val maxCursorsPerCapture = 16
+    private val maxPageItems = 20_000
 
     override suspend fun read(request: ReadFileRequest): FileReadResult = withContext(Dispatchers.IO) {
         val file = resolve(request.path, mustExist = true)
@@ -87,11 +99,55 @@ class LocalWorkspace(
         FileReadResult(relative(file), id, total, content, truncated = visibleEnd < declaredEnd, eol = eol)
     }
 
-    override suspend fun list(path: String, glob: String?, limit: Int): ToolResult = withContext(Dispatchers.IO) {
+    override suspend fun describeFile(path: String): FilePresentation = withContext(Dispatchers.IO) {
+        val file = resolve(path, mustExist = true)
+        val attrs = try {
+            Files.readAttributes(file, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS)
+        } catch (e: IOException) {
+            fail("FILE_UNAVAILABLE", "File metadata is unavailable: ${e.message}")
+        }
+        if (!attrs.isRegularFile || Files.isSymbolicLink(file)) fail("UNSUPPORTED_FILE", "Only regular files can be presented")
+        val signature = Files.newInputStream(file, LinkOption.NOFOLLOW_LINKS).use { it.readNBytes(16) }
+        FilePresentation(
+            path = relative(file),
+            name = file.fileName?.toString() ?: fail("INVALID_PATH", "A file name is required"),
+            mimeType = presentationMime(file.fileName?.toString().orEmpty(), signature),
+            sizeBytes = attrs.size(),
+        )
+    }
+
+    private fun presentationMime(name: String, signature: ByteArray): String {
+        fun startsWith(vararg bytes: Int) = signature.size >= bytes.size && bytes.indices.all { (signature[it].toInt() and 0xff) == bytes[it] }
+        if (startsWith(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a)) return "image/png"
+        if (startsWith(0xff, 0xd8, 0xff)) return "image/jpeg"
+        if (startsWith(0x47, 0x49, 0x46, 0x38, 0x37, 0x61) || startsWith(0x47, 0x49, 0x46, 0x38, 0x39, 0x61)) return "image/gif"
+        if (startsWith(0x25, 0x50, 0x44, 0x46, 0x2d)) return "application/pdf"
+        return when (name.substringAfterLast('.', "").lowercase()) {
+            "txt", "log", "env", "sh", "kt", "kts", "java", "py", "sql", "properties", "gradle" -> "text/plain"
+            "md", "markdown" -> "text/markdown"
+            "csv" -> "text/csv"
+            "tsv" -> "text/tab-separated-values"
+            "json", "map" -> "application/json"
+            "xml", "xhtml" -> "application/xml"
+            "yaml", "yml" -> "application/yaml"
+            "toml" -> "application/toml"
+            "html", "htm" -> "text/html"
+            "css" -> "text/css"
+            "js", "mjs", "cjs" -> "text/javascript"
+            "ts", "tsx", "jsx" -> "text/plain"
+            "svg" -> "image/svg+xml"
+            else -> "application/octet-stream"
+        }
+    }
+
+    override suspend fun list(path: String, glob: String?, limit: Int): ToolResult = listPage(path, glob, limit, null)
+
+    override suspend fun listPage(path: String, glob: String?, limit: Int, cursor: String?): ToolResult = withContext(Dispatchers.IO) {
+        val pageQuery = PageQuery("list", path, glob, null, false, 0)
+        if (cursor != null) return@withContext continuePage(pageQuery, limit, cursor, "entries")
         val dir = resolve(path, true)
         if (!Files.isDirectory(dir, LinkOption.NOFOLLOW_LINKS)) return@withContext ToolResult.failure("NOT_DIRECTORY", "Path is not a directory")
-        val max = limit.coerceIn(1, 1000)
-        val args = mutableListOf("rg", "--files", "--null", "--color", "never", "--hidden", "--no-require-git", "--glob", "!.git/**", "--glob", "!**/.git/**")
+        val args = mutableListOf("rg", "--no-config", "--files", "--null", "--color", "never", "--hidden", "--no-require-git", "--glob", "!.git/**", "--glob", "!**/.git/**")
         val ignore = base.resolve(".chillerignore")
         if (Files.isRegularFile(ignore, LinkOption.NOFOLLOW_LINKS)) { args += "--ignore-file"; args += ignore.toString() }
         // A user glob is applied in Kotlin: ripgrep globs override ignore rules, which would surface node_modules and similar.
@@ -104,8 +160,9 @@ class LocalWorkspace(
         if (captured.truncated && !captured.stdout.lastOrNull().let { it == 0.toByte() }) pathParts.removeLastOrNull()
         val paths = pathParts.map { raw -> Paths.get(raw).let { if (it.isAbsolute) it else base.resolve(it) } }.sorted()
         val all = paths.map(::relative).filter { glob == null || matchesGlob(it, glob) }
-        val truncated = captured.truncated || all.size > max
-        ToolResult(true, buildJsonObject { put("entries", JsonArray(all.take(max).map { JsonPrimitive(it) })); put("truncated", truncated) }, truncated = truncated)
+        val bounded = all.take(maxPageItems).map(::JsonPrimitive)
+        val capture = rememberCapture(pageQuery, bounded, captured.truncated || all.size > maxPageItems)
+        page(capture, 0, limit, "entries")
     }
 
     private fun matchesGlob(relativePath: String, glob: String): Boolean = runCatching {
@@ -114,11 +171,16 @@ class LocalWorkspace(
         if ('/' in pattern) matcher.matches(Paths.get(relativePath)) else matcher.matches(Paths.get(relativePath).fileName)
     }.getOrDefault(false)
 
-    override suspend fun search(query: String, path: String, glob: String?, regex: Boolean, limit: Int, context: Int): ToolResult = withContext(Dispatchers.IO) {
+    override suspend fun search(query: String, path: String, glob: String?, regex: Boolean, limit: Int, context: Int): ToolResult =
+        searchPage(query, path, glob, regex, limit, context, null)
+
+    override suspend fun searchPage(query: String, path: String, glob: String?, regex: Boolean, limit: Int, context: Int, cursor: String?): ToolResult = withContext(Dispatchers.IO) {
+        val pageQuery = PageQuery("search", path, glob, query, regex, context.coerceIn(0, 5))
+        if (cursor != null) return@withContext continuePage(pageQuery, limit, cursor, "matches")
         if (query.isEmpty()) return@withContext ToolResult.failure("INVALID_QUERY", "Search query must not be empty")
         val dir = resolve(path, true)
         val contextLines = context.coerceIn(0, 5)
-        val args = mutableListOf("rg", "--json", "--line-number", "--color", "never", "--no-require-git", "--sort", "path", "--max-filesize", "2M", "--max-columns", "2000", "--max-columns-preview")
+        val args = mutableListOf("rg", "--no-config", "--json", "--line-number", "--color", "never", "--no-require-git", "--sort", "path", "--max-filesize", "2M", "--max-columns", "2000", "--max-columns-preview")
         if (contextLines > 0) { args += "-C"; args += contextLines.toString() }
         val ignore = base.resolve(".chillerignore")
         if (Files.isRegularFile(ignore, LinkOption.NOFOLLOW_LINKS)) { args += "--ignore-file"; args += ignore.toString() }
@@ -129,18 +191,17 @@ class LocalWorkspace(
         catch (e: IOException) { return@withContext ToolResult.failure("RG_UNAVAILABLE", "ripgrep could not be started: ${e.message}") }
         catch (e: ToolException) { return@withContext ToolResult.failure(e.code, e.message) }
         if (captured.exitCode !in 0..1 && !captured.truncated) return@withContext ToolResult.failure("SEARCH_FAILED", captured.stderr.toString(StandardCharsets.UTF_8).take(1000))
-        val maxMatches = limit.coerceIn(1, 1000)
         val entries = captured.stdout.toString(StandardCharsets.UTF_8).lineSequence().mapNotNull(::searchEntry).toList()
         val hits = entries.filter { it.kind == "match" }
         val byPath = if (contextLines > 0) entries.groupBy { it.path } else emptyMap()
-        val matches = hits.take(maxMatches).map { hit ->
+        val matches = hits.take(maxPageItems).map { hit ->
             buildJsonObject {
                 put("path", locatedPath(hit.path) ?: hit.path); put("line", hit.line); put("text", clip(hit.text.trimEnd()))
                 if (contextLines > 0) put("context", JsonArray(contextAround(byPath[hit.path].orEmpty(), hit, contextLines).map { JsonPrimitive(clip(it.trimEnd())) }))
             }
         }
-        val truncated = hits.size > maxMatches || captured.truncated
-        ToolResult(true, buildJsonObject { put("matches", JsonArray(matches)); put("truncated", truncated) }, truncated = truncated)
+        val capture = rememberCapture(pageQuery, matches, captured.truncated || hits.size > maxPageItems)
+        page(capture, 0, limit, "matches")
     }
 
     private fun searchEntry(line: String): SearchEntry? {
@@ -179,6 +240,60 @@ class LocalWorkspace(
     }
 
     private fun clip(text: String) = if (text.length <= searchTextLimit) text else text.take(searchTextLimit) + "…"
+
+    private fun rememberCapture(query: PageQuery, items: List<JsonElement>, truncated: Boolean): PageCapture = synchronized(pageLock) {
+        prunePageState()
+        val capture = PageCapture(UUID.randomUUID().toString(), query, items.toList(), truncated, System.nanoTime() + pageTtlNanos)
+        pageCaptures[capture.id] = capture
+        while (pageCaptures.size > maxPageCaptures) {
+            val removed = pageCaptures.remove(pageCaptures.keys.first())
+            if (removed != null) pageCursors.entries.removeIf { it.value.captureId == removed.id }
+        }
+        capture
+    }
+
+    private fun continuePage(query: PageQuery, limit: Int, cursor: String, property: String): ToolResult = synchronized(pageLock) {
+        prunePageState()
+        val saved = pageCursors[cursor] ?: return@synchronized ToolResult.failure(
+            "CURSOR_EXPIRED", "This page cursor is unknown or expired; restart the listing with a narrower query",
+        )
+        val capture = pageCaptures[saved.captureId]
+            ?: return@synchronized ToolResult.failure("CURSOR_EXPIRED", "This page cursor expired; restart the listing")
+        if (capture.query != query) return@synchronized ToolResult.failure(
+            "CURSOR_QUERY_MISMATCH", "This cursor belongs to different search parameters; restart the listing",
+        )
+        page(capture, saved.offset, limit, property)
+    }
+
+    private fun page(capture: PageCapture, offset: Int, limit: Int, property: String): ToolResult = synchronized(pageLock) {
+        val size = limit.coerceIn(1, 1000)
+        val start = offset.coerceIn(0, capture.items.size)
+        val end = (start + size).coerceAtMost(capture.items.size)
+        val hasMore = end < capture.items.size
+        val next = if (hasMore) UUID.randomUUID().toString().also { token ->
+            pageCursors[token] = PageCursor(capture.id, end, capture.expiresAtNanos)
+            while (pageCursors.values.count { it.captureId == capture.id } > maxCursorsPerCapture) {
+                val oldest = pageCursors.entries.firstOrNull { it.value.captureId == capture.id }?.key ?: break
+                pageCursors.remove(oldest)
+            }
+            while (pageCursors.size > maxPageCursors) pageCursors.remove(pageCursors.keys.first())
+        } else null
+        ToolResult(
+            ok = true,
+            data = buildJsonObject {
+                put(property, JsonArray(capture.items.subList(start, end)))
+                put("truncated", capture.truncated || hasMore)
+            },
+            truncated = capture.truncated || hasMore,
+            nextCursor = next,
+        )
+    }
+
+    private fun prunePageState() {
+        val now = System.nanoTime()
+        pageCaptures.entries.removeIf { it.value.expiresAtNanos <= now }
+        pageCursors.entries.removeIf { it.value.expiresAt <= now || it.value.captureId !in pageCaptures }
+    }
 
     private suspend fun runRg(args: List<String>, maxOutput: Int): Captured = coroutineScope {
         val process = ProcessBuilder(args).directory(base.toFile()).start()
@@ -230,13 +345,33 @@ class LocalWorkspace(
         val file = resolve(path, false)
         if (Files.exists(file, LinkOption.NOFOLLOW_LINKS)) fail("ALREADY_EXISTS", "Destination already exists")
         val parent = file.parent ?: fail("INVALID_PATH", "A parent directory is required")
-        if (!Files.isDirectory(parent, LinkOption.NOFOLLOW_LINKS)) fail("NOT_DIRECTORY", "Parent directory does not exist")
+        val plannedDirectories = planDirectories(parent)
         val bytes = content.toByteArray(StandardCharsets.UTF_8)
         val id = UUID.randomUUID().toString()
-        durablePrepare(id, file, null, bytes, operation = "create")
+        durablePrepare(id, file, null, bytes, operation = "create", plannedDirectories = plannedDirectories)
+        val createdDirectories = createDirectoriesSafely(plannedDirectories)
         atomicWriteNew(file, bytes)
-        durableCommit(id, file, null, bytes, operation = "create")
+        durableCommit(id, file, null, bytes, operation = "create", createdDirectories = createdDirectories)
         makeChange(file, null, bytes, id)
+    } }
+
+    override suspend fun createDirectory(path: String): ToolResult = withContext(Dispatchers.IO) { lock.withLock {
+        val directory = resolve(path, false)
+        if (Files.exists(directory, LinkOption.NOFOLLOW_LINKS)) {
+            if (!Files.isDirectory(directory, LinkOption.NOFOLLOW_LINKS)) fail("NOT_DIRECTORY", "Path exists and is not a directory")
+            return@withLock ToolResult(true, buildJsonObject {
+                put("path", relative(directory)); put("created", false); put("createdDirectories", JsonArray(emptyList<JsonElement>()))
+            })
+        }
+        val plannedDirectories = planDirectories(directory)
+        val id = UUID.randomUUID().toString()
+        durablePrepare(id, directory, null, null, operation = "mkdir", plannedDirectories = plannedDirectories)
+        val created = createDirectoriesSafely(plannedDirectories)
+        durableCommit(id, directory, null, null, operation = "mkdir", createdDirectories = created)
+        ToolResult(true, buildJsonObject {
+            put("path", relative(directory)); put("created", true)
+            put("createdDirectories", JsonArray(created.map { JsonPrimitive(relative(it)) }))
+        })
     } }
 
     override suspend fun move(path: String, snapshotId: String, destination: String): FileChange = withContext(Dispatchers.IO) { lock.withLock {
@@ -245,13 +380,17 @@ class LocalWorkspace(
         val sourceIdentity = fileIdentity(from)
         if (sha(before) != snap.hash) fail("STALE_SNAPSHOT", "File changed after it was read")
         if (Files.exists(to, LinkOption.NOFOLLOW_LINKS)) fail("ALREADY_EXISTS", "Destination already exists")
-        if (to.parent != from.parent) fail("UNSUPPORTED_MOVE", "Move is supported only within one directory")
+        val destinationParent = to.parent ?: fail("INVALID_PATH", "A destination directory is required")
+        if (!Files.isDirectory(destinationParent, LinkOption.NOFOLLOW_LINKS)) fail("NOT_DIRECTORY", "Destination directory must already exist")
         if (!Files.isRegularFile(from, LinkOption.NOFOLLOW_LINKS) || Files.isSymbolicLink(from)) fail("UNSUPPORTED_FILE", "Only regular files can be moved")
         val id = UUID.randomUUID().toString(); durablePrepare(id, from, before, before, operation = "move", destination = to)
         if (sha(readBytes(from)) != snap.hash || !sameIdentity(sourceIdentity, fileIdentity(from))) fail("STALE_SNAPSHOT", "File changed while preparing move")
+        // A move across paths is two filesystem operations (link then unlink), not an atomic
+        // multi-path transaction. The journal detects the intermediate both-paths state as a conflict.
         try {
             Files.createLink(to, from)
-            if (!Files.isSameFile(from, to) || sha(readBytes(to)) != snap.hash) {
+            if (!Files.isSameFile(from, to) || sha(readBytes(to)) != snap.hash ||
+                sha(readBytes(from)) != snap.hash || !sameIdentity(sourceIdentity, fileIdentity(from))) {
                 if (Files.exists(to, LinkOption.NOFOLLOW_LINKS) && sha(readBytes(to)) == snap.hash) Files.delete(to)
                 fail("STALE_SNAPSHOT", "Source changed while preparing move")
             }
@@ -339,13 +478,20 @@ class LocalWorkspace(
             val afterHash = p.string("afterHash")
             val sourceHash = fingerprint(sourcePath)
             val destHash = destPath?.let(::fingerprint)
+            val plannedDirectories = (p["plannedDirectories"] as? JsonArray)?.mapNotNull { value ->
+                value.jsonPrimitive.contentOrNull?.let { runCatching { resolve(it, false) }.getOrNull() }
+            }.orEmpty()
+            val invalidDirectoryPlan = (p["plannedDirectories"] as? JsonArray)?.size != plannedDirectories.size
             val isAfter = when (operation) {
                 "move" -> sourceHash == null && destPath != null && destHash == afterHash
                 "delete" -> sourceHash == null && afterHash == null
+                "mkdir" -> !invalidDirectoryPlan && plannedDirectories.isNotEmpty() &&
+                    plannedDirectories.all { Files.isDirectory(it, LinkOption.NOFOLLOW_LINKS) && !Files.isSymbolicLink(it) }
                 else -> sourceHash == afterHash
             }
             val isBefore = when (operation) {
                 "move" -> sourceHash == beforeHash && destPath != null && destHash == null
+                "mkdir" -> !invalidDirectoryPlan && plannedDirectories.none { Files.exists(it, LinkOption.NOFOLLOW_LINKS) }
                 else -> sourceHash == beforeHash
             }
             when {
@@ -353,6 +499,9 @@ class LocalWorkspace(
                     store.append(sessionId, "workspace.commit", buildJsonObject {
                         put("changeId", id); put("path", rel); put("destination", destination); put("operation", operation)
                         put("beforeHash", beforeHash); put("afterHash", afterHash); put("undoOf", p.string("undoOf"))
+                        put("createdDirectories", JsonArray(plannedDirectories.filter {
+                            Files.isDirectory(it, LinkOption.NOFOLLOW_LINKS) && !Files.isSymbolicLink(it)
+                        }.map { JsonPrimitive(relative(it)) }))
                     })
                     p.string("undoOf")?.let(changes::remove)
                     restoreChangeFromPrepare(p, sourcePath, destPath)
@@ -548,18 +697,40 @@ class LocalWorkspace(
         return out.toString()
     }
 
-    private suspend fun durablePrepare(id: String, path: Path, before: ByteArray?, after: ByteArray?, operation: String = "write", destination: Path? = null, undoOf: String? = null) {
+    private suspend fun durablePrepare(
+        id: String,
+        path: Path,
+        before: ByteArray?,
+        after: ByteArray?,
+        operation: String = "write",
+        destination: Path? = null,
+        undoOf: String? = null,
+        plannedDirectories: List<Path> = emptyList(),
+    ) {
         val beforeRef = before?.let { artifacts?.put(sessionId, java.util.Base64.getEncoder().encodeToString(it))?.id }
         events?.append(sessionId, "workspace.prepare", buildJsonObject {
             put("changeId", id); put("path", relative(path)); put("destination", destination?.let(::relative)); put("operation", operation); put("undoOf", undoOf)
             put("beforeHash", before?.let(::sha)); put("afterHash", after?.let(::sha)); put("beforeArtifact", beforeRef)
+            put("plannedDirectories", JsonArray(plannedDirectories.map { JsonPrimitive(relative(it)) }))
         })
     }
-    private suspend fun durableCommit(id: String, path: Path, before: ByteArray?, after: ByteArray?, operation: String = "write", destination: Path? = null, undoOf: String? = null) {
+    private suspend fun durableCommit(
+        id: String,
+        path: Path,
+        before: ByteArray?,
+        after: ByteArray?,
+        operation: String = "write",
+        destination: Path? = null,
+        undoOf: String? = null,
+        createdDirectories: List<Path> = emptyList(),
+    ) {
         val parentForced = path.parent?.let(::forceDirectoryBestEffort) ?: false
+        val destinationParentForced = destination?.parent?.takeIf { it != path.parent }?.let(::forceDirectoryBestEffort)
         events?.append(sessionId, "workspace.commit", buildJsonObject {
             put("changeId", id); put("path", relative(path)); put("destination", destination?.let(::relative)); put("operation", operation); put("undoOf", undoOf)
             put("beforeHash", before?.let(::sha)); put("afterHash", after?.let(::sha)); put("parentDirectoryForced", parentForced)
+            if (destinationParentForced != null) put("destinationParentDirectoryForced", destinationParentForced)
+            put("createdDirectories", JsonArray(createdDirectories.map { JsonPrimitive(relative(it)) }))
         })
     }
 
@@ -610,6 +781,45 @@ class LocalWorkspace(
         FileChannel.open(directory, StandardOpenOption.READ).use { it.force(true) }
         true
     } catch (_: IOException) { false } catch (_: UnsupportedOperationException) { false }
+
+    private fun planDirectories(directory: Path): List<Path> {
+        if (!directory.normalize().startsWith(base)) fail("PATH_OUTSIDE_ROOT", "Path must stay inside workspace root")
+        val missing = mutableListOf<Path>()
+        var cursor = base
+        for (part in base.relativize(directory.normalize())) {
+            cursor = cursor.resolve(part)
+            if (Files.isSymbolicLink(cursor)) fail("SYMLINK_NOT_ALLOWED", "Symbolic links are not allowed")
+            if (Files.exists(cursor, LinkOption.NOFOLLOW_LINKS)) {
+                if (!Files.isDirectory(cursor, LinkOption.NOFOLLOW_LINKS)) fail("NOT_DIRECTORY", "A parent path component is not a directory")
+                if (!cursor.toRealPath(LinkOption.NOFOLLOW_LINKS).startsWith(base)) fail("PATH_OUTSIDE_ROOT", "Path resolves outside workspace root")
+            } else {
+                missing.add(cursor)
+            }
+        }
+        return missing
+    }
+
+    private fun createDirectoriesSafely(planned: List<Path>): List<Path> {
+        val created = mutableListOf<Path>()
+        for (directory in planned) {
+            val parent = directory.parent ?: fail("INVALID_PATH", "A parent directory is required")
+            if (Files.isSymbolicLink(parent) || !Files.isDirectory(parent, LinkOption.NOFOLLOW_LINKS)) {
+                fail("NOT_DIRECTORY", "Parent directory changed or is unavailable")
+            }
+            if (!parent.toRealPath(LinkOption.NOFOLLOW_LINKS).startsWith(base)) fail("PATH_OUTSIDE_ROOT", "Parent path resolves outside workspace root")
+            try {
+                Files.createDirectory(directory)
+                created.add(directory)
+                forceDirectoryBestEffort(parent)
+            } catch (_: FileAlreadyExistsException) {
+                if (Files.isSymbolicLink(directory)) fail("SYMLINK_NOT_ALLOWED", "Symbolic links are not allowed")
+                if (!Files.isDirectory(directory, LinkOption.NOFOLLOW_LINKS)) fail("NOT_DIRECTORY", "A parent path component is not a directory")
+            } catch (e: IOException) {
+                fail("CREATE_DIRECTORY_FAILED", "Could not create directory '${relative(directory)}': ${e.message}")
+            }
+        }
+        return created
+    }
 
     private fun resolve(raw: String, mustExist: Boolean): Path {
         if (raw.isBlank() || raw.contains('\\')) fail("INVALID_PATH", "Use a non-empty relative path with '/' separators")

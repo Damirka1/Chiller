@@ -113,4 +113,29 @@ class ContextPlannerTest {
         assertEquals(0, selected.prunedResults)
         assertTrue(selected.messages.filter { it.role == "tool" }.all { it.content.orEmpty().length == 800 })
     }
+    @Test fun activeTurnCanFitAfterOldResultsAreCompacted() {
+        val messages = mutableListOf(AgentMessage("user", "investigate"))
+        repeat(10) { i ->
+            messages += AgentMessage("assistant", toolCalls = listOf(ToolCall("c$i", "read_file", "{}")))
+            messages += AgentMessage("tool", "x".repeat(1500), toolCallId = "c$i")
+        }
+        val selected = ContextPlanner(maxCharacters = 7000, outputReserveCharacters = 1000, keepToolResults = 2).select(messages)
+        assertEquals(8, selected.prunedResults)
+        assertEquals(0, selected.droppedMessages)
+        assertEquals(messages.size, selected.messages.size)
+        assertTrue(selected.messages.takeLast(4).filter { it.role == "tool" }.all { it.content!!.length == 1500 })
+    }
+
+    @Test fun compactionPreservesFailureAndNeverInventsSuccess() {
+        val messages = mutableListOf(AgentMessage("user", "inspect"))
+        listOf("{\"ok\":false,\"error\":{\"code\":\"STALE_SNAPSHOT\",\"message\":\"${"x".repeat(1000)}\"}}", "x".repeat(1000)).forEachIndexed { i, body ->
+            messages += AgentMessage("assistant", toolCalls = listOf(ToolCall("c$i", "read_file", "{}")))
+            messages += AgentMessage("tool", body, toolCallId = "c$i")
+        }
+        val result = ContextPlanner(maxCharacters = 3000, outputReserveCharacters = 500, keepToolResults = 0).select(messages)
+        val tools = result.messages.filter { it.role == "tool" }
+        assertTrue(tools[0].content!!.contains("STALE_SNAPSHOT"))
+        assertTrue(tools[0].content!!.contains("false"))
+        assertTrue(!tools[1].content!!.contains("\"ok\""))
+    }
 }

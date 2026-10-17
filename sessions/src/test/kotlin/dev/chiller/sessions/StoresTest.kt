@@ -63,4 +63,13 @@ class StoresTest {
         store.append("legacy", "session.renamed", buildJsonObject { put("title", "\n  ") })
         assertEquals("Legacy prompt", JsonlEventStore(root).list().single { it.id == "legacy" }.title)
     }
+
+    @Test fun sessionListUsesProjectedFirstUserMessageAfterLogicalDeletion() = runTest {
+        val root = Files.createTempDirectory("chiller-projected-list")
+        val store = JsonlEventStore(root)
+        store.append("s", "message", buildJsonObject { put("role", "user"); put("content", "Deleted sensitive prompt") })
+        store.append("s", "history.remove_turn", buildJsonObject { put("start", 0); put("end", 1); put("expectedCount", 1) })
+        store.append("s", "message", buildJsonObject { put("role", "user"); put("content", "Visible prompt") })
+        assertEquals("Visible prompt", JsonlEventStore(root).list().single().title)
+    }
 }

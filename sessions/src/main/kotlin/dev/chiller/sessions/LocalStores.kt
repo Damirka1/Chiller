@@ -93,7 +93,8 @@ class JsonlEventStore(private val directory: Path) : EventStore {
 
     override suspend fun list(): List<SessionInfo> = mutex.withLock {
         withContext(Dispatchers.IO) {
-            val ids = Files.list(directory).use { paths -> paths.filter { Files.isDirectory(it) }.map { it.fileName.toString() }.toList() }
+            // Maintenance tombstones and unrelated directory entries are never sessions.
+            val ids = Files.list(directory).use { paths -> paths.filter { Files.isDirectory(it) && it.fileName.toString().matches(Regex("[a-zA-Z0-9_-]{1,100}")) }.map { it.fileName.toString() }.toList() }
             ids.map { id -> cachedInfo(id) }.sortedByDescending { it.updatedAt }
         }
     }
@@ -105,12 +106,12 @@ class JsonlEventStore(private val directory: Path) : EventStore {
         val modified = runCatching { Files.getLastModifiedTime(file).toMillis() }.getOrDefault(0L)
         index[id]?.let { entry -> if (entry.size == size && entry.modified == modified) return entry.info }
         val events = runCatching { readFile(file) }.getOrNull().orEmpty()
-        val first = events.firstOrNull { it.type == "message" && it.payload["role"]?.jsonPrimitive?.contentOrNull == "user" }
+        val first = runCatching { projectConversation(events).firstOrNull { it.role == "user" } }.getOrNull()
         val renamed = events.asReversed().firstNotNullOfOrNull { event ->
             if (event.type != "session.renamed") return@firstNotNullOfOrNull null
             event.payload["title"]?.jsonPrimitive?.contentOrNull?.trim()?.takeIf { it.length in 1..120 }
         }
-        val title = renamed ?: first?.payload?.get("content")?.jsonPrimitive?.contentOrNull?.take(64) ?: "Новый диалог"
+        val title = renamed ?: first?.content?.takeIf { it.isNotBlank() }?.take(64) ?: first?.attachments?.firstOrNull()?.name?.take(64) ?: "Новый диалог"
         val info = SessionInfo(id, title, events.lastOrNull()?.timestamp ?: "")
         index[id] = IndexEntry(size, modified, info)
         return info

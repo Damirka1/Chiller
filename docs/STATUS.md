@@ -9,8 +9,8 @@
 
 | Проверка | Команда | Результат |
 |---|---|---|
-| Юнит-тесты | `./gradlew check` | 171 тест, 0 падений, 0 skipped (macOS; на Windows POSIX-тесты процессов пропускаются) |
-| Offline smoke | `./gradlew :evals:offlineSmoke` | пройден: search → read → chained edit → реальные Python-проверки → final → restart → stale-отказ; все 9 eval-проверок падают на нетронутой задаче и проходят на эталоне |
+| Юнит-тесты | `./gradlew check` | 241 тест, 0 падений, 0 skipped (macOS; на Windows POSIX-тесты процессов пропускаются) |
+| Offline smoke | `./gradlew :evals:offlineSmoke` | пройден: search → read → chained edit → реальные Python-проверки → final → restart → stale-отказ; все 14 eval-проверок падают на нетронутой задаче и проходят на эталоне |
 | Live eval | `./gradlew :evals:liveEval` | `deepseek-flash`, 17.10 вечер: **9/9** (включая delegate-research с двумя помощниками), 1 прогон на задачу, 0 ошибок инструментов; отдельно delegate-research ×2: 2/2, помощники 2/2 завершены. Задачи простые, n=1 — базовая линия, не статистика |
 | Live DeepSeek | `./gradlew :evals:liveDeepSeekSmoke` | пройден дважды на финальном коде: 5 раундов, 6 tool-вызовов, 0 ошибок, 9.1–9.8 с; prompt ~10.8k, completion 576–634, cached 8 192–9 600 |
 | macOS-пакет | `./gradlew :app-desktop:createDistributable`, `packageDmg` | собраны; `Chiller-1.1.0.dmg` локально |
@@ -28,15 +28,15 @@ Live-прогон — это **один** сценарий на `deepseek-flash`
 | Агентный цикл | реализовано | до 24 раундов (настраивается), параллельные READ-вызовы, эффекты строго по порядку, отмена, лимит повторяющихся ошибок |
 | Провайдер DeepSeek | live-подтверждён | SSE, thinking replay, usage, bounded retry 429/5xx до первого delta |
 | Каталог моделей | реализовано | явное `GET /models` с bounded-разбором, кэш на endpoint, ручной fallback; список не доказывает поддержку tools/reasoning |
-| Файловые инструменты | реализовано | 14 tools: + `replace_text` (точная замена, число совпадений обязано совпасть, через тот же snapshot/undo) и `update_plan` (чек-лист модели); snapshot-lineage, clamp чтения, компактный search с context |
+| Файловые инструменты | реализовано | 25 основных tools (плюс 2 screenshot tools на macOS): Git status/diff/log/show, lexical find_symbols, Kotlin read_symbol, read_diagnostics; `replace_text` (точная замена, число совпадений обязано совпасть, через тот же snapshot/undo) и `update_plan` (чек-лист модели); snapshot-lineage, clamp чтения, компактный search с context; auto-mkdir, show_file, web_search/web_fetch |
 | Инструкции проекта | реализовано | `AGENTS.md`, `CLAUDE.md`, `.chiller/instructions.md` → отдельное system-сообщение (≤12k символов, без symlink), читаются раз на диалог; права не дают |
 | Трассировка | реализовано | JSONL на раунд: запрос как его собрал Chiller (не wire-формат) и ответ, usage, finish, время; desktop — в данных приложения, eval — в `reports/local/evals` |
-| Undo / recovery | реализовано | before-images, журнал, reconcile, отказ при расхождении; move только внутри каталога |
-| Процессы | реализовано | argv, cwd, timeout, caps, отмена; это не OS-sandbox и не process groups |
-| Сессии | реализовано | JSONL + fsync, torn-tail recovery, экспорт MD/JSON; retention и миграций нет |
+| Undo / recovery | реализовано | before-images, журнал, reconcile, отказ при расхождении; move между существующими каталогами workspace; промежуточный crash-state — конфликт |
+| Процессы | реализовано | argv, cwd, timeout, caps, отмена; run-owned background cleanup, ≤8 активных, ≤64 завершённых результатов; это не OS-sandbox и не process groups |
+| Сессии | реализовано | JSONL + fsync, torn-tail recovery, экспорт MD/JSON; явное preview/delete неактивных диалогов; автоматического retention и миграций нет |
 | Контекст | реализовано | оценка по символам/4, целые ходы, pruning старых tool-результатов; точного tokenizer нет |
 | Метрики прогона | реализовано | `run.summary` в журнале: раунды, tool-вызовы, ошибки, время, usage |
-| UI Focus/Studio | частично | Studio: изменения по файлам с диффом и отменой, карточки помощников, прогон; @-упоминания файлов; markdown; стартовый экран (недавние проекты, drag-and-drop папки, карточка проекта, стартовые задачи), лента прогона с итогами, composer с папкой/контекстом/подключением, поиск диалогов ⌘K, вкладка «Прогон» в Studio; проверено рендером вне экрана, ручной клик-приёмки нет; keyboard/IME/VoiceOver и платформы не проверены |
+| UI Focus/Studio | частично | Studio: изменения по файлам с диффом и отменой, карточки помощников, прогон; @-упоминания файлов; markdown; стартовый экран (недавние проекты, drag-and-drop папки, карточка проекта, стартовые задачи), лента прогона с итогами, composer с папкой/контекстом/подключением, поиск диалогов ⌘K, вкладка «Прогон» в Studio; проверено рендером вне экрана, частичная нативная приёмка Focus/Studio/demo пройдена; keyboard/IME/VoiceOver и платформы не проверены |
 | Субагенты | реализовано, live-подтверждено | только чтение, глубина 1, ≤3 на прогон, лимиты на ребёнка (6 раундов, 1024 ток., 120 с), mailbox, wait по cursor, отмена побеждает, сироты останавливаются, restore → interrupted; usage помощников отдельно в `run.summary`. Общий бюджет logical model requests и выходных токенов для родителя и детей: атомарные резервации; неизвестный расход удерживается консервативно |
 | Gemma / vLLM | подготовлено | пресет vLLM/Ollama/LM Studio; loopback работает без ключа и в desktop, и в eval; live-проверки нет (нет сервера) |
 | Провайдеры | реализовано | 12 пресетов, ключи по origin в памяти + env/.env по имени переменной; вживую проверен только DeepSeek |
@@ -50,7 +50,7 @@ Live-прогон — это **один** сценарий на `deepseek-flash`
   аккаунта не измерялись.
 - Проверка cwd/путей — не OS sandbox.
 - Loopback может работать без ключа; доступность сервера и совместимость модели требуют отдельной проверки.
-- macOS Keychain реализован: явное сохранение/удаление ключа по origin; `.env` читается при старте. Нативная операция с реальным Keychain пока не проверена; default tests используют fake gateway. На Windows/Linux — ключ в памяти или env/.env.
+- macOS Keychain реализован: явное сохранение/удаление ключа по origin; `.env` читается при старте. Нативные create/reopen/update/delete проверены на временной синтетической записи после обновления JNA до 5.18.1; default tests используют fake gateway. Доступ к реальному ключу провайдера из packaged app отдельно не проверялся. На Windows/Linux — ключ в памяти или env/.env.
 - Поиск/листинг требуют `rg` на PATH; offline smoke дополнительно требует `python3`.
 - Экспорт скрывает известные секреты, но произвольный текст нужно проверять вручную.
 
@@ -66,3 +66,13 @@ Live-прогон — это **один** сценарий на `deepseek-flash`
 ## Исправления после проверки готовности
 
 Исправлены последовательность управления помощниками, граница последнего раунда mailbox, durable publication и ожидание отмены; гонка новой сессии после completed; настройка endpoint без заранее известного model ID. Добавлены общий бюджет (48 логических запросов и 32768 выходных токенов по умолчанию; транспортные retries и деньги не входят), macOS Keychain, компактный composer, свёрнутые группы действий, завершённое демо и раскрытие diff. Учебный provider не расходует бюджет запросов к модели. Полный прогон с пересборкой:171 тест,0 failures/errors/skipped; после GUI-исправления демо повторный check/offlineSmoke тоже зелёный. Подробности и границы приёмки — в RUN_REPORT.
+
+
+## Последующий проход надёжности и инструментов
+
+241 тест, 0 failures/errors/skipped; `check :evals:offlineSmoke :app-desktop:keychainSmoke :app-desktop:createDistributable` прошёл. Offline oracle проверяет 14 задач и отклоняет изменение model-visible verification files. Keychain smoke нашёл несовместимую с Apple Silicon JNA 5.6.0; после обновления до 5.18.1 нативные операции прошли. Платных запросов в этом проходе не было: live-результаты таблицы относятся к предыдущей версии и прежним 9 задачам. Детали и дальнейшие gates: RELIABILITY_PASS_2026_10_17.md.
+
+
+### Текущая функциональная доводка
+
+Добавлены вложения с paste/drop и порогом5 KiB, карточки/preview файлов, интернет по отдельному разрешению, macOS selected-window capture, атомарное логическое редактирование/удаление ходов и явное восстановление прерванного run без replay. Импорт блокирует отправку и привязан к исходной сессии. Новый screenshot controller проверен fake-backed тестами; реальное разрешение macOS и захват пока не приняты. Изображения отображаются пользователю, но не являются vision-входом модели. JSON экспорт остаётся raw journal. Свежих платных модельных вызовов не было.

@@ -2,6 +2,9 @@ package dev.chiller.sessions
 
 import dev.chiller.contracts.EventStore
 import dev.chiller.contracts.StoredEvent
+import dev.chiller.contracts.AgentMessage
+import dev.chiller.contracts.projectConversationEvents
+import dev.chiller.contracts.projectConversationActivities
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.*
 import java.time.Instant
@@ -12,6 +15,7 @@ import java.time.Instant
  */
 class SessionExporter(private val store: EventStore) {
     private val outputJson = Json { prettyPrint = true; prettyPrintIndent = "  "; explicitNulls = true }
+    private val messageJson = Json { encodeDefaults = true; explicitNulls = true }
     private val secretKeys = Regex("(?i)(^|[^a-z0-9])(?:api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|authorization|password|passwd|private[_-]?key|credential|cookie|secret|token)(?:$|[^a-z0-9])")
     private val bearer = Regex("(?i)(\\bBearer\\s+)[A-Za-z0-9._~+/=-]+")
     private val quotedAssignment = Regex("(?i)(\\b(?:[A-Z0-9_]*API[_-]?KEY|[A-Z0-9_]*ACCESS[_-]?TOKEN)\\s*[:=]\\s*)(['\"])([^'\"\\r\\n]{4,})\\2")
@@ -20,7 +24,10 @@ class SessionExporter(private val store: EventStore) {
 
     suspend fun markdown(sessionId: String): String {
         val events = orderedEvents(sessionId)
-        val artifacts = artifactRefs(events)
+        val edited = events.any { it.type.startsWith("history.") }
+        val projectedMessageEvents = if (edited) projectConversationEvents(events) else events.filter { it.type == "message" }
+        val activities = projectConversationActivities(events, projectedMessageEvents.map { it.seq }.toSet())
+        val artifacts = artifactRefs(projectedMessageEvents + activities)
         return buildString {
             appendLine("# Session export")
             appendLine()
@@ -29,16 +36,17 @@ class SessionExporter(private val store: EventStore) {
             appendLine()
             appendLine("## Transcript")
             appendLine()
-            val messages = events.filter { it.type == "message" }
-            if (messages.isEmpty()) appendLine("_No messages._")
-            for (event in messages) appendMessage(event)
-            val activities = events.filter { it.type == "activity" }
+            if (projectedMessageEvents.isEmpty()) appendLine("_No messages._")
+            for (event in projectedMessageEvents) appendMessage(event.payload)
             if (activities.isNotEmpty()) {
                 appendLine("## Tool activity")
                 appendLine()
                 for (event in activities) appendActivity(event)
             }
-            val references = events.filter { it.type == "change.reference" }
+            val retainedActivityIds = activities.mapNotNull { it.payload.string("id") ?: it.payload.string("activityId") }.toSet()
+            val references = events.filter { it.type == "change.reference" }.let { all ->
+                if (!edited) all else all.filter { it.payload.string("activityId") in retainedActivityIds }
+            }
             if (references.isNotEmpty()) {
                 appendLine("## Change references")
                 appendLine()
@@ -67,6 +75,7 @@ class SessionExporter(private val store: EventStore) {
             put("sessionId", sessionId)
             put("exportedAtUtc", Instant.now().toString())
             put("redactionNotice", redactionNotice)
+            put("historyRepresentation", "Raw append-only journal; includes messages that were logically deleted by history events.")
             put("events", JsonArray(events.map(::sanitizeEvent)))
             put("artifactRefs", JsonArray(artifactRefs(events).map { (id, size) ->
                 buildJsonObject { put("artifactId", id); if (size != null) put("size", size) }
@@ -110,8 +119,12 @@ class SessionExporter(private val store: EventStore) {
         return text
     }
 
-    private fun StringBuilder.appendMessage(event: StoredEvent) {
-        val payload = event.payload
+    private fun StringBuilder.appendMessage(event: StoredEvent) = appendMessage(event.payload).also {
+        appendLine("_UTC ${utc(event.timestamp)} · event ${event.seq}_")
+        appendLine()
+    }
+
+    private fun StringBuilder.appendMessage(payload: JsonObject) {
         val role = payload.string("role") ?: "message"
         appendLine("### ${messageTitle(payload, role)}")
         appendLine()
@@ -127,8 +140,6 @@ class SessionExporter(private val store: EventStore) {
             if (arguments != null) appendFencedOrText(redactText(arguments), "json")
         }
         payload.string("toolCallId")?.let { appendLine("_Tool call ID: `${safeInline(it)}`._"); appendLine() }
-        appendLine("_UTC ${utc(event.timestamp)} · event ${event.seq}_")
-        appendLine()
     }
 
     private fun StringBuilder.appendActivity(event: StoredEvent) {

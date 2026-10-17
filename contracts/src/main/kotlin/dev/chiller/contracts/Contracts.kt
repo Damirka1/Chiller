@@ -27,10 +27,11 @@ data class AgentMessage(
     val toolCallId: String? = null,
     val replay: JsonObject = JsonObject(emptyMap()),
     val origin: MessageOrigin? = null,
+    val attachments: List<ComposerAttachment> = emptyList(),
 )
 
 @Serializable
-enum class ToolEffect { READ, FILE_WRITE, PROCESS, USER_INTERACTION }
+enum class ToolEffect { READ, FILE_WRITE, PROCESS, USER_INTERACTION, NETWORK, SCREEN_CAPTURE }
 
 @Serializable
 data class ToolSpec(val name: String, val description: String, val parameters: JsonObject, val effect: ToolEffect)
@@ -119,10 +120,25 @@ data class ToolResult(
 class ToolException(val code: String, override val message: String, val recovery: String? = null) : RuntimeException(message)
 
 enum class ExecutionMode { PLAN, WORKSPACE_EDIT }
-data class ToolContext(val sessionId: String, val runId: String, val mode: ExecutionMode, val allowProcesses: Boolean = false)
+data class ToolContext(val sessionId: String, val runId: String, val mode: ExecutionMode, val allowProcesses: Boolean = false, val allowNetwork: Boolean = false, val allowScreenshots: Boolean = false)
 interface ToolExecutor {
     val specs: List<ToolSpec>
     suspend fun execute(call: ToolCall, context: ToolContext): ToolResult
+}
+
+/** A file explicitly presented to the user; path is resolved again by the application before opening. */
+@Serializable
+data class FilePresentation(val path: String, val name: String, val mimeType: String, val sizeBytes: Long)
+
+@Serializable
+data class ComposerAttachment(val artifactId: String, val name: String, val mimeType: String, val sizeBytes: Long)
+
+@Serializable
+data class CaptureTarget(val id: String, val title: String, val application: String)
+interface ScreenCaptureService {
+    val supported: Boolean
+    suspend fun targets(): List<CaptureTarget>
+    suspend fun capture(): FilePresentation
 }
 
 @Serializable
@@ -140,8 +156,15 @@ interface WorkspaceService {
     suspend fun read(request: ReadFileRequest): FileReadResult
     suspend fun list(path: String = ".", glob: String? = null, limit: Int = 200): ToolResult
     suspend fun search(query: String, path: String = ".", glob: String? = null, regex: Boolean = false, limit: Int = 100, context: Int = 0): ToolResult
+    /** Continuation is scoped to the original query; implementations must reject unknown cursors. */
+    suspend fun listPage(path: String = ".", glob: String? = null, limit: Int = 200, cursor: String? = null): ToolResult =
+        if (cursor == null) list(path, glob, limit) else ToolResult.failure("UNSUPPORTED", "Listing continuation is unavailable; narrow the path or glob")
+    suspend fun searchPage(query: String, path: String = ".", glob: String? = null, regex: Boolean = false, limit: Int = 100, context: Int = 0, cursor: String? = null): ToolResult =
+        if (cursor == null) search(query, path, glob, regex, limit, context) else ToolResult.failure("UNSUPPORTED", "Search continuation is unavailable; narrow the query")
     suspend fun edit(request: EditFileRequest): FileChange
     suspend fun create(path: String, content: String): FileChange
+    suspend fun createDirectory(path: String): ToolResult = ToolResult.failure("UNSUPPORTED", "Directory creation is unavailable")
+    suspend fun describeFile(path: String): FilePresentation = throw ToolException("UNSUPPORTED", "File presentation is unavailable")
     suspend fun move(path: String, snapshotId: String, destination: String): FileChange
     suspend fun delete(path: String, snapshotId: String): FileChange
     suspend fun undo(changeId: String): FileChange

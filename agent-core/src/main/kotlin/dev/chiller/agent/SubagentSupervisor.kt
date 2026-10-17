@@ -306,9 +306,9 @@ class SubagentSupervisor(
     private fun fail(code: String, message: String, recovery: String? = null): Nothing = throw ToolException(code, message, recovery)
 
     companion object {
-        val CHILD_TOOLS = setOf("list_files", "search_text", "read_file")
+        val CHILD_TOOLS = setOf("list_files", "search_text", "read_file", "find_symbols", "read_symbol")
         private const val CHILD_PROMPT = """You are a Chiller subagent: a focused, read-only helper of the lead coding agent.
-- Use list_files, search_text and read_file to investigate. You cannot edit files, run commands or ask the user.
+- Use list_files, search_text, find_symbols, read_symbol and read_file to investigate. You cannot edit files, run commands or ask the user.
 - Stay inside the allowed paths. Be quick: prefer search over reading whole files.
 - Finish with a concise report for the lead agent: findings with file:line references, and what you could not verify."""
 

@@ -18,6 +18,20 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 class AgentCoordinatorTest {
+    @Test fun terminalRunsAlwaysReleaseOwnedProcesses() = runTest {
+        for (fail in listOf(false, true)) {
+            val provider = ScriptedProvider { flow {
+                if (fail) emit(ModelEvent.Failed("TEST", "failure"))
+                else emit(ModelEvent.Completed(AgentMessage("assistant", "done"), "stop"))
+            } }
+            val fixture = fixture(provider, dispatcher = StandardTestDispatcher(testScheduler))
+            fixture.coordinator.send("inspect", ExecutionMode.WORKSPACE_EDIT)
+            advanceUntilIdle()
+            assertEquals(1, fixture.processes.stoppedRuns.size)
+            assertEquals(if (fail) "failed" else "completed", fixture.coordinator.state.value.status)
+        }
+    }
+
     @Test fun incompleteModelStreamNeverExecutesToolCalls() = runTest {
         val tools = RecordingTools()
         val provider = ScriptedProvider { _ -> flow {
@@ -249,6 +263,65 @@ class AgentCoordinatorTest {
         assertTrue(tools.executed.isEmpty())
     }
 
+    @Test fun repeatedErrorsSaveEveryBatchResultAndAllowManualContinuation() = runTest {
+        var rounds = 0
+        var effects = 0
+        val tools = object : ToolExecutor {
+            override val specs = listOf(ToolSpec("write", "write", JsonObject(emptyMap()), ToolEffect.FILE_WRITE))
+            override suspend fun execute(call: ToolCall, context: ToolContext): ToolResult {
+                effects++
+                return if (call.id.startsWith("bad")) ToolResult.failure("INVALID_PATH", "bad path") else ToolResult(true)
+            }
+        }
+        val provider = ScriptedProvider { flow {
+            val message = if (rounds++ == 0) AgentMessage("assistant", toolCalls = listOf("bad1", "bad2", "bad3", "good").map { ToolCall(it, "write", "{}") })
+                else AgentMessage("assistant", "continued")
+            emit(ModelEvent.Completed(message, if (message.toolCalls.isEmpty()) "stop" else "tool_calls"))
+        } }
+        val f = fixture(provider, tools, dispatcher = StandardTestDispatcher(testScheduler))
+        f.coordinator.send("work", ExecutionMode.WORKSPACE_EDIT)
+        advanceUntilIdle()
+        assertEquals("failed", f.coordinator.state.value.status)
+        assertEquals(4, f.coordinator.state.value.messages.count { it.role == "tool" })
+        assertTrue(f.coordinator.state.value.activities.none { it.status in setOf("running", "interrupted") })
+        f.coordinator.send("use the existing directory", ExecutionMode.WORKSPACE_EDIT)
+        advanceUntilIdle()
+        assertEquals("completed", f.coordinator.state.value.status)
+        assertEquals(4, effects)
+    }
+
+    @Test fun stoppingDuringAToolSettlesActivityWithoutInventingAResult() = runTest {
+        val entered = CompletableDeferred<Unit>()
+        val tools = RecordingTools().apply { onExecute = { entered.complete(Unit); awaitCancellation() } }
+        val provider = ScriptedProvider { flow {
+            emit(ModelEvent.Completed(AgentMessage("assistant", toolCalls = listOf(ToolCall("pending", "write", "{}"))), "tool_calls"))
+        } }
+        val events = MemoryEvents()
+        val f = fixture(provider, tools, events, StandardTestDispatcher(testScheduler))
+        f.coordinator.send("write", ExecutionMode.WORKSPACE_EDIT)
+        runCurrent()
+        entered.await()
+        f.coordinator.stop()
+        assertEquals("cancelled", f.coordinator.state.value.status)
+        val activity = f.coordinator.state.value.activities.single()
+        assertEquals("interrupted", activity.status)
+        assertTrue(activity.output.contains("OUTCOME_UNKNOWN"))
+        assertTrue(f.coordinator.state.value.messages.none { it.role == "tool" })
+        assertEquals("interrupted", events.records.last { it.type == "activity" }.payload["status"]!!.jsonPrimitive.content)
+        f.coordinator.restore()
+        assertEquals("interrupted", f.coordinator.state.value.status)
+        assertEquals("interrupted", f.coordinator.state.value.activities.single().status)
+        val priorCalls = provider.calls
+        f.coordinator.recoverInterrupted()
+        assertEquals(priorCalls, provider.calls)
+        assertTrue(tools.executed.isEmpty())
+        val unknown = f.coordinator.state.value.messages.single { it.role == "tool" }
+        assertEquals("pending", unknown.toolCallId)
+        assertTrue(unknown.content!!.contains("OUTCOME_UNKNOWN"))
+        f.coordinator.restore()
+        assertEquals("idle", f.coordinator.state.value.status)
+    }
+
     @Test fun stoppingDuringStreamCancelsRoundBeforeAnyToolExecution() = runTest {
         val started = CompletableDeferred<Unit>()
         val tools = RecordingTools()
@@ -379,7 +452,7 @@ class AgentCoordinatorTest {
 
     private fun fixture(
         provider: ScriptedProvider,
-        tools: RecordingTools = RecordingTools(),
+        tools: ToolExecutor = RecordingTools(),
         eventStore: MemoryEvents = MemoryEvents(),
         dispatcher: kotlinx.coroutines.CoroutineDispatcher = StandardTestDispatcher(),
         model: String = "model",

@@ -5,6 +5,8 @@ import dev.chiller.contracts.*
 import dev.chiller.providers.*
 import dev.chiller.runtime.LocalProcessService
 import dev.chiller.sessions.*
+import dev.chiller.tools.LocalReadOnlyCodeService
+import dev.chiller.tools.BoundedWebService
 import dev.chiller.tools.BuiltinTools
 import dev.chiller.tools.SubagentTools
 import dev.chiller.workspace.LocalWorkspace
@@ -37,6 +39,8 @@ data class AgentOptions(
     val projectInstructions: Boolean = true,
     val maxRequests: Int = 48,
     val totalOutputTokens: Int = 32768,
+    val allowNetwork: Boolean = false,
+    val allowScreenshots: Boolean = false,
 ) {
     fun sanitized() = copy(maxRounds = maxRounds.coerceIn(4, 60), maxOutputTokens = maxOutputTokens.coerceIn(1024, 16_384), maxRequests = maxRequests.coerceIn(1, 120), totalOutputTokens = totalOutputTokens.coerceIn(1024, 262144))
 }
@@ -49,7 +53,7 @@ data class ModelCatalogState(
     val fetchedAt: String? = null,
     val stale: Boolean = false,
 )
-data class DesktopState(val run: RunState = RunState(), val sessions: List<SessionInfo> = emptyList(), val sessionId: String = newId(), val settings: DesktopSettings = DesktopSettings(), val apiKeyConfigured: Boolean = false, val allowProcesses: Boolean = false, val exportContent: String? = null, val exportFormat: String = "markdown", val exportSessionId: String? = null, val uiPreferences: UiPreferences = UiPreferences(), val connection: ConnectionState = ConnectionState(), val catalog: ModelCatalogState = ModelCatalogState(), val sessionWorkspaces: Map<String, String> = emptyMap(), val subagents: List<SubagentSnapshot> = emptyList())
+data class DesktopState(val run: RunState = RunState(), val sessions: List<SessionInfo> = emptyList(), val sessionId: String = newId(), val settings: DesktopSettings = DesktopSettings(), val apiKeyConfigured: Boolean = false, val allowProcesses: Boolean = false, val exportContent: String? = null, val exportFormat: String = "markdown", val exportSessionId: String? = null, val uiPreferences: UiPreferences = UiPreferences(), val connection: ConnectionState = ConnectionState(), val catalog: ModelCatalogState = ModelCatalogState(), val sessionWorkspaces: Map<String, String> = emptyMap(), val subagents: List<SubagentSnapshot> = emptyList(), val captureTargets: List<CaptureTarget> = emptyList(), val selectedCaptureTarget: String? = null)
 
 class DesktopController(
     private val directory: Path, initialCredential: String? = LocalCredentials.load(), connectionChecker: ConnectionChecker? = null, catalogClient: ModelCatalogClient? = null,
@@ -90,6 +94,10 @@ class DesktopController(
         MutableStateFlow(DesktopState(apiKeyConfigured = hasKey, connection = ConnectionState(if (hasKey) "unverified" else "missing", if (hasKey) "Подключение ещё не проверено" else "Не задан API-ключ")))
     }
     val state: StateFlow<DesktopState> = _state.asStateFlow()
+    private val inputAttachments = AttachmentRepository(directory.resolve("attachments"), artifacts)
+    private val captureController = WindowCaptureController(directory.resolve("captures")) { _state.value.sessionId }
+    val screenshotSupported: Boolean get() = captureController.supported
+
     private var coordinator: AgentCoordinator? = null
     private var processService: LocalProcessService? = null
     private var workspaceService: LocalWorkspace? = null
@@ -141,9 +149,9 @@ class DesktopController(
     suspend fun chooseWorkspace(path: Path) = commands.withLock { chooseWorkspaceLocked(path) }
     suspend fun newSession() = commands.withLock { newSessionLocked() }
     suspend fun selectSession(id: String) = commands.withLock { selectSessionLocked(id) }
-    suspend fun send(text: String, mode: ExecutionMode, clientRequestId: String = newId()): SendReceipt = commands.withLock {
+    suspend fun send(text: String, mode: ExecutionMode, clientRequestId: String = newId(), attachments: List<ComposerAttachment> = emptyList()): SendReceipt = commands.withLock {
         cachedReceipt(clientRequestId)?.let { return@withLock it }
-        sendLocked(text, mode, clientRequestId).also(::rememberReceipt)
+        sendLocked(text, mode, clientRequestId, attachments).also(::rememberReceipt)
     }
     suspend fun undo(id: String) = commands.withLock { undoLocked(id) }
     suspend fun prepareExport(format: String, sessionId: String = state.value.sessionId) = commands.withLock { prepareExportLocked(format, sessionId) }
@@ -231,6 +239,145 @@ class DesktopController(
             _state.update { it.copy(sessions = events.list().map { session -> if (session.id == id) session.copy(title = normalized) else session }) }
             true
         } catch (_: Exception) { false }
+    }
+
+    private val deletionPlans = mutableMapOf<String, SessionDeletePlan>()
+    private fun maintenance() = SessionMaintenance(directory.resolve("sessions"), directory.resolve("artifacts"), directory.resolve("traces"), listOf(directory.resolve("attachments"), directory.resolve("captures")))
+
+    /** Only explicitly selected inactive history is eligible; confirmation is snapshot-bound. */
+    suspend fun previewSessionDeletion(id: String): String? = commands.withLock {
+        if (busy() || id == _state.value.sessionId) return@withLock null
+        try {
+            val plan = withContext(Dispatchers.IO) { maintenance().previewDelete(setOf(id), setOf(_state.value.sessionId)).single() }
+            deletionPlans.clear()
+            deletionPlans[id] = plan
+            val p = plan.preview
+            "Будут удалены история (${p.eventCount} событий), ${p.artifactCount} артефактов и ${p.traceCount} трассировок — ${p.totalBytes} байт. Файлы проекта сохранятся."
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (_: Exception) { showError("Не удалось подготовить удаление. Данные сохранены; проверьте, что диалог не открыт."); null }
+    }
+
+    suspend fun deleteSession(id: String): Boolean = commands.withLock {
+        if (busy() || id == _state.value.sessionId) return@withLock false
+        val plan = deletionPlans.remove(id) ?: return@withLock false
+        try {
+            val result = withContext(Dispatchers.IO) { maintenance().delete(plan, setOf(_state.value.sessionId)) }
+            refreshSessions()
+            _state.update { it.copy(sessionWorkspaces = it.sessionWorkspaces - id) }
+            if (!result.complete) showError("Удаление завершено частично. Остатки данных изолированы; файлы проекта не затронуты.")
+            result.complete
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (_: Exception) { showError("Данные изменились или недоступны. Повторите предварительный просмотр удаления."); false }
+    }
+
+    suspend fun importTextAttachment(text: String): ComposerAttachment? = importTextAttachmentForSession(_state.value.sessionId, text)
+    suspend fun importFiles(paths: List<String>): List<ComposerAttachment> = importFilesForSession(_state.value.sessionId, paths)
+    suspend fun importImageAttachment(bytes: ByteArray): ComposerAttachment? = importImageAttachmentForSession(_state.value.sessionId, bytes)
+    private suspend fun knownAttachmentSession(session: String): Boolean =
+        session == _state.value.sessionId || events.list().any { it.id == session }
+
+    suspend fun importTextAttachmentForSession(session: String, text: String): ComposerAttachment? = commands.withLock {
+        if (!knownAttachmentSession(session)) return@withLock null
+        try { inputAttachments.importText(session, text) }
+        catch (cancelled: CancellationException) { throw cancelled }
+        catch (_: Exception) { null }
+    }
+    suspend fun importFilesForSession(session: String, paths: List<String>): List<ComposerAttachment> = commands.withLock {
+        if (paths.size > 8 || !knownAttachmentSession(session)) return@withLock emptyList()
+        paths.mapNotNull { path ->
+            try { inputAttachments.importFile(session, Path.of(path)) }
+            catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { null }
+        }
+    }
+    suspend fun importImageAttachmentForSession(session: String, bytes: ByteArray): ComposerAttachment? = commands.withLock {
+        if (!knownAttachmentSession(session)) return@withLock null
+        try { inputAttachments.importImage(session, bytes) }
+        catch (cancelled: CancellationException) { throw cancelled }
+        catch (_: Exception) { null }
+    }
+
+    private fun presentationPath(raw: String): Path? {
+        if (raw.startsWith("attachment:")) return inputAttachments.rawPath(_state.value.sessionId, raw.removePrefix("attachment:"))
+        return runCatching {
+            val path = Path.of(raw)
+            val allowed = if (path.isAbsolute) directory.resolve("captures").resolve(_state.value.sessionId).toRealPath()
+                else Path.of(_state.value.settings.workspace ?: return null).toRealPath()
+            val candidate = if (path.isAbsolute) path else allowed.resolve(path)
+            val real = candidate.toRealPath()
+            if (!real.startsWith(allowed) || Files.isSymbolicLink(candidate) || !Files.isRegularFile(real)) null else real
+        }.getOrNull()
+    }
+    suspend fun previewFile(path: String): ByteArray? = withContext(Dispatchers.IO) {
+        if (path.startsWith("attachment:")) return@withContext inputAttachments.preview(_state.value.sessionId, path.removePrefix("attachment:"))
+        val file = presentationPath(path) ?: return@withContext null
+        if (Files.size(file) > 4L * 1024 * 1024) return@withContext null
+        val bytes = Files.readAllBytes(file)
+        javax.imageio.ImageIO.createImageInputStream(java.io.ByteArrayInputStream(bytes)).use { input ->
+            if (input == null) return@withContext null
+            val readers = javax.imageio.ImageIO.getImageReaders(input)
+            if (!readers.hasNext()) return@withContext null
+            val reader = readers.next()
+            try {
+                reader.input = input
+                if (reader.formatName.lowercase() !in setOf("png", "jpeg", "jpg") || reader.getWidth(0).toLong() * reader.getHeight(0) > 16_000_000) return@withContext null
+            } finally { reader.dispose() }
+        }
+        bytes
+    }
+    suspend fun revealFile(path: String) = withContext(Dispatchers.IO) {
+        presentationPath(path)?.let { file -> runCatching {
+            val desktop = java.awt.Desktop.getDesktop()
+            if (desktop.isSupported(java.awt.Desktop.Action.BROWSE_FILE_DIR)) desktop.browseFileDirectory(file.toFile())
+            else desktop.open(file.parent.toFile())
+        } }
+        Unit
+    }
+    suspend fun refreshCaptureTargets() = commands.withLock {
+        try {
+            val targets = withContext(Dispatchers.IO) { captureController.listAvailable() }
+            _state.update { it.copy(captureTargets = targets, selectedCaptureTarget = captureController.selected()?.title) }
+        } catch (_: Exception) { showError("Для снимков разрешите запись экрана Chiller в настройках macOS, затем выберите окно заново.") }
+    }
+    suspend fun selectCaptureTarget(id: String) = commands.withLock {
+        try { val chosen = withContext(Dispatchers.IO) { captureController.select(id) }; _state.update { it.copy(selectedCaptureTarget = chosen.title) } }
+        catch (_: Exception) { showError("Окно недоступно. Обновите список окон и выберите снова.") }
+    }
+
+    suspend fun recoverInterrupted() = commands.withLock {
+        if (busy()) return@withLock
+        val engine = coordinator ?: buildEngine().also { it.restore() }
+        engine.awaitCompletion()
+        engine.recoverInterrupted()
+    }
+
+    suspend fun deleteMessage(index: Int): Boolean = commands.withLock {
+        if (busy()) return@withLock false
+        val session = _state.value.sessionId
+        val messages = projectConversation(events.read(session))
+        val plan = MessageHistoryActions.planDeleteTurn(messages, index) ?: return@withLock false
+        resetEngine()
+        events.append(session, "history.remove_turn", buildJsonObject { put("start", plan.start); put("end", plan.end); put("expectedCount", plan.expectedCount) })
+        selectSessionLocked(session)
+        refreshSessions()
+        true
+    }
+    suspend fun editMessage(index: Int, text: String, mode: ExecutionMode): SendReceipt = commands.withLock {
+        val session = _state.value.sessionId
+        val request = newId()
+        if (busy()) return@withLock SendReceipt(false, session, request, "Дождитесь завершения задачи")
+        val messages = projectConversation(events.read(session))
+        val plan = MessageHistoryActions.planEditTurn(messages, index, text)
+            ?: return@withLock SendReceipt(false, session, request, "Сообщение нельзя изменить")
+        resetEngine()
+        events.append(session, "history.replace_turn", buildJsonObject {
+            put("index", plan.index)
+            put("expectedCount", plan.expectedCount)
+            put("message", json.encodeToJsonElement(AgentMessage.serializer(), plan.replacement))
+        })
+        selectSessionLocked(session)
+        refreshSessions()
+        SendReceipt(true, session, request)
     }
 
     fun checkConnection(): Job = synchronized(connectionLifecycleLock) {
@@ -352,24 +499,25 @@ class DesktopController(
             val savedRoot = history.firstOrNull { it.type == "session.workspace" }?.payload?.get("root")?.jsonPrimitive?.contentOrNull
             _state.update { it.copy(sessionId = id, settings = it.settings.copy(workspace = savedRoot), run = RunState()) }
             if (savedRoot == null) {
-                val messages = history.filter { it.type == "message" }.map { json.decodeFromJsonElement<AgentMessage>(it.payload) }
+                val messages = projectConversation(history)
                 _state.update { it.copy(run = RunState(messages = messages)) }
             } else buildEngine().restore()
         } catch (_: Exception) { showError("Сессию не удалось восстановить. Её данные сохранены для проверки.") }
     }
 
-    private suspend fun sendLocked(text: String, mode: ExecutionMode, requestId: String): SendReceipt {
+    private suspend fun sendLocked(text: String, mode: ExecutionMode, requestId: String, attachments: List<ComposerAttachment> = emptyList()): SendReceipt {
         val session = _state.value.sessionId
         fun rejected(reason: String) = SendReceipt(false, session, requestId, reason)
         if (requestId.isBlank() || requestId.length > 100) return rejected("Недопустимый ID отправки")
-        if (text.isBlank()) return rejected("Сообщение пустое")
+        if (attachments.size > 8 || attachments.any { inputAttachments.rawPath(session, it.artifactId) == null }) return rejected("Вложения недоступны в этом диалоге")
+        if (text.isBlank() && attachments.isEmpty()) return rejected("Сообщение пустое")
         if (coordinator?.state?.value?.status in setOf("completed", "failed", "cancelled")) coordinator?.awaitCompletion()
         if (busy()) return rejected("Уже выполняется другая задача")
         if (events.findEarly(session, "session.demo") != null) return rejected("Это демо-диалог: в нём отвечает сценарий, а не модель. Начните новый диалог.")
         if (_state.value.settings.model.isBlank()) return rejected("Выберите модель в настройках подключения")
         if (!ready()) {
-            val user = AgentMessage("user", text)
-            val answer = AgentMessage("assistant", "Это offline-режим Chiller. Интерфейс готов к работе; подключите API в настройках, чтобы выполнять задачи в проекте. Ключ хранится только на время запуска.", origin = MessageOrigin(MessageOriginKind.OFFLINE))
+            val user = AgentMessage("user", text, attachments = attachments)
+            val answer = AgentMessage("assistant", "Это offline-режим Chiller. Интерфейс готов к работе; подключите API в настройках, чтобы выполнять задачи в проекте. Способ хранения ключа выбирается в настройках.", origin = MessageOrigin(MessageOriginKind.OFFLINE))
             try { withContext(NonCancellable) { events.append(session, "message", json.encodeToJsonElement(AgentMessage.serializer(), user).jsonObject) } }
             catch (_: Exception) { return rejected("Не удалось сохранить сообщение") }
             val receipt = SendReceipt(true, session, requestId)
@@ -388,7 +536,7 @@ class DesktopController(
             val engine = coordinator ?: buildEngine().also { it.restore() }
             val accepted = CompletableDeferred<Boolean>()
             val acceptedReceipt = SendReceipt(true, session, requestId)
-            val job = engine.send(text, mode, _state.value.allowProcesses) {
+            val job = engine.send(text, mode, _state.value.allowProcesses, allowNetwork = _state.value.settings.agent.allowNetwork, allowScreenshots = _state.value.settings.agent.allowScreenshots, attachments = attachments) {
                 rememberReceipt(acceptedReceipt)
                 accepted.complete(true)
             }
@@ -460,7 +608,7 @@ class DesktopController(
         workspaceService = workspace
         val processes = LocalProcessService(root); processService = processes
         questions = PendingQuestions()
-        val builtin = BuiltinTools(workspace, processes, artifacts, questions)
+        val builtin = BuiltinTools(workspace, processes, artifacts, questions, code = LocalReadOnlyCodeService(workspace.root), web = BoundedWebService(), screens = captureController)
         val profile = if (java.net.URI(s.settings.baseUrl).host == "api.deepseek.com")
             ChatCompletionsProfile.deepSeekFlash(s.settings.baseUrl, s.settings.model)
         else ChatCompletionsProfile("generic", s.settings.baseUrl, s.settings.model, requiresApiKey = !keyless(s.settings.baseUrl))

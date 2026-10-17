@@ -21,6 +21,10 @@ class BuiltinToolsTest {
         val tools = BuiltinTools(workspace, processes, artifacts, questions)
         try {
             val plan = ToolContext("s", "r", ExecutionMode.PLAN)
+            val network = tools.execute(ToolCall("net-1", "web_search", """{"query":"Kotlin"}"""), plan)
+            assertEquals("PERMISSION_DENIED", network.error?.code)
+            val explicitlyAllowedNetwork = tools.execute(ToolCall("net-2", "web_search", """{"query":"Kotlin"}"""), plan.copy(allowNetwork = true))
+            assertEquals("NETWORK_DISABLED", explicitlyAllowedNetwork.error?.code)
             val create = tools.execute(ToolCall("1", "create_file", "{\"path\":\"new.txt\",\"content\":\"x\"}"), plan)
             assertEquals("PERMISSION_DENIED", create.error?.code)
             assertFalse(Files.exists(root.resolve("new.txt")))

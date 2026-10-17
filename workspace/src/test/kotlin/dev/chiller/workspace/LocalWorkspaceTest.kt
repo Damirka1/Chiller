@@ -2,6 +2,7 @@ package dev.chiller.workspace
 
 import dev.chiller.contracts.*
 import kotlinx.serialization.json.*
+import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.attribute.PosixFileAttributeView
@@ -289,6 +290,213 @@ class LocalWorkspaceTest {
         } finally { root.toFile().deleteRecursively() }
     }
 
+    @Test fun recoversAndUndoesMoveBetweenExistingDirectories() = kotlinx.coroutines.runBlocking {
+        val root = Files.createTempDirectory("chiller-move-recovery-")
+        try {
+            val source = root.resolve("src/item.txt")
+            val destination = root.resolve("archive/2026/item.txt")
+            Files.createDirectories(source.parent)
+            Files.createDirectories(destination.parent)
+            val bytes = "preserve these bytes\r\n".toByteArray()
+            Files.write(source, bytes)
+            val stores = MemoryStores()
+            val beforeRef = stores.put("s", Base64.getEncoder().encodeToString(bytes))
+            val changeId = "move-before-crash"
+            stores.append("s", "workspace.prepare", buildJsonObject {
+                put("changeId", changeId)
+                put("path", "src/item.txt")
+                put("destination", "archive/2026/item.txt")
+                put("operation", "move")
+                put("beforeHash", sha(bytes))
+                put("afterHash", sha(bytes))
+                put("beforeArtifact", beforeRef.id)
+            })
+            // Model a crash after the no-clobber link and source unlink but before journal commit.
+            Files.createLink(destination, source)
+            Files.delete(source)
+
+            val reopened = LocalWorkspace(root, stores, stores, "s")
+            assertEquals(listOf("$changeId:COMMITTED"), reopened.recoverPending())
+            assertEquals("preserve these bytes\r\n", Files.readString(destination))
+            reopened.undo(changeId)
+            assertEquals("preserve these bytes\r\n", Files.readString(source))
+            assertFalse(Files.exists(destination))
+        } finally { root.toFile().deleteRecursively() }
+    }
+
+    @Test fun crossDirectoryMoveRejectsOccupiedDestinationAndUndoConflict() = kotlinx.coroutines.runBlocking {
+        val root = Files.createTempDirectory("chiller-move-conflict-")
+        try {
+            Files.createDirectories(root.resolve("source"))
+            Files.createDirectories(root.resolve("target/nested"))
+            Files.writeString(root.resolve("source/item.txt"), "original")
+            Files.writeString(root.resolve("target/nested/item.txt"), "keep destination")
+            val ws = LocalWorkspace(root)
+            var snapshot = ws.read(ReadFileRequest("source/item.txt"))
+            expectError("ALREADY_EXISTS") {
+                ws.move("source/item.txt", snapshot.snapshotId, "target/nested/item.txt")
+            }
+            assertEquals("original", Files.readString(root.resolve("source/item.txt")))
+            assertEquals("keep destination", Files.readString(root.resolve("target/nested/item.txt")))
+
+            Files.delete(root.resolve("target/nested/item.txt"))
+            val change = ws.move("source/item.txt", snapshot.snapshotId, "target/nested/item.txt")
+            assertFalse(Files.exists(root.resolve("source/item.txt")))
+            assertEquals("original", Files.readString(root.resolve("target/nested/item.txt")))
+            Files.writeString(root.resolve("source/item.txt"), "user replacement")
+            expectError("UNDO_CONFLICT") { ws.undo(change.id) }
+            assertEquals("user replacement", Files.readString(root.resolve("source/item.txt")))
+            assertEquals("original", Files.readString(root.resolve("target/nested/item.txt")))
+        } finally { root.toFile().deleteRecursively() }
+    }
+
+    @Test fun createFileMakesAndJournalsMissingParentsAndUndoLeavesEmptyDirectories() = kotlinx.coroutines.runBlocking {
+        val root = Files.createTempDirectory("chiller-nested-create-")
+        try {
+            val stores = MemoryStores()
+            val ws = LocalWorkspace(root, stores, stores, "s")
+            val path = "src/main/kotlin/dev/example/Hello.kt"
+            val change = ws.create(path, "package dev.example\n")
+            assertEquals("package dev.example\n", Files.readString(root.resolve(path)))
+            val events = stores.read("s")
+            val prepare = events.single { it.type == "workspace.prepare" }.payload
+            val planned = prepare["plannedDirectories"]!!.jsonArray.map { it.jsonPrimitive.content }
+            assertEquals(
+                listOf("src", "src/main", "src/main/kotlin", "src/main/kotlin/dev", "src/main/kotlin/dev/example"),
+                planned,
+            )
+            val commit = events.single { it.type == "workspace.commit" }.payload
+            assertEquals(planned, commit["createdDirectories"]!!.jsonArray.map { it.jsonPrimitive.content })
+
+            ws.undo(change.id)
+            assertFalse(Files.exists(root.resolve(path)))
+            assertTrue(Files.isDirectory(root.resolve("src/main/kotlin/dev/example")))
+            assertTrue(Files.list(root.resolve("src/main/kotlin/dev/example")).use { !it.findAny().isPresent })
+        } finally { root.toFile().deleteRecursively() }
+    }
+
+    @Test fun createDirectoryIsIdempotentAndRejectsFilesAndSymlinkParents() = kotlinx.coroutines.runBlocking {
+        val root = Files.createTempDirectory("chiller-create-directory-")
+        val outside = Files.createTempDirectory("chiller-create-directory-outside-")
+        try {
+            val stores = MemoryStores()
+            val ws = LocalWorkspace(root, stores, stores, "s")
+            val made = ws.createDirectory("nested/a/b")
+            assertTrue(made.ok)
+            assertEquals(true, made.data!!.jsonObject["created"]!!.jsonPrimitive.boolean)
+            assertEquals(listOf("nested", "nested/a", "nested/a/b"), stores.read("s").single { it.type == "workspace.prepare" }.payload["plannedDirectories"]!!.jsonArray.map { it.jsonPrimitive.content })
+            assertEquals(listOf("nested", "nested/a", "nested/a/b"), stores.read("s").single { it.type == "workspace.commit" }.payload["createdDirectories"]!!.jsonArray.map { it.jsonPrimitive.content })
+            val repeated = ws.createDirectory("nested/a/b")
+            assertTrue(repeated.ok)
+            assertEquals(false, repeated.data!!.jsonObject["created"]!!.jsonPrimitive.boolean)
+            assertEquals(2, stores.read("s").size, "An idempotent call should not add journal entries")
+
+            Files.writeString(root.resolve("blocker"), "preserve")
+            expectError("NOT_DIRECTORY") { ws.create("blocker/child/file.txt", "content") }
+            expectError("ALREADY_EXISTS") { ws.create("blocker", "replace") }
+            assertEquals("preserve", Files.readString(root.resolve("blocker")))
+
+            val link = root.resolve("outside-link")
+            try {
+                Files.createSymbolicLink(link, outside)
+            } catch (_: UnsupportedOperationException) {
+                org.junit.jupiter.api.Assumptions.assumeTrue(false, "Symbolic links are unavailable")
+            } catch (_: IOException) {
+                org.junit.jupiter.api.Assumptions.assumeTrue(false, "Symbolic links are unavailable")
+            } catch (_: SecurityException) {
+                org.junit.jupiter.api.Assumptions.assumeTrue(false, "Symbolic links are unavailable")
+            }
+            expectError("SYMLINK_NOT_ALLOWED") { ws.create("outside-link/new/file.txt", "content") }
+            expectError("SYMLINK_NOT_ALLOWED") { ws.createDirectory("outside-link/new") }
+            assertFalse(Files.exists(outside.resolve("new")))
+        } finally {
+            root.toFile().deleteRecursively()
+            outside.toFile().deleteRecursively()
+        }
+    }
+
+    @Test fun recoversCompletedDirectoryCreationWithoutReplayingIt() = kotlinx.coroutines.runBlocking {
+        val root = Files.createTempDirectory("chiller-mkdir-recovery-")
+        try {
+            Files.createDirectories(root.resolve("one/two"))
+            val stores = MemoryStores()
+            stores.append("s", "workspace.prepare", buildJsonObject {
+                put("changeId", "mkdir-before-crash")
+                put("path", "one/two")
+                put("operation", "mkdir")
+                put("plannedDirectories", buildJsonArray {
+                    add(JsonPrimitive("one"))
+                    add(JsonPrimitive("one/two"))
+                })
+            })
+            val ws = LocalWorkspace(root, stores, stores, "s")
+            assertEquals(listOf("mkdir-before-crash:COMMITTED"), ws.recoverPending())
+            assertEquals(1L, Files.list(root).use { it.count() })
+            val commit = stores.read("s").single { it.type == "workspace.commit" }.payload
+            assertEquals(listOf("one", "one/two"), commit["createdDirectories"]!!.jsonArray.map { it.jsonPrimitive.content })
+        } finally { root.toFile().deleteRecursively() }
+    }
+
+    @Test fun describeFileSniffsKnownBinaryTypesAndReportsLargeMetadata() = kotlinx.coroutines.runBlocking {
+        val root = Files.createTempDirectory("chiller-file-presentation-")
+        try {
+            val signatures = listOf(
+                "png.bin" to (byteArrayOf(0x89.toByte(), 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a) to "image/png"),
+                "jpeg.bin" to (byteArrayOf(0xff.toByte(), 0xd8.toByte(), 0xff.toByte(), 0x00) to "image/jpeg"),
+                "gif.bin" to ("GIF89a".toByteArray() to "image/gif"),
+                "pdf.bin" to ("%PDF-1.7".toByteArray() to "application/pdf"),
+            )
+            signatures.forEach { (name, pair) ->
+                val bytes = pair.first + byteArrayOf(1, 2, 3)
+                Files.write(root.resolve(name), bytes)
+                val presentation = LocalWorkspace(root).describeFile(name)
+                assertEquals(name, presentation.path)
+                assertEquals(name, presentation.name)
+                assertEquals(pair.second, presentation.mimeType)
+                assertEquals(bytes.size.toLong(), presentation.sizeBytes)
+                assertFalse(presentation.path.startsWith(root.toString()))
+            }
+
+            val large = root.resolve("records.csv")
+            val csv = "name,value\n" + "alpha,42\n".repeat(300_000)
+            Files.writeString(large, csv)
+            val presentation = LocalWorkspace(root).describeFile("records.csv")
+            assertEquals("text/csv", presentation.mimeType)
+            assertEquals(Files.size(large), presentation.sizeBytes)
+            expectError("FILE_TOO_LARGE") { LocalWorkspace(root).read(ReadFileRequest("records.csv")) }
+
+            Files.writeString(root.resolve("unknown.custom"), "plain bytes")
+            assertEquals("application/octet-stream", LocalWorkspace(root).describeFile("unknown.custom").mimeType)
+        } finally { root.toFile().deleteRecursively() }
+    }
+
+    @Test fun describeFileRejectsOutsideMissingSymlinkAndNonRegularPaths() = kotlinx.coroutines.runBlocking {
+        val root = Files.createTempDirectory("chiller-file-presentation-path-")
+        val outside = Files.createTempFile("chiller-presentation-outside-", ".png")
+        try {
+            Files.writeString(root.resolve("regular.txt"), "text")
+            Files.createDirectory(root.resolve("directory"))
+            val ws = LocalWorkspace(root)
+            expectError("PATH_OUTSIDE_ROOT") { ws.describeFile("../${outside.fileName}") }
+            expectError("NOT_FOUND") { ws.describeFile("missing.png") }
+            expectError("UNSUPPORTED_FILE") { ws.describeFile("directory") }
+            val link = root.resolve("linked.png")
+            try {
+                Files.createSymbolicLink(link, outside)
+            } catch (_: UnsupportedOperationException) {
+                org.junit.jupiter.api.Assumptions.assumeTrue(false, "Symbolic links are unavailable")
+            } catch (_: IOException) {
+                org.junit.jupiter.api.Assumptions.assumeTrue(false, "Symbolic links are unavailable")
+            } catch (_: SecurityException) {
+                org.junit.jupiter.api.Assumptions.assumeTrue(false, "Symbolic links are unavailable")
+            }
+            expectError("SYMLINK_NOT_ALLOWED") { ws.describeFile("linked.png") }
+        } finally {
+            root.toFile().deleteRecursively()
+            Files.deleteIfExists(outside)
+        }
+    }
+
     @Test fun listHonorsGitAndChillerIgnoreFiles() = kotlinx.coroutines.runBlocking {
         val check = runCatching { ProcessBuilder("rg", "--version").start().waitFor() == 0 }.getOrDefault(false)
         org.junit.jupiter.api.Assumptions.assumeTrue(check, "ripgrep is required for workspace listing")
@@ -311,6 +519,62 @@ class LocalWorkspaceTest {
             assertTrue(limited.truncated)
             val narrowed = LocalWorkspace(root).list(".", "*.txt", 50)
             assertEquals(setOf("kept.txt"), narrowed.data!!.jsonObject["entries"]!!.jsonArray.map { it.jsonPrimitive.content }.toSet())
+        } finally { root.toFile().deleteRecursively() }
+    }
+
+    @Test fun listPagesUseOneBoundedCaptureAndRejectDifferentQuery() = kotlinx.coroutines.runBlocking {
+        val check = runCatching { ProcessBuilder("rg", "--version").start().waitFor() == 0 }.getOrDefault(false)
+        org.junit.jupiter.api.Assumptions.assumeTrue(check, "ripgrep is required for workspace listing")
+        val root = Files.createTempDirectory("chiller-list-pages-")
+        try {
+            (1..5).forEach { Files.writeString(root.resolve("$it.txt"), "file $it") }
+            val ws = LocalWorkspace(root)
+            val first = ws.listPage(limit = 2)
+            assertTrue(first.ok)
+            assertTrue(first.truncated)
+            val cursor = first.nextCursor ?: error("Expected a continuation cursor")
+            val mismatch = ws.listPage(glob = "*.txt", limit = 2, cursor = cursor)
+            assertEquals("CURSOR_QUERY_MISMATCH", mismatch.error?.code)
+
+            Files.writeString(root.resolve("6.txt"), "created after page one")
+            val collected = mutableListOf<String>()
+            collected += first.data!!.jsonObject["entries"]!!.jsonArray.map { it.jsonPrimitive.content }
+            var next: String? = cursor
+            while (next != null) {
+                val page = ws.listPage(limit = 2, cursor = next)
+                assertTrue(page.ok, page.error?.message.orEmpty())
+                collected += page.data!!.jsonObject["entries"]!!.jsonArray.map { it.jsonPrimitive.content }
+                next = page.nextCursor
+            }
+            assertEquals((1..5).map { "$it.txt" }.toSet(), collected.toSet())
+            assertEquals(collected.size, collected.toSet().size, "A captured page sequence must not repeat entries")
+            assertEquals("CURSOR_EXPIRED", ws.listPage(cursor = "unknown-page-token").error?.code)
+        } finally { root.toFile().deleteRecursively() }
+    }
+
+    @Test fun searchPagesReturnCapturedMatchesAfterWorkspaceChanges() = kotlinx.coroutines.runBlocking {
+        val check = runCatching { ProcessBuilder("rg", "--version").start().waitFor() == 0 }.getOrDefault(false)
+        org.junit.jupiter.api.Assumptions.assumeTrue(check, "ripgrep is required for workspace search")
+        val root = Files.createTempDirectory("chiller-search-pages-")
+        try {
+            Files.writeString(root.resolve("hits.txt"), (1..5).joinToString("\n") { "needle-$it" })
+            val ws = LocalWorkspace(root)
+            val first = ws.searchPage("needle", limit = 2)
+            val cursor = first.nextCursor ?: error("Expected a continuation cursor")
+            Files.writeString(root.resolve("hits.txt"), "replacement with no results")
+
+            val mismatch = ws.searchPage("different", limit = 2, cursor = cursor)
+            assertEquals("CURSOR_QUERY_MISMATCH", mismatch.error?.code)
+            val collected = first.data!!.jsonObject["matches"]!!.jsonArray.map { it.jsonObject["text"]!!.jsonPrimitive.content }.toMutableList()
+            var next: String? = cursor
+            while (next != null) {
+                val page = ws.searchPage("needle", limit = 2, cursor = next)
+                assertTrue(page.ok, page.error?.message.orEmpty())
+                collected += page.data!!.jsonObject["matches"]!!.jsonArray.map { it.jsonObject["text"]!!.jsonPrimitive.content }
+                next = page.nextCursor
+            }
+            assertEquals((1..5).map { "needle-$it" }, collected)
+            assertEquals("CURSOR_EXPIRED", ws.searchPage("needle", cursor = "unknown-page-token").error?.code)
         } finally { root.toFile().deleteRecursively() }
     }
 

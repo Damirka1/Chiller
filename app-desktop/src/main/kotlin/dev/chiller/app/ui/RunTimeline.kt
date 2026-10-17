@@ -7,6 +7,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.hoverable
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.*
@@ -26,6 +27,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.toComposeImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
@@ -37,28 +41,65 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.chiller.contracts.Activity
+import dev.chiller.contracts.FilePresentation
 import dev.chiller.contracts.RunState
 import dev.chiller.contracts.plus
 import dev.chiller.design.*
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.longOrNull
+import java.io.ByteArrayInputStream
+import javax.imageio.ImageIO
 
 private val FAILED = setOf("failed", "error", "conflict")
+private val UNCERTAIN = setOf("interrupted", "cancelled")
 private val RUNNING = setOf("running", "executing", "preparing")
 private val SUCCESS = setOf("completed", "applied", "exited")
 private val FILE_EFFECTS = setOf("edit_file", "replace_text", "create_file", "move_file", "delete_file")
 
+/** Short user-facing state for the current run, derived only from engine state. */
+internal fun runProgressLabel(state: RunState): String? = when {
+    state.question != null -> "Ожидает вашего ответа"
+    state.status == "preparing" -> "Подготавливает запрос…"
+    state.status == "streaming" && state.streamingText.isBlank() -> "Ждёт ответа модели…"
+    state.status == "streaming" -> "Модель пишет…"
+    state.status == "executing" -> state.activities.lastOrNull { it.status == "running" }?.let {
+        "${toolLabel(it.name)}${if (it.target.isNotBlank()) " · ${it.target}" else ""}"
+    } ?: "Выполняет действие…"
+    state.status == "completed" -> "Ответ готов"
+    state.status == "cancelled" -> "Задача остановлена"
+    state.status == "interrupted" -> "Прогон прерван"
+    else -> null
+}
+
+internal fun presentedFileFromOutput(output: String): FilePresentation? = runCatching {
+    val file = Json.parseToJsonElement(output).jsonObject["data"]?.jsonObject?.get("file")?.jsonObject ?: return null
+    FilePresentation(
+        path = file["path"]?.jsonPrimitive?.contentOrNull ?: return null,
+        name = file["name"]?.jsonPrimitive?.contentOrNull ?: return null,
+        mimeType = file["mimeType"]?.jsonPrimitive?.contentOrNull ?: return null,
+        sizeBytes = file["sizeBytes"]?.jsonPrimitive?.longOrNull ?: return null,
+    )
+}.getOrNull()
+
 internal fun compactToolActivities(activities: List<Activity>, expanded: Boolean): List<Activity> {
     if (expanded || activities.size <= 1) return activities
-    return activities.filter { it.status in FAILED || it.name in setOf("ask_user", "request_approval") }.distinctBy { it.id }
+    return activities.filter { it.status in FAILED || it.status in UNCERTAIN || it.name in setOf("ask_user", "request_approval") }.distinctBy { it.id }
 }
 
 /** One card per assistant turn: a summary header, then compact rows. Failures stay visible when collapsed. */
 @Composable
-internal fun ToolGroup(activities: List<Activity>, reduced: Boolean, onUndo: (String) -> Unit, canUndo: Boolean) {
+internal fun ToolGroup(activities: List<Activity>, reduced: Boolean, onUndo: (String) -> Unit, canUndo: Boolean, onPreviewFile: suspend (String) -> ByteArray? = { null }, onRevealFile: (String) -> Unit = {}) {
     if (activities.isEmpty()) return
     val c = LocalChillerPalette.current
     val shape = RoundedCornerShape(10.dp)
     val failed = activities.filter { it.status in FAILED }
     val running = activities.any { it.status in RUNNING }
+    val uncertain = activities.any { it.status in UNCERTAIN }
     val questions = activities.filter { it.name in setOf("ask_user", "request_approval") }
     var open by remember(activities.first().id) { mutableStateOf(running || questions.isNotEmpty()) }
     LaunchedEffect(activities.map { it.status }, questions.map { it.id }) {
@@ -67,7 +108,7 @@ internal fun ToolGroup(activities: List<Activity>, reduced: Boolean, onUndo: (St
     Column(Modifier.fillMaxWidth().clip(shape).border(1.dp, c.border, shape)) {
         if (activities.size > 1) {
             HeaderRow(open, { open = !open }) {
-                if (running) Pulse(c.accent) else Icon(if (failed.isEmpty()) Icons.Outlined.Check else Icons.Outlined.ErrorOutline, null, Modifier.size(14.dp), tint = if (failed.isEmpty()) c.positive else c.negative)
+                if (running) Pulse(c.accent) else Icon(if (uncertain) Icons.Outlined.Info else if (failed.isEmpty()) Icons.Outlined.Check else Icons.Outlined.ErrorOutline, null, Modifier.size(14.dp), tint = if (uncertain) c.muted else if (failed.isEmpty()) c.positive else c.negative)
                 Spacer(Modifier.width(9.dp))
                 Text(activityGroupLabel(activities), color = c.text, fontSize = 12.sp, lineHeight = 18.sp)
                 val (added, removed) = activities.mapNotNull { it.diff }.map(::diffStats).fold(0 to 0) { a, b -> a.first + b.first to a.second + b.second }
@@ -78,7 +119,7 @@ internal fun ToolGroup(activities: List<Activity>, reduced: Boolean, onUndo: (St
         val visible = compactToolActivities(activities, open)
         visible.forEachIndexed { index, activity ->
             if (index > 0 || activities.size > 1) Box(Modifier.fillMaxWidth().height(1.dp).background(c.border.copy(alpha = .6f)))
-            ToolRow(activity, reduced, onUndo, canUndo, framed = false)
+            ToolRow(activity, reduced, onUndo, canUndo, framed = false, onPreviewFile = onPreviewFile, onRevealFile = onRevealFile)
         }
     }
 }
@@ -100,11 +141,12 @@ private fun HeaderRow(open: Boolean, onClick: () -> Unit, content: @Composable R
 }
 
 @Composable
-internal fun ToolRow(activity: Activity, reduced: Boolean, onUndo: (String) -> Unit, canUndo: Boolean, framed: Boolean = true) {
+internal fun ToolRow(activity: Activity, reduced: Boolean, onUndo: (String) -> Unit, canUndo: Boolean, framed: Boolean = true, onPreviewFile: suspend (String) -> ByteArray? = { null }, onRevealFile: (String) -> Unit = {}) {
     val c = LocalChillerPalette.current
     val failed = activity.status in FAILED
     val running = activity.status in RUNNING
     val success = activity.status in SUCCESS
+    val presentedFile = if (success && activity.name in setOf("show_file", "capture_window")) presentedFileFromOutput(activity.output) else null
     var open by remember(activity.id) { mutableStateOf(failed) }
     LaunchedEffect(activity.status) { if (failed) open = true }
     val interaction = remember { MutableInteractionSource() }
@@ -131,14 +173,16 @@ internal fun ToolRow(activity: Activity, reduced: Boolean, onUndo: (String) -> U
             when {
                 failed -> StatusTag("ошибка", c.negative)
                 running -> StatusTag("выполняется", c.muted)
+                activity.status in UNCERTAIN -> StatusTag("прервано", c.muted)
                 !success -> StatusTag(activity.status, c.muted)
             }
             Icon(if (open) Icons.Outlined.KeyboardArrowUp else Icons.Outlined.KeyboardArrowDown, null, Modifier.size(15.dp), tint = c.faint)
         }
+        presentedFile?.let { FilePresentationCard(it, onPreviewFile, onRevealFile) }
         AnimatedVisibility(open, enter = if (reduced) EnterTransition.None else expandVertically(tween(180)) + fadeIn(tween(120)), exit = if (reduced) ExitTransition.None else shrinkVertically(tween(160)) + fadeOut(tween(100))) {
             Column(Modifier.fillMaxWidth().background(c.sidebar.copy(alpha = .5f))) {
                 if (activity.diff != null) Diff(activity.diff!!)
-                else if (activity.output.isNotBlank()) SelectionContainer {
+                else if (activity.output.isNotBlank() && presentedFile == null) SelectionContainer {
                     Text(prettyOutput(activity.output), color = c.muted, fontSize = 11.sp, lineHeight = 18.sp, fontFamily = FontFamily.Monospace, modifier = Modifier.fillMaxWidth().padding(12.dp), maxLines = 24, overflow = TextOverflow.Ellipsis)
                 }
                 else Text("Без вывода", color = c.faint, fontSize = 11.sp, modifier = Modifier.padding(12.dp))
@@ -149,6 +193,67 @@ internal fun ToolRow(activity: Activity, reduced: Boolean, onUndo: (String) -> U
             }
         }
     }
+}
+
+@Composable
+internal fun FilePresentationCard(file: FilePresentation, onPreviewFile: suspend (String) -> ByteArray?, onRevealFile: (String) -> Unit, showReveal: Boolean = true) {
+    val c = LocalChillerPalette.current
+    val imageMime = file.mimeType.equals("image/png", ignoreCase = true) || file.mimeType.equals("image/jpeg", ignoreCase = true) || file.mimeType.equals("image/jpg", ignoreCase = true)
+    var bitmap by remember(file.path, file.sizeBytes) { mutableStateOf<ImageBitmap?>(null) }
+    var previewAttempted by remember(file.path, file.sizeBytes) { mutableStateOf(false) }
+    val previewer by rememberUpdatedState(onPreviewFile)
+    LaunchedEffect(file.path, file.sizeBytes, imageMime) {
+        if (imageMime && file.path.isNotBlank()) {
+            bitmap = withContext(Dispatchers.IO) {
+                runCatching { previewer(file.path)?.let(::decodePreviewImage) }.getOrNull()
+            }
+            previewAttempted = true
+        }
+    }
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 7.dp).clip(RoundedCornerShape(8.dp))
+            .background(c.surface).border(1.dp, c.border, RoundedCornerShape(8.dp)).padding(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (imageMime) {
+            if (bitmap != null) Image(bitmap!!, contentDescription = "Предварительный просмотр ${file.name}", modifier = Modifier.size(96.dp, 68.dp).clip(RoundedCornerShape(6.dp)), contentScale = ContentScale.Crop)
+            else Box(Modifier.size(96.dp, 68.dp).clip(RoundedCornerShape(6.dp)).background(c.sidebar), contentAlignment = Alignment.Center) {
+                Icon(Icons.Outlined.Image, null, Modifier.size(24.dp), tint = c.faint)
+            }
+            Spacer(Modifier.width(10.dp))
+        } else {
+            Icon(Icons.Outlined.InsertDriveFile, null, Modifier.size(20.dp), tint = c.muted)
+            Spacer(Modifier.width(9.dp))
+        }
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(file.name, color = c.text, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text("${file.mimeType} · ${formatPresentedSize(file.sizeBytes)}", color = c.faint, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (imageMime && !previewAttempted) Text("Загружаю миниатюру…", color = c.faint, fontSize = 10.sp)
+            else if (imageMime && bitmap == null) Text("Предварительный просмотр недоступен", color = c.faint, fontSize = 10.sp)
+        }
+        if (showReveal) ChillerControl("Показать в папке", { onRevealFile(file.path) }, icon = Icons.Outlined.FolderOpen, style = ControlStyle.QUIET)
+    }
+}
+
+internal fun decodePreviewImage(bytes: ByteArray): ImageBitmap? = runCatching {
+    require(bytes.size <= 4 * 1024 * 1024) { "Preview exceeds 4 MiB" }
+    val input = ImageIO.createImageInputStream(ByteArrayInputStream(bytes)) ?: return null
+    input.use {
+        val reader = ImageIO.getImageReaders(it).asSequence().firstOrNull() ?: return null
+        try {
+            reader.input = it
+            val width = reader.getWidth(0)
+            val height = reader.getHeight(0)
+            require(width > 0 && height > 0 && width.toLong() * height <= 16_000_000L) { "Preview dimensions exceed limit" }
+            org.jetbrains.skia.Image.makeFromEncoded(bytes).toComposeImageBitmap()
+        } finally { reader.dispose() }
+    }
+}.getOrNull()
+
+internal fun formatPresentedSize(sizeBytes: Long): String = when {
+    sizeBytes < 1024 -> "$sizeBytes Б"
+    sizeBytes < 1024 * 1024 -> "%.1f КБ".format(java.util.Locale.ROOT, sizeBytes / 1024.0).replace('.', ',')
+    else -> "%.1f МБ".format(java.util.Locale.ROOT, sizeBytes / (1024.0 * 1024.0)).replace('.', ',')
 }
 
 @Composable
@@ -268,6 +373,12 @@ internal fun diffStats(diff: String): Pair<Int, Int> {
 }
 
 private fun toolIcon(name: String): ImageVector = when (name) {
+    "web_search", "web_fetch" -> Icons.Outlined.Language
+    "capture_window", "list_capture_targets" -> Icons.Outlined.PhotoCamera
+    "create_directory" -> Icons.Outlined.CreateNewFolder
+    "show_file" -> Icons.Outlined.InsertDriveFile
+    "git_status", "git_diff", "git_log", "git_show", "find_symbols", "read_symbol" -> Icons.Outlined.Code
+    "read_diagnostics" -> Icons.Outlined.Terminal
     "read_file", "read_artifact" -> Icons.Outlined.Description
     "list_files" -> Icons.Outlined.FolderOpen
     "search_text" -> Icons.Outlined.Search

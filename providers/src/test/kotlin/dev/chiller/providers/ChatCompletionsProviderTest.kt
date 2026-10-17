@@ -49,6 +49,21 @@ class ChatCompletionsProviderTest {
         assertEquals("{\"path\":\"x\"}", completed.message.toolCalls.single().arguments)
     }
 
+    @Test fun attachmentReferencesAreSentAsTextWithoutPretendingToBeVision() = runBlocking {
+        var request = ""
+        val server = testServer { exchange ->
+            request = exchange.requestBody.readBytes().toString(Charsets.UTF_8)
+            sendSse(exchange, sse("""{"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}""", "[DONE]"))
+        }
+        invoke(server, listOf(AgentMessage("user", "inspect", attachments = listOf(
+            dev.chiller.contracts.ComposerAttachment("synthetic-artifact", "chart.png", "image/png", 42),
+        ))))
+        assertTrue("synthetic-artifact" in request)
+        assertTrue("chart.png" in request)
+        assertTrue("not sent as vision input" in request)
+        assertTrue("image_url" !in request)
+    }
+
     @Test fun keylessProfileSendsNoAuthorizationAndKeyedProfileStillRequiresKey() = runBlocking {
         var authorization: String? = "unset"
         val server = testServer { exchange ->

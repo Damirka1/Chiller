@@ -1,6 +1,7 @@
 package dev.chiller.agent
 
 import dev.chiller.contracts.AgentMessage
+import kotlinx.serialization.json.*
 
 /** A character-based context estimate; it is not a model tokenizer result. */
 data class ContextSelection(
@@ -34,8 +35,17 @@ class ContextPlanner(
         require(keepToolResults >= 0) { "keepToolResults cannot be negative" }
     }
 
-    fun select(messages: List<AgentMessage>): ContextSelection {
+    fun select(history: List<AgentMessage>): ContextSelection {
         val budget = (maxCharacters - outputReserveCharacters).toLong()
+        // Compact before fitting whole turns: a long active tool loop must have the same
+        // opportunity to shed old results as completed history. Pairing/replay stay intact.
+        val candidates = history.indices.filter {
+            history[it].role == "tool" && (history[it].content?.length ?: 0) > pruneAboveCharacters
+        }.dropLast(keepToolResults)
+        val prune = if (history.sumOf(::messageCharacters) > budget * pruneThreshold) candidates.toSet() else emptySet()
+        val messages = history.mapIndexed { index, message ->
+            if (index in prune) message.copy(content = prunedResult(message.content)) else message
+        }
         val fixedCost = messages.filter { it.role == "system" }.sumOf(::messageCharacters)
         if (fixedCost > budget) {
             throw ContextLimitException("System messages exceed the available context character budget")
@@ -73,17 +83,7 @@ class ContextPlanner(
         var selected = messages.filterIndexed { index, message -> message.role == "system" || keepIndices.contains(index) }
         val dropped = messages.size - selected.size
 
-        var pruned = 0
-        if (used.toDouble() > budget * pruneThreshold) {
-            val toolPositions = selected.indices.filter { selected[it].role == "tool" && (selected[it].content?.length ?: 0) > pruneAboveCharacters }
-            val candidates = toolPositions.dropLast(keepToolResults)
-            if (candidates.isNotEmpty()) {
-                val mutable = selected.toMutableList()
-                candidates.forEach { position -> mutable[position] = mutable[position].copy(content = PRUNED_RESULT) }
-                selected = mutable
-                pruned = candidates.size
-            }
-        }
+        val pruned = keepIndices.count { it in prune }
 
         val estimatedTokens = ((selected.sumOf(::messageCharacters) + 3L) / 4L).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
         return ContextSelection(selected, dropped, estimatedTokens, prunedResults = pruned)
@@ -137,7 +137,7 @@ class ContextPlanner(
 
     private fun messageCharacters(message: AgentMessage): Long =
         8L + message.role.length + (message.content?.length ?: 0) + (message.toolCallId?.length ?: 0) +
-            message.toolCalls.sumOf { it.id.length.toLong() + it.name.length + it.arguments.length } + message.replay.toString().length
+            message.toolCalls.sumOf { it.id.length.toLong() + it.name.length + it.arguments.length } + message.replay.toString().length + message.attachments.sumOf { it.name.length.toLong() + it.artifactId.length + 200 }
 
     private data class TurnGroup(
         val indices: List<Int>,
@@ -145,7 +145,18 @@ class ContextPlanner(
         val toolPairsComplete: Boolean,
     )
 
-    private companion object {
-        const val PRUNED_RESULT = """{"ok":true,"pruned":true,"note":"Older tool result omitted to free context. Re-run the tool if you need the data."}"""
+    private fun prunedResult(content: String?): String {
+        val original = runCatching { Json.parseToJsonElement(content.orEmpty()) as? JsonObject }.getOrNull()
+        return buildJsonObject {
+            // Never turn an error or unknown outcome into a successful result during compaction.
+            original?.get("ok")?.let { put("ok", it) }
+            original?.get("error")?.let { error ->
+                val code = (error as? JsonObject)?.get("code")
+                if (code is JsonPrimitive) put("error", buildJsonObject { put("code", code.content.take(120)) })
+            }
+            original?.get("artifactId")?.let { if (it is JsonPrimitive) put("artifactId", it.content.take(100)) }
+            put("pruned", true)
+            put("note", "Older tool output omitted. Read the file or re-run a READ tool to recover data. Never repeat a write or process merely to recover output.")
+        }.toString()
     }
 }

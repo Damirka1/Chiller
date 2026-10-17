@@ -21,6 +21,81 @@ import kotlin.test.assertNull
 class DesktopControllerTest {
     @TempDir lateinit var directory: Path
 
+    @Test fun `message delete and edit project history without replaying effects`() = runBlocking {
+        val controller = DesktopController(directory, initialCredential = null)
+        try {
+            controller.initialize()
+            val session = controller.state.value.sessionId
+            assertTrue(controller.send("first", ExecutionMode.PLAN).accepted)
+            assertTrue(controller.send("second", ExecutionMode.PLAN).accepted)
+            assertEquals(4, controller.state.value.run.messages.size)
+            assertTrue(controller.deleteMessage(3))
+            assertEquals(listOf("first"), controller.state.value.run.messages.filter { it.role == "user" }.map { it.content })
+            val historyBeforeEdit = JsonlEventStore(directory.resolve("sessions")).read(session)
+            val messagesBeforeEdit = historyBeforeEdit.count { it.type == "message" }
+            val runsBeforeEdit = historyBeforeEdit.count { it.type == "run.started" }
+            assertTrue(controller.editMessage(0, "edited", ExecutionMode.PLAN).accepted)
+            assertEquals(listOf("edited"), controller.state.value.run.messages.filter { it.role == "user" }.map { it.content })
+            val historyAfterEdit = JsonlEventStore(directory.resolve("sessions")).read(session)
+            assertEquals(messagesBeforeEdit, historyAfterEdit.count { it.type == "message" })
+            assertEquals(runsBeforeEdit, historyAfterEdit.count { it.type == "run.started" })
+            assertEquals("history.replace_turn", historyAfterEdit.last().type)
+            controller.selectSession(session)
+            assertEquals(listOf("edited"), controller.state.value.run.messages.filter { it.role == "user" }.map { it.content })
+        } finally { controller.close() }
+    }
+
+    @Test fun `attachments belong to a session and an attachment-only message is accepted`() = runBlocking {
+        val controller = DesktopController(directory, initialCredential = null)
+        try {
+            controller.initialize()
+            val attachment = assertNotNull(controller.importTextAttachment("данные".repeat(1000)))
+            assertTrue(controller.send("", ExecutionMode.PLAN, attachments = listOf(attachment)).accepted)
+            assertEquals(attachment, controller.state.value.run.messages.first().attachments.single())
+            controller.newSession()
+            assertFalse(controller.send("read attachment", ExecutionMode.PLAN, attachments = listOf(attachment)).accepted)
+        } finally { controller.close() }
+    }
+
+    @Test fun `late import remains bound to its original session after switching chats`() = runBlocking {
+        val controller = DesktopController(directory, initialCredential = null)
+        try {
+            controller.initialize()
+            val owner = controller.state.value.sessionId
+            controller.send("persist owner", ExecutionMode.PLAN)
+            controller.newSession()
+            val other = controller.state.value.sessionId
+            val imported = assertNotNull(controller.importTextAttachmentForSession(owner, "synthetic dropped content"))
+            assertEquals(other, controller.state.value.sessionId)
+            assertFalse(controller.send("wrong chat", ExecutionMode.PLAN, attachments = listOf(imported)).accepted)
+            controller.selectSession(owner)
+            assertTrue(controller.send("right chat", ExecutionMode.PLAN, attachments = listOf(imported)).accepted)
+            assertNull(controller.importTextAttachmentForSession("missing-session", "refuse orphan"))
+        } finally { controller.close() }
+    }
+
+    @Test fun `session deletion requires preview refuses selected and preserves project files`() = runBlocking {
+        val root = directory.toRealPath()
+        val project = java.nio.file.Files.createDirectories(root.resolve("project"))
+        java.nio.file.Files.writeString(project.resolve("keep.txt"), "user data")
+        val store = JsonlEventStore(root.resolve("sessions"))
+        store.append("old", "message", kotlinx.serialization.json.buildJsonObject { put("role", kotlinx.serialization.json.JsonPrimitive("user")); put("content", kotlinx.serialization.json.JsonPrimitive("old")) })
+        val controller = DesktopController(root, initialCredential = null)
+        try {
+            controller.initialize()
+            assertFalse(controller.deleteSession("old"))
+            assertNotNull(controller.previewSessionDeletion("old"))
+            controller.selectSession("old")
+            assertFalse(controller.deleteSession("old"))
+            assertNull(controller.previewSessionDeletion("old"))
+            controller.newSession()
+            assertNotNull(controller.previewSessionDeletion("old"))
+            assertTrue(controller.deleteSession("old"))
+            assertFalse(java.nio.file.Files.exists(root.resolve("sessions/old")))
+            assertEquals("user data", java.nio.file.Files.readString(project.resolve("keep.txt")))
+        } finally { controller.close() }
+    }
+
     @Test fun `endpoint can be applied without knowing a model and blank model cannot send`() = runBlocking {
         val controller = DesktopController(directory, initialCredential = null)
         try {

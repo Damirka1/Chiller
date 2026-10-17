@@ -3,6 +3,8 @@ package dev.chiller.app.ui
 import androidx.compose.animation.*
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.*
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.draganddrop.dragAndDropTarget
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.draggable
 import androidx.compose.foundation.gestures.rememberDraggableState
@@ -40,6 +42,13 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.ExperimentalComposeUiApi
+import androidx.compose.ui.draganddrop.DragAndDropEvent
+import androidx.compose.ui.draganddrop.DragAndDropTarget
+import androidx.compose.ui.draganddrop.awtTransferable
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalClipboardManager
@@ -75,8 +84,18 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.serialization.json.*
+import java.awt.Image as AwtImage
+import java.awt.datatransfer.DataFlavor
+import java.awt.datatransfer.Transferable
+import java.awt.image.BufferedImage
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
+import java.io.File
+import javax.imageio.ImageIO
+import javax.imageio.ImageReader
 
 enum class WorkspaceLayout { FOCUS, STUDIO }
+private data class MessageActionTarget(val index: Int, val content: String, val role: String, val sessionId: String?, val historySize: Int)
 
 /** Geometry and drag behaviour of a transparent native title bar (macOS full-window content). */
 class TitleBarSpec(
@@ -117,6 +136,15 @@ fun ChillerApp(
     /** macOS full-window content: the native title bar is transparent and the traffic lights float over the app. */
     titleBar: TitleBarSpec? = null,
     buildStamp: String? = null,
+    onPreviewDeleteSession: suspend (String) -> String? = { null }, onDeleteSession: suspend (String) -> Boolean = { false },
+    onPreviewFile: suspend (String) -> ByteArray? = { null }, onRevealFile: (String) -> Unit = {},
+    onImportTextAttachment: suspend (String, String) -> ComposerAttachment? = { _, _ -> null },
+    onImportFiles: suspend (String, List<String>) -> List<ComposerAttachment> = { _, _ -> emptyList() },
+    onImportImageAttachment: suspend (String, ByteArray) -> ComposerAttachment? = { _, _ -> null },
+    onSendWithAttachments: (suspend (String, ExecutionMode, String, List<ComposerAttachment>) -> SendReceipt)? = null,
+    onDeleteMessage: suspend (Int) -> Boolean = { false },
+    onEditMessage: suspend (Int, String, ExecutionMode) -> SendReceipt = { _, _, _ -> SendReceipt(false, "", "", "Редактирование недоступно") },
+    onRecoverInterrupted: () -> Unit = {},
 ) {
     val systemDark = isSystemInDarkTheme()
     var view by remember { mutableStateOf(preferences) }
@@ -130,15 +158,60 @@ fun ChillerApp(
     var composing by remember { mutableStateOf(false) }
     var sendError by remember { mutableStateOf<String?>(null) }
     val latestSession by rememberUpdatedState(selectedSessionId)
+    val latestMessages by rememberUpdatedState(state.messages)
     LaunchedEffect(selectedSessionId) { sendError = null; composing = false }
     var renameTarget by remember { mutableStateOf<SessionInfo?>(null) }
+    var deleteTarget by remember { mutableStateOf<SessionInfo?>(null) }
+    var deletePreview by remember { mutableStateOf<String?>(null) }
+    var deletePreviewLoading by remember { mutableStateOf(false) }
+    var deletePreviewError by remember { mutableStateOf<String?>(null) }
+    var deleteInFlight by remember { mutableStateOf(false) }
+    var deleteRequestVersion by remember { mutableIntStateOf(0) }
+    val latestSelectedSession by rememberUpdatedState(selectedSessionId)
+    val latestActive by rememberUpdatedState(pendingSend || state.status in setOf("preparing", "streaming", "executing"))
     var selectedActivityId by remember { mutableStateOf<String?>(null) }
+    var messageEditTarget by remember { mutableStateOf<MessageActionTarget?>(null) }
+    var messageDeleteTarget by remember { mutableStateOf<MessageActionTarget?>(null) }
+    var messageEditText by remember { mutableStateOf("") }
+    var messageActionBusy by remember { mutableStateOf(false) }
+    var messageActionError by remember { mutableStateOf<String?>(null) }
+    fun targetMessage(index: Int, content: String): MessageActionTarget? {
+        val message = state.messages.getOrNull(index) ?: return null
+        if (message.content.orEmpty() != content) return null
+        return MessageActionTarget(index, content, message.role, selectedSessionId, state.messages.size)
+    }
+    fun targetStillCurrent(target: MessageActionTarget): Boolean {
+        val message = latestMessages.getOrNull(target.index)
+        return latestSession == target.sessionId && latestMessages.size == target.historySize && message != null && message.role == target.role && message.content.orEmpty() == target.content
+    }
     var sidebar by remember { mutableStateOf(true) }
     var settings by remember { mutableStateOf(openSettingsOnStart != null) }
     val drafts = remember { mutableStateMapOf<String, String>() }
+    val attachmentsBySession = remember { mutableStateMapOf<String, List<ComposerAttachment>>() }
+    val pendingImportsBySession = remember { mutableStateMapOf<String, Int>() }
     val draftKey = selectedSessionId ?: "new"
     val draft = drafts[draftKey].orEmpty()
+    val draftAttachments = attachmentsBySession[draftKey].orEmpty()
     val updateDraft: (String) -> Unit = { drafts[draftKey] = it }
+    val updateAttachments: (String, List<ComposerAttachment>) -> Unit = { key, attachments ->
+        if (attachments.isEmpty()) attachmentsBySession.remove(key)
+        else attachmentsBySession[key] = attachments.distinctBy { it.artifactId }
+    }
+    val appendAttachments: (String, List<ComposerAttachment>) -> Boolean = { key, additions ->
+        val merged = mergeComposerAttachments(attachmentsBySession[key].orEmpty(), additions)
+        if (merged == null) false else { attachmentsBySession[key] = merged; true }
+    }
+    val removeAttachment: (String, String) -> Unit = { key, artifactId ->
+        updateAttachments(key, attachmentsBySession[key].orEmpty().filterNot { it.artifactId == artifactId })
+    }
+    val updateImportCount: (String, Boolean) -> Boolean = { key, starting ->
+        if (starting && pendingSend) false
+        else {
+            val next = nextPendingImportCount(pendingImportsBySession[key] ?: 0, if (starting) 1 else -1)
+            if (next == null) pendingImportsBySession.remove(key) else pendingImportsBySession[key] = next
+            true
+        }
+    }
     var mode by remember { mutableStateOf(ExecutionMode.PLAN) }
     val reducedMotion = view.reducedMotion
     var showCompactChanges by remember { mutableStateOf(false) }
@@ -150,14 +223,20 @@ fun ChillerApp(
     val empty = state.messages.none { it.role in setOf("user", "assistant") } && state.activities.isEmpty() && state.error == null
     val contextNote = state.contextEstimatedTokens?.let { tokens -> "≈ $tokens токенов${if (state.droppedContextMessages > 0) " · контекст сокращён" else ""}" }
     val send = {
-        if (draft.isNotBlank() && !active && !pendingSend && !composing) {
+        if ((draft.isNotBlank() || draftAttachments.isNotEmpty()) && !active && !pendingSend && !composing && (pendingImportsBySession[draftKey] ?: 0) == 0) {
             val sentKey = draftKey; val sentText = draft; val requestId = newId()
+            val sentAttachments = draftAttachments.toList()
+            val sentPrompt = promptWithAttachments(sentText, sentAttachments)
             pendingSend = true; sendError = null
             scope.launch {
                 try {
-                    val receipt = onSend(sentText.trim(), mode, requestId)
+                    val receipt = onSendWithAttachments?.invoke(sentText.trim(), mode, requestId, sentAttachments)
+                        ?: onSend(sentPrompt, mode, requestId)
                     if (receipt.accepted) {
-                        if (receipt.sessionId == sentKey && drafts[sentKey] == sentText) drafts[sentKey] = ""
+                        if (receipt.clientRequestId == requestId && receipt.sessionId == sentKey && latestSession == sentKey) {
+                            if (drafts[sentKey] == sentText) drafts[sentKey] = ""
+                            if (attachmentsBySession[sentKey] == sentAttachments) attachmentsBySession.remove(sentKey)
+                        }
                     } else if (latestSession == receipt.sessionId) sendError = receipt.reason ?: "Сообщение не принято"
                 } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
                 catch (_: Exception) { sendError = "Не удалось отправить сообщение. Текст сохранён." }
@@ -194,7 +273,29 @@ fun ChillerApp(
             val showSidebar = sidebar && maxWidth >= 740.dp
             Row(Modifier.fillMaxSize()) {
                 if (showSidebar) Sidebar(sessions, selectedSessionId, workspacePath, apiKeyConfigured, !active, onNewSession, onSelectSession, onChooseWorkspace,
-                    onSettings = { settings = true }, onTheme = { updateView(view.copy(theme = if (dark) "light" else "dark")) }, onRename = { renameTarget = it }, onExport = onExportSession, connection = connection, width = 248f * density.fontScale.coerceIn(1f, 1.2f),
+                    onSettings = { settings = true }, onTheme = { updateView(view.copy(theme = if (dark) "light" else "dark")) }, onRename = { renameTarget = it }, onDelete = { session ->
+                        if (!active && selectedSessionId != session.id && deleteTarget == null && !deletePreviewLoading && !deleteInFlight) {
+                            deleteTarget = session
+                            deletePreview = null
+                            deletePreviewError = null
+                            deletePreviewLoading = true
+                            val requestVersion = ++deleteRequestVersion
+                            scope.launch {
+                                try {
+                                    val preview = onPreviewDeleteSession(session.id)
+                                    if (deleteRequestVersion == requestVersion && deleteTarget?.id == session.id) {
+                                        if (preview.isNullOrBlank()) deletePreviewError = "Не удалось подготовить предварительный просмотр удаления."
+                                        else deletePreview = preview
+                                    }
+                                } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+                                catch (_: Exception) {
+                                    if (deleteRequestVersion == requestVersion && deleteTarget?.id == session.id) deletePreviewError = "Не удалось загрузить сведения для удаления."
+                                } finally {
+                                    if (deleteRequestVersion == requestVersion && deleteTarget?.id == session.id) deletePreviewLoading = false
+                                }
+                            }
+                        }
+                    }, onExport = onExportSession, connection = connection, width = 248f * density.fontScale.coerceIn(1f, 1.2f),
                     running = active, searchFocus = sidebarSearch, titleBar = titleBar, onClose = { if (!active) onCloseWorkspace() })
                 Box(Modifier.width(1.dp).fillMaxHeight().background(c.border.copy(alpha = .7f)))
                 BoxWithConstraints(Modifier.weight(1f).fillMaxHeight()) {
@@ -202,7 +303,7 @@ fun ChillerApp(
                     Column(Modifier.fillMaxSize()) {
                         Toolbar(
                             titleBar, leadingInset = titleBar != null && !showSidebar,
-                            sessions.firstOrNull { it.id == selectedSessionId }?.title, workspacePath, layout, active, state.status,
+                            sessions.firstOrNull { it.id == selectedSessionId }?.title, workspacePath, layout, active, state.status, state.question != null,
                             onLayout = { updateView(view.copy(layout = it.name.lowercase())) }, onSidebar = { sidebar = !sidebar }, onSettings = { settings = true },
                             canConfigure = !active, compact = compact, compactChanges = showCompactChanges,
                             onCompactChanges = { showCompactChanges = !showCompactChanges },
@@ -221,6 +322,7 @@ fun ChillerApp(
                                 preferences = updateView, allowProcesses = onAllowProcessesChange, agent = base.agent,
                                 removeRecent = base.removeRecent, openPath = base.openPath, openUrl = base.openUrl, deleteDemos = base.deleteDemos,
                                 saveCredential = base.saveCredential, deleteCredential = base.deleteCredential,
+                                refreshCaptureTargets = base.refreshCaptureTargets, selectCaptureTarget = base.selectCaptureTarget,
                                 close = { settings = false },
                             ), Modifier.weight(1f).fillMaxWidth(), initial = openSettingsOnStart)
                         } else
@@ -246,7 +348,12 @@ fun ChillerApp(
                                             },
                                         )
                                     } else {
-                                        Conversation(state, reducedMotion, onAnswerQuestion, onUndo, !active, { text -> updateDraft(text); sendError = null }, Modifier.weight(1f).fillMaxWidth())
+                                        Conversation(state, reducedMotion, onAnswerQuestion, onUndo, !active,
+                                            { text -> updateDraft(text); sendError = null }, onPreviewFile, onRevealFile,
+                                            onEdit = { index, text -> if (!active) targetMessage(index, text)?.let { messageEditTarget = it; messageEditText = text; messageActionError = null } },
+                                            onDelete = { index, text -> if (!active) targetMessage(index, text)?.let { messageDeleteTarget = it; messageActionError = null } },
+                                            onRecoverInterrupted = onRecoverInterrupted,
+                                            modifier = Modifier.weight(1f).fillMaxWidth())
                                     }
                                     Box(Modifier.fillMaxWidth().padding(horizontal = if (compact) 20.dp else 32.dp).padding(top = 6.dp, bottom = 18.dp), contentAlignment = Alignment.Center) {
                                         Column(Modifier.widthIn(max = 760.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -265,7 +372,13 @@ fun ChillerApp(
                                                 val oldDraft = draft
                                                 scope.launch { onSelectModel(selected)?.let { id -> drafts.putIfAbsent(id, oldDraft) } }
                                             }, { composing = it }, pendingSend, contextNote, catalog, onRefreshModels, onCancelCatalogRefresh, allowProcesses, onAllowProcessesChange,
-                                                workspacePath, onChooseWorkspace, state.contextEstimatedTokens, connectionSummary(connection, apiKeyConfigured).second)
+                                                workspacePath, onChooseWorkspace, state.contextEstimatedTokens, connectionSummary(connection, apiKeyConfigured).second,
+                                                attachments = draftAttachments, attachmentOwnerKey = draftKey,
+                                                importing = (pendingImportsBySession[draftKey] ?: 0) > 0,
+                                                onAppendAttachments = appendAttachments,
+                                                onRemoveAttachment = removeAttachment,
+                                                onImportState = updateImportCount,
+                                                onImportTextAttachment = onImportTextAttachment, onImportFiles = onImportFiles, onImportImageAttachment = onImportImageAttachment)
                                         }
                                     }
                                 }
@@ -288,6 +401,83 @@ fun ChillerApp(
         renameTarget?.let { target -> RenameDialog(target, { renameTarget = null }) { title ->
             scope.launch { if (onRenameSession(target.id, title)) renameTarget = null }
         } }
+        deleteTarget?.let { target -> SessionDeleteDialog(
+            session = target,
+            preview = deletePreview,
+            loading = deletePreviewLoading,
+            previewError = deletePreviewError.takeIf { deletePreview == null && !deletePreviewLoading },
+            deleting = deleteInFlight,
+            deleteError = deletePreviewError.takeIf { deletePreview != null },
+            onDismiss = {
+                if (!deleteInFlight) {
+                    deleteRequestVersion++
+                    deleteTarget = null
+                    deletePreview = null
+                    deletePreviewLoading = false
+                    deletePreviewError = null
+                }
+            },
+            onDelete = {
+                if (!deleteInFlight && deletePreview != null && !deletePreviewLoading) {
+                    if (latestActive || latestSelectedSession == target.id) {
+                        deletePreviewError = "Текущий или выполняющийся диалог нельзя удалить."
+                    } else {
+                        deleteInFlight = true
+                        deletePreviewError = null
+                        scope.launch {
+                            try {
+                                if (onDeleteSession(target.id)) {
+                                    deleteTarget = null
+                                    deletePreview = null
+                                    deletePreviewError = null
+                                } else deletePreviewError = "Удаление не завершено. Обновите предварительный просмотр и попробуйте снова."
+                            } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+                            catch (_: Exception) { deletePreviewError = "Не удалось завершить удаление. Обновите предварительный просмотр и попробуйте снова." }
+                            finally { deleteInFlight = false }
+                        }
+                    }
+                }
+            },
+        ) }
+        messageEditTarget?.let { target -> MessageEditDialog(
+            text = messageEditText, error = messageActionError, busy = messageActionBusy,
+            onText = { messageEditText = it }, onDismiss = { if (!messageActionBusy) { messageEditTarget = null; messageActionError = null } },
+            onSubmit = {
+                if (!targetStillCurrent(target)) messageActionError = "История диалога изменилась. Закройте это окно и выберите сообщение снова."
+                if (!messageActionBusy && !latestActive && targetStillCurrent(target)) {
+                    messageActionBusy = true; messageActionError = null
+                    scope.launch {
+                        try {
+                            if (!targetStillCurrent(target)) { messageActionError = "История диалога изменилась. Закройте это окно и выберите сообщение снова."; return@launch }
+                            val receipt = onEditMessage(target.index, messageEditText, mode)
+                            if (receipt.accepted && receipt.sessionId == target.sessionId) { messageEditTarget = null; messageActionError = null }
+                            else messageActionError = receipt.reason ?: "Не удалось изменить сообщение в исходном диалоге. Текст сохранён."
+                        } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+                        catch (_: Exception) { messageActionError = "Не удалось изменить сообщение. Текст сохранён." }
+                        finally { messageActionBusy = false }
+                    }
+                }
+            },
+        ) }
+        messageDeleteTarget?.let { target -> MessageDeleteDialog(
+            text = target.content, error = messageActionError, busy = messageActionBusy,
+            onDismiss = { if (!messageActionBusy) { messageDeleteTarget = null; messageActionError = null } },
+            onDelete = {
+                if (!targetStillCurrent(target)) messageActionError = "История диалога изменилась. Закройте это окно и выберите сообщение снова."
+                if (!messageActionBusy && !latestActive && targetStillCurrent(target)) {
+                    messageActionBusy = true; messageActionError = null
+                    scope.launch {
+                        try {
+                            if (!targetStillCurrent(target)) { messageActionError = "История диалога изменилась. Закройте это окно и выберите сообщение снова."; return@launch }
+                            if (onDeleteMessage(target.index)) messageDeleteTarget = null else messageActionError = "Не удалось удалить ход диалога."
+                        }
+                        catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+                        catch (_: Exception) { messageActionError = "Не удалось удалить ход диалога." }
+                        finally { messageActionBusy = false }
+                    }
+                }
+            },
+        ) }
         if (exportPreview != null) ExportPreview(exportPreview, exportFormat, onDismissExport, onSaveExport)
     }
 }
@@ -295,7 +485,7 @@ fun ChillerApp(
 @Composable
 private fun Sidebar(
     sessions: List<SessionInfo>, selected: String?, workspace: String?, connected: Boolean, enabled: Boolean,
-    onNew: () -> Unit, onSelect: (String) -> Unit, onChoose: () -> Unit, onSettings: () -> Unit, onTheme: () -> Unit, onRename: (SessionInfo) -> Unit, onExport: (String, String) -> Unit, connection: ConnectionState, width: Float,
+    onNew: () -> Unit, onSelect: (String) -> Unit, onChoose: () -> Unit, onSettings: () -> Unit, onTheme: () -> Unit, onRename: (SessionInfo) -> Unit, onDelete: (SessionInfo) -> Unit, onExport: (String, String) -> Unit, connection: ConnectionState, width: Float,
     running: Boolean, searchFocus: FocusRequester, titleBar: TitleBarSpec?, onClose: () -> Unit,
 ) {
     val c = LocalChillerPalette.current
@@ -340,7 +530,7 @@ private fun Sidebar(
             historySections(shown).forEach { section ->
                 item(key = "section-${section.title}") { Text(section.title, color = c.faint, fontSize = 11.sp, modifier = Modifier.padding(start = 10.dp, top = 12.dp, bottom = 4.dp)) }
                 items(section.sessions, key = { it.id }) { session ->
-                    SessionRow(session, session.id == selected, running && session.id == selected, enabled, { onSelect(session.id) }, { onRename(session) }, { onExport(session.id, it) })
+                    SessionRow(session, session.id == selected, running && session.id == selected, enabled, { onSelect(session.id) }, { onRename(session) }, { onDelete(session) }, !running && session.id != selected, { onExport(session.id, it) })
                 }
             }
         }
@@ -388,16 +578,18 @@ private fun SidebarSearch(query: String, onQuery: (String) -> Unit, focus: Focus
 }
 
 @Composable
-private fun SessionRow(session: SessionInfo, selected: Boolean, running: Boolean, enabled: Boolean, onSelect: () -> Unit, onRename: () -> Unit, onExport: (String) -> Unit) {
+private fun SessionRow(session: SessionInfo, selected: Boolean, running: Boolean, enabled: Boolean, onSelect: () -> Unit, onRename: () -> Unit, onDelete: () -> Unit, canDelete: Boolean, onExport: (String) -> Unit) {
     val c = LocalChillerPalette.current
     var menu by remember(session.id) { mutableStateOf(false) }
     var closedAt by remember { mutableStateOf(0L) }
+    var rowFocused by remember { mutableStateOf(false) }
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
     Row(
         Modifier.fillMaxWidth().height(34.dp).clip(RoundedCornerShape(7.dp))
             .background(when { selected -> c.selected; hovered && enabled -> c.hover; else -> androidx.compose.ui.graphics.Color.Transparent })
             .hoverable(interaction).pointerHoverIcon(PointerIcon.Hand)
+            .onFocusChanged { rowFocused = it.isFocused }
             .clickable(interactionSource = interaction, indication = null, enabled = enabled, role = Role.Button, onClick = onSelect)
             .padding(start = 10.dp, end = 2.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -408,7 +600,7 @@ private fun SessionRow(session: SessionInfo, selected: Boolean, running: Boolean
         Spacer(Modifier.width(9.dp))
         Text(session.title.ifBlank { "Новый диалог" }, color = c.text, fontSize = 12.sp, lineHeight = 18.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
         Box(Modifier.width(44.dp), contentAlignment = Alignment.CenterEnd) {
-            if (hovered || menu || selected) {
+            if (hovered || menu || selected || rowFocused) {
                 Box {
                     ChillerIconButton(Icons.Outlined.MoreHoriz, "Действия диалога", { if (System.currentTimeMillis() - closedAt > 200) menu = !menu }, Modifier.size(26.dp), enabled = enabled)
                     if (menu) ChillerPopover({ menu = false; closedAt = System.currentTimeMillis() }, 200.dp, below = true, alignEnd = true) {
@@ -416,6 +608,10 @@ private fun SessionRow(session: SessionInfo, selected: Boolean, running: Boolean
                         MenuRow("Переименовать", { menu = false; onRename() }, icon = Icons.Outlined.Edit)
                         MenuRow("Экспорт Markdown", { menu = false; onExport("markdown") }, icon = Icons.Outlined.Description)
                         MenuRow("Экспорт JSON", { menu = false; onExport("json") }, icon = Icons.Outlined.DataObject)
+                        if (canDelete) {
+                            MenuDivider()
+                            MenuRow("Удалить диалог…", { menu = false; onDelete() }, icon = Icons.Outlined.DeleteOutline)
+                        }
                         Spacer(Modifier.height(5.dp))
                     }
                 }
@@ -425,7 +621,7 @@ private fun SessionRow(session: SessionInfo, selected: Boolean, running: Boolean
 }
 
 @Composable
-private fun Toolbar(titleBar: TitleBarSpec?, leadingInset: Boolean, title: String?, workspace: String?, layout: WorkspaceLayout, active: Boolean, status: String, onLayout: (WorkspaceLayout) -> Unit, onSidebar: () -> Unit, onSettings: () -> Unit, canConfigure: Boolean, compact: Boolean, compactChanges: Boolean, onCompactChanges: () -> Unit) {
+private fun Toolbar(titleBar: TitleBarSpec?, leadingInset: Boolean, title: String?, workspace: String?, layout: WorkspaceLayout, active: Boolean, status: String, waitingForUser: Boolean, onLayout: (WorkspaceLayout) -> Unit, onSidebar: () -> Unit, onSettings: () -> Unit, canConfigure: Boolean, compact: Boolean, compactChanges: Boolean, onCompactChanges: () -> Unit) {
     val c = LocalChillerPalette.current
     // Empty toolbar space drags the window; controls on top keep their clicks.
     Box(Modifier.fillMaxWidth()) {
@@ -438,7 +634,7 @@ private fun Toolbar(titleBar: TitleBarSpec?, leadingInset: Boolean, title: Strin
             Text(" / ", color = c.faint, fontSize = 12.sp)
             Text(title?.take(44) ?: "Новый диалог", color = c.text, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
         }
-        if (active) { Text(statusLabel(status), color = c.muted, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 120.dp).padding(end = 12.dp)) }
+        if (active) { Text(if (waitingForUser) "Ждёт ответа" else statusLabel(status), color = c.muted, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 120.dp).padding(end = 12.dp)) }
         Row(Modifier.clip(RoundedCornerShape(7.dp)).background(c.sidebar).padding(2.dp), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
             ChillerControl("Focus", { onLayout(WorkspaceLayout.FOCUS) }, style = if (layout == WorkspaceLayout.FOCUS) ControlStyle.SELECTED else ControlStyle.QUIET)
             ChillerControl("Studio", { onLayout(WorkspaceLayout.STUDIO) }, style = if (layout == WorkspaceLayout.STUDIO) ControlStyle.SELECTED else ControlStyle.QUIET)
@@ -453,6 +649,7 @@ private fun Toolbar(titleBar: TitleBarSpec?, leadingInset: Boolean, title: Strin
     }
 }
 
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 private fun Composer(
     draft: String, onDraft: (String) -> Unit, mode: ExecutionMode, onMode: (ExecutionMode) -> Unit,
@@ -462,20 +659,98 @@ private fun Composer(
     catalog: ModelCatalogState, onRefreshModels: () -> Unit, onCancelCatalogRefresh: () -> Unit,
     allowProcesses: Boolean, onAllow: (Boolean) -> Unit,
     workspace: String?, onChooseWorkspace: () -> Unit, contextTokens: Int?, connectionDot: androidx.compose.ui.graphics.Color,
+    attachments: List<ComposerAttachment>, attachmentOwnerKey: String,
+    importing: Boolean,
+    onAppendAttachments: (String, List<ComposerAttachment>) -> Boolean,
+    onRemoveAttachment: (String, String) -> Unit,
+    onImportState: (String, Boolean) -> Boolean,
+    onImportTextAttachment: suspend (String, String) -> ComposerAttachment?, onImportFiles: suspend (String, List<String>) -> List<ComposerAttachment>,
+    onImportImageAttachment: suspend (String, ByteArray) -> ComposerAttachment?,
 ) {
     val c = LocalChillerPalette.current
     var focused by remember { mutableStateOf(false) }
     var modelMenu by remember { mutableStateOf(false) }
     var modelClosedAt by remember { mutableStateOf(0L) }
     var field by remember { mutableStateOf(TextFieldValue(draft)) }
+    var importError by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(draft) { if (field.text != draft) { field = TextFieldValue(draft, TextRange(draft.length)); onComposition(false) } }
     val density = LocalDensity.current
     var measuredFieldHeight by remember { mutableStateOf(26.dp) }
     val fieldMaxHeight = 144.dp
     val shape = RoundedCornerShape(16.dp)
+    val scope = rememberCoroutineScope()
+    val launchImport: (suspend () -> Unit) -> Unit = { operation ->
+        if (pending || !onImportState(attachmentOwnerKey, true)) importError = "Сообщение уже отправляется. Добавьте вложение после завершения отправки."
+        else {
+            scope.launch {
+                importError = null
+                try { operation() }
+                catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+                catch (_: Exception) { importError = "Не удалось добавить вложение. Проверьте файл и повторите попытку." }
+                finally { onImportState(attachmentOwnerKey, false) }
+            }
+        }
+    }
+    suspend fun appendImported(items: List<ComposerAttachment>) {
+        if (items.isEmpty()) {
+            importError = "Не удалось добавить вложение. Проверьте файл и повторите попытку."
+            return
+        }
+        if (!onAppendAttachments(attachmentOwnerKey, items)) importError = "Можно прикрепить не больше восьми файлов к одному диалогу."
+    }
+    val addFiles: () -> Unit = {
+        launchImport {
+            val paths = withContext(Dispatchers.IO) {
+                val dialog = java.awt.FileDialog(null as java.awt.Frame?, "Добавить файлы", java.awt.FileDialog.LOAD)
+                dialog.isMultipleMode = true
+                dialog.isVisible = true
+                dialog.files.map { it.absolutePath }
+            }
+            if (paths.isNotEmpty()) appendImported(onImportFiles(attachmentOwnerKey, paths))
+        }
+    }
+    val importTransferable: (Transferable) -> Unit = { transferable ->
+        launchImport {
+                when {
+                    transferable.isDataFlavorSupported(DataFlavor.javaFileListFlavor) -> {
+                        @Suppress("UNCHECKED_CAST")
+                        val paths = (transferable.getTransferData(DataFlavor.javaFileListFlavor) as List<File>).map { it.absolutePath }
+                        appendImported(onImportFiles(attachmentOwnerKey, paths))
+                    }
+                    transferable.isDataFlavorSupported(DataFlavor.imageFlavor) -> {
+                        val image = transferable.getTransferData(DataFlavor.imageFlavor) as? AwtImage
+                        val bytes = image?.let(::encodeClipboardImage) ?: error("Clipboard image cannot be encoded within the size limit")
+                        appendImported(listOf(onImportImageAttachment(attachmentOwnerKey, bytes) ?: error("Image import failed")))
+                    }
+                    transferable.isDataFlavorSupported(DataFlavor.stringFlavor) -> {
+                        val pasted = transferable.getTransferData(DataFlavor.stringFlavor) as? String ?: error("Clipboard does not contain text")
+                        if (pasted.toByteArray(Charsets.UTF_8).size > 5_120) {
+                            appendImported(listOf(onImportTextAttachment(attachmentOwnerKey, pasted) ?: error("Text import failed")))
+                        } else {
+                            val start = field.selection.min.coerceIn(0, field.text.length)
+                            val end = field.selection.max.coerceIn(start, field.text.length)
+                            val text = field.text.replaceRange(start, end, pasted)
+                            field = TextFieldValue(text, TextRange(start + pasted.length)); onDraft(text); onComposition(false)
+                        }
+                    }
+                    else -> error("Unsupported clipboard content")
+                }
+        }
+    }
+    val dropTarget = remember(attachmentOwnerKey, attachments) {
+        object : DragAndDropTarget {
+            override fun onDrop(event: DragAndDropEvent): Boolean {
+                val transferable = event.awtTransferable
+                if (!transferable.isDataFlavorSupported(DataFlavor.javaFileListFlavor) && !transferable.isDataFlavorSupported(DataFlavor.imageFlavor) && !transferable.isDataFlavorSupported(DataFlavor.stringFlavor)) return false
+                importTransferable(transferable)
+                return true
+            }
+        }
+    }
     val borderColor by animateColorAsState(if (focused) c.muted.copy(alpha = .55f) else c.border, tween(if (LocalChillerReducedMotion.current) 0 else 120))
     Column(
-        modifier.shadow(3.dp, shape, ambientColor = c.text.copy(alpha = .04f), spotColor = c.text.copy(alpha = .04f)).clip(shape).background(c.surface)
+        modifier.dragAndDropTarget(shouldStartDragAndDrop = { event -> event.awtTransferable.isDataFlavorSupported(DataFlavor.javaFileListFlavor) || event.awtTransferable.isDataFlavorSupported(DataFlavor.imageFlavor) || event.awtTransferable.isDataFlavorSupported(DataFlavor.stringFlavor) }, target = dropTarget)
+            .shadow(3.dp, shape, ambientColor = c.text.copy(alpha = .04f), spotColor = c.text.copy(alpha = .04f)).clip(shape).background(c.surface)
             .border(1.dp, borderColor, shape).padding(horizontal = 12.dp, vertical = 10.dp)
     ) {
         // @-mentions: project files listed once per folder, matched against the token under the cursor.
@@ -495,6 +770,11 @@ private fun Composer(
                 onTextLayout = { layout -> measuredFieldHeight = with(density) { layout.size.height.toDp() }.coerceIn(26.dp, fieldMaxHeight) },
                 modifier = Modifier.fillMaxWidth().height(measuredFieldHeight.coerceIn(26.dp, fieldMaxHeight)).onFocusChanged { focused = it.isFocused }
                     .onPreviewKeyEvent { event ->
+                        if (event.type == KeyEventType.KeyDown && event.key == Key.V && (event.isCtrlPressed || event.isMetaPressed)) {
+                            val clipboard = runCatching { java.awt.Toolkit.getDefaultToolkit().systemClipboard.getContents(null) }.getOrNull()
+                            if (clipboard != null) importTransferable(clipboard)
+                            return@onPreviewKeyEvent clipboard != null
+                        }
                         if (matches.isEmpty() || event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                         when (event.key) {
                             Key.DirectionDown -> { highlight = (highlight + 1) % matches.size; true }
@@ -511,11 +791,15 @@ private fun Composer(
             val text = field.text.replace(Regex("(?<=^|\\s)@" + Regex.escape(path) + "\\s?"), "")
             field = TextFieldValue(text, TextRange(text.length)); onDraft(text)
         }
+        if (attachments.isNotEmpty()) AttachmentChips(attachments, onRemove = { item -> onRemoveAttachment(attachmentOwnerKey, item.artifactId) })
+        if (importing) Row(Modifier.padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) { Pulse(c.accent); Spacer(Modifier.width(6.dp)); Text("Добавляю вложение…", color = c.faint, fontSize = 10.sp) }
+        importError?.let { Text(it, color = c.negative, fontSize = 11.sp, lineHeight = 15.sp, modifier = Modifier.padding(top = 4.dp)) }
+        if (attachments.any { it.mimeType.startsWith("image/") }) Text("Изображения прикреплены как файлы; модель получит метаданные, но не распознаёт их содержимое.", color = c.faint, fontSize = 10.sp, lineHeight = 14.sp, modifier = Modifier.padding(top = 4.dp))
         Box {
             if (matches.isNotEmpty() && focused) MentionPopover(matches, highlight.coerceIn(0, matches.lastIndex), ::insert) { dismissedAt = mention?.first ?: -1 }
         }
         Spacer(Modifier.height(4.dp))
-        ComposerToolbar(mode, onMode, model, running, pending, draft.isNotBlank(), modelMenu, { if (System.currentTimeMillis() - modelClosedAt > 200) modelMenu = !modelMenu }, allowProcesses, onAllow, onSend, onStop,
+        ComposerToolbar(mode, onMode, model, running, pending, importing, draft.isNotBlank() || attachments.isNotEmpty(), modelMenu, { if (System.currentTimeMillis() - modelClosedAt > 200) modelMenu = !modelMenu }, allowProcesses, onAllow, onSend, onStop, addFiles,
             connectionDot, contextTokens, catalog.models.firstOrNull { it.id == model }?.contextWindow, workspace, onChooseWorkspace) {
             ModelPickerPopover(
                 model = model, models = models, configured = configured, running = running, catalog = catalog, contextNote = contextNote,
@@ -525,6 +809,53 @@ private fun Composer(
             )
         }
     }
+}
+
+@Composable
+private fun AttachmentChips(items: List<ComposerAttachment>, onRemove: (ComposerAttachment) -> Unit) {
+    val c = LocalChillerPalette.current
+    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(top = 5.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        items.forEach { item ->
+            Row(Modifier.clip(RoundedCornerShape(7.dp)).background(c.sidebar).border(1.dp, c.border, RoundedCornerShape(7.dp)).padding(start = 8.dp, end = 3.dp, top = 3.dp, bottom = 3.dp), verticalAlignment = Alignment.CenterVertically) {
+                Icon(if (item.mimeType.startsWith("image/")) Icons.Outlined.Image else Icons.Outlined.InsertDriveFile, null, Modifier.size(13.dp), tint = c.accent)
+                Spacer(Modifier.width(5.dp))
+                Text("${item.name} · ${formatPresentedSize(item.sizeBytes)}", color = c.text, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                ChillerIconButton(Icons.Outlined.Close, "Убрать ${item.name}", { onRemove(item) }, Modifier.size(22.dp))
+            }
+        }
+    }
+}
+
+private fun encodeClipboardImage(image: AwtImage): ByteArray? = runCatching {
+    val width = image.getWidth(null); val height = image.getHeight(null)
+    require(width > 0 && height > 0 && width.toLong() * height <= 16_000_000L)
+    val buffered = BufferedImage(width, height, BufferedImage.TYPE_INT_RGB)
+    val graphics = buffered.createGraphics()
+    try { graphics.drawImage(image, 0, 0, null) } finally { graphics.dispose() }
+    ByteArrayOutputStream().use { output ->
+        check(ImageIO.write(buffered, "png", output))
+        output.toByteArray().also { require(it.size <= 4 * 1024 * 1024) }
+    }
+}.getOrNull()
+
+internal fun promptWithAttachments(text: String, attachments: List<ComposerAttachment>): String = buildString {
+    append(text.trim())
+    attachments.forEach { attachment ->
+        if (isNotEmpty()) append("\n\n")
+        append("Прикреплённый файл: ").append(attachment.name)
+            .append(" (только метаданные; содержимое изображения не передано модели).\n")
+            .append("Для чтения текстового файла используй read_artifact с artifact_id=").append(attachment.artifactId)
+    }
+}
+
+internal fun mergeComposerAttachments(current: List<ComposerAttachment>, additions: List<ComposerAttachment>, limit: Int = 8): List<ComposerAttachment>? {
+    val merged = (current + additions).distinctBy { it.artifactId }
+    return merged.takeIf { limit >= 0 && it.size <= limit }
+}
+
+internal fun nextPendingImportCount(current: Int, delta: Int): Int? {
+    val next = (current + delta).coerceAtLeast(0)
+    return next.takeIf { it > 0 }
 }
 
 @Composable
@@ -548,8 +879,9 @@ private fun MentionChips(paths: List<String>, onRemove: (String) -> Unit) {
 @Composable
 private fun ComposerToolbar(
     mode: ExecutionMode, onMode: (ExecutionMode) -> Unit, model: String, running: Boolean,
-    pending: Boolean, draftNotEmpty: Boolean, modelMenuOpen: Boolean, onToggleModel: () -> Unit,
+    pending: Boolean, importing: Boolean, draftNotEmpty: Boolean, modelMenuOpen: Boolean, onToggleModel: () -> Unit,
     allowProcesses: Boolean, onAllow: (Boolean) -> Unit, onSend: () -> Unit, onStop: () -> Unit,
+    onAttach: () -> Unit,
     connectionDot: androidx.compose.ui.graphics.Color, contextTokens: Int?, contextWindow: Int?,
     workspace: String?, onChooseWorkspace: () -> Unit,
     modelPopover: @Composable () -> Unit,
@@ -591,9 +923,11 @@ private fun ComposerToolbar(
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     FolderToolbarChip(workspace, onChooseWorkspace, enabled = !running)
+                    Spacer(Modifier.width(6.dp))
+                    ChillerIconButton(Icons.Outlined.AttachFile, "Добавить файлы", onAttach, enabled = !running)
                     Spacer(Modifier.width(8.dp))
                     contextTokens?.let { ContextMeter(it, contextWindow); Spacer(Modifier.width(10.dp)) }
-                    ChillerIconButton(if (running && !pending) Icons.Outlined.Stop else Icons.Outlined.ArrowUpward, if (pending) "Сохранение сообщения" else if (running) "Остановить" else "Отправить", if (running && !pending) onStop else onSend, enabled = !pending && (running || draftNotEmpty), primary = true)
+                    ChillerIconButton(if (running && !pending) Icons.Outlined.Stop else Icons.Outlined.ArrowUpward, if (pending) "Сохранение сообщения" else if (running) "Остановить" else if (importing) "Добавление вложения" else "Отправить", if (running && !pending) onStop else onSend, enabled = !pending && (running || (!importing && draftNotEmpty)), primary = true)
                 }
             },
             modifier = Modifier.fillMaxWidth()
@@ -641,7 +975,7 @@ private fun FolderToolbarChip(workspace: String?, onChoose: () -> Unit, enabled:
 }
 
 @Composable
-private fun Conversation(state: RunState, reduced: Boolean, onAnswer: (String) -> Unit, onUndo: (String) -> Unit, canUndo: Boolean, onRestoreDraft: (String) -> Unit, modifier: Modifier) {
+private fun Conversation(state: RunState, reduced: Boolean, onAnswer: (String) -> Unit, onUndo: (String) -> Unit, canUndo: Boolean, onRestoreDraft: (String) -> Unit, onPreviewFile: suspend (String) -> ByteArray?, onRevealFile: (String) -> Unit, onEdit: (Int, String) -> Unit, onDelete: (Int, String) -> Unit, onRecoverInterrupted: () -> Unit, modifier: Modifier) {
     val c = LocalChillerPalette.current
     val scroll = rememberLazyListState()
     val scope = rememberCoroutineScope()
@@ -677,9 +1011,11 @@ private fun Conversation(state: RunState, reduced: Boolean, onAnswer: (String) -
                 item(key = key) {
                     val previous = projection.entries.getOrNull(position - 1)?.message?.role
                     Column(entryModifier(key).widthIn(max = 760.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        if (!entry.message.content.isNullOrBlank()) Message(entry.message, showHeader = !(entry.message.role == "assistant" && previous == "assistant"),
-                            onEdit = if (entry.message.role == "user" && canUndo) onRestoreDraft else null)
-                        ToolGroup(entry.activities, reduced, onUndo, canUndo)
+                        if (!entry.message.content.isNullOrBlank() || entry.message.attachments.isNotEmpty()) Message(entry.message, showHeader = !(entry.message.role == "assistant" && previous == "assistant"),
+                            onPreviewFile = onPreviewFile,
+                            onEdit = if (canUndo) ({ _ -> onEdit(entry.index, entry.message.content.orEmpty()) }) else null,
+                            onDelete = if (canUndo) ({ _ -> onDelete(entry.index, entry.message.content.orEmpty()) }) else null)
+                        ToolGroup(entry.activities, reduced, onUndo, canUndo, onPreviewFile, onRevealFile)
                     }
                 }
             }
@@ -693,7 +1029,7 @@ private fun Conversation(state: RunState, reduced: Boolean, onAnswer: (String) -
             if (projection.unlinked.isNotEmpty()) item(key = "unlinked-activities") {
                 Column(entryModifier("unlinked-activities"), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("Действия сессии", color = c.muted, fontSize = 12.sp)
-                    projection.unlinked.forEach { ToolRow(it, reduced, onUndo, canUndo) }
+                    projection.unlinked.forEach { ToolRow(it, reduced, onUndo, canUndo, onPreviewFile = onPreviewFile, onRevealFile = onRevealFile) }
                 }
             }
             if (state.reasoning.isNotBlank()) item(key = "reasoning") {
@@ -706,19 +1042,15 @@ private fun Conversation(state: RunState, reduced: Boolean, onAnswer: (String) -
                 }
             }
             if (state.status in setOf("preparing", "streaming", "executing")) item(key = "run-status") {
-                val running = state.activities.lastOrNull { it.status == "running" }
-                val label = when (state.status) {
-                    "streaming" -> if (state.streamingText.isBlank()) "${state.activeModelId?.let(::modelLabel) ?: "Ассистент"} думает…" else "${state.activeModelId?.let(::modelLabel) ?: "Ассистент"} пишет…"
-                    "executing" -> running?.let { "${toolLabel(it.name)}${if (it.target.isNotBlank()) " · ${it.target}" else ""}" } ?: "Выполняет действие…"
-                    else -> "Подготовка…"
-                }
+                val label = runProgressLabel(state).orEmpty()
                 Row(entryModifier("run-status").padding(start = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Pulse(c.accent); Spacer(Modifier.width(10.dp))
-                    ShimmerText(label, reduced)
+                    if (state.question == null) Pulse(c.accent) else Icon(Icons.Outlined.Chat, null, Modifier.size(15.dp), tint = c.accent)
+                    Spacer(Modifier.width(10.dp))
+                    if (state.question == null) ShimmerText(label, reduced) else Text(label, color = c.accent, fontSize = 12.sp)
                 }
             }
-            if (state.status == "cancelled") item(key = "run-cancelled") {
-                Text("Задача остановлена", color = c.muted, fontSize = 12.sp, modifier = entryModifier("run-cancelled").padding(start = 6.dp))
+            if (state.status in setOf("completed", "cancelled", "interrupted")) item(key = "run-outcome") {
+                Text(runProgressLabel(state).orEmpty(), color = c.muted, fontSize = 12.sp, modifier = entryModifier("run-outcome").padding(start = 6.dp))
             }
             if (state.status in setOf("completed", "failed", "cancelled") && state.modelRounds > 0) item(key = "run-summary") { Box(entryModifier("run-summary")) { RunSummaryLine(state) } }
             state.question?.let { q -> item(key = "question-${q.id}") { Box(entryModifier("question-${q.id}")) { Question(q, onAnswer, state.status != "interrupted") } } }
@@ -728,6 +1060,12 @@ private fun Conversation(state: RunState, reduced: Boolean, onAnswer: (String) -
             }
                 state.messages.lastOrNull { it.role == "user" }?.content?.let { text -> ChillerControl("Вернуть текст в поле", { onRestoreDraft(text) }) }
             } } }
+            if (!canUndo && (state.status == "interrupted" || state.activities.any { it.status == "interrupted" })) item(key = "recover-interrupted") {
+                Column(entryModifier("recover-interrupted").padding(start = 34.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                    Text("Неизвестные действия не повторяются; агент сначала проверит состояние.", color = c.muted, fontSize = 11.sp, lineHeight = 16.sp)
+                    ChillerControl("Проверить и продолжить", onRecoverInterrupted, icon = Icons.Outlined.Refresh, style = ControlStyle.OUTLINE)
+                }
+            }
             item(key = "tail") { Spacer(Modifier.height(2.dp)) }
         }
         AnimatedVisibility(!follow && scroll.canScrollForward, Modifier.align(Alignment.BottomCenter).padding(bottom = 10.dp),
@@ -761,7 +1099,7 @@ private fun Hint(text: String, content: @Composable () -> Unit) {
 }
 
 @Composable
-private fun Message(message: AgentMessage, showHeader: Boolean = true, streaming: Boolean = false, onEdit: ((String) -> Unit)? = null) {
+private fun Message(message: AgentMessage, showHeader: Boolean = true, streaming: Boolean = false, onEdit: ((String) -> Unit)? = null, onDelete: ((String) -> Unit)? = null, onPreviewFile: suspend (String) -> ByteArray? = { null }) {
     val content = message.content.orEmpty()
     val c = LocalChillerPalette.current
     if (message.role == "user") {
@@ -769,18 +1107,22 @@ private fun Message(message: AgentMessage, showHeader: Boolean = true, streaming
         val clipboard = LocalClipboardManager.current
         val interaction = remember { MutableInteractionSource() }
         val hovered by interaction.collectIsHoveredAsState()
-        Row(Modifier.fillMaxWidth().padding(start = 64.dp).hoverable(interaction), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.Bottom) {
-            // Edit puts the text back into the composer; nothing is resent until the user sends it.
-            androidx.compose.animation.AnimatedVisibility(hovered, enter = fadeIn(tween(120)), exit = fadeOut(tween(120))) {
+        var hasFocus by remember { mutableStateOf(false) }
+        Row(Modifier.fillMaxWidth().padding(start = 64.dp).hoverable(interaction).onFocusChanged { hasFocus = it.hasFocus }.focusable(), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.Bottom) {
+            androidx.compose.animation.AnimatedVisibility(hovered || hasFocus, enter = fadeIn(tween(120)), exit = fadeOut(tween(120))) {
                 Row(Modifier.padding(end = 6.dp)) {
-                    onEdit?.let { ChillerIconButton(Icons.Outlined.Edit, "Изменить и отправить снова", { it(content) }, Modifier.size(26.dp)) }
+                    onEdit?.let { ChillerIconButton(Icons.Outlined.Edit, "Изменить сообщение", { it(content) }, Modifier.size(26.dp)) }
+                    onDelete?.let { ChillerIconButton(Icons.Outlined.DeleteOutline, "Удалить ход диалога", { it(content) }, Modifier.size(26.dp)) }
                     ChillerIconButton(Icons.Outlined.ContentCopy, "Копировать", { clipboard.setText(AnnotatedString(content)) }, Modifier.size(26.dp))
                 }
             }
-            SelectionContainer {
+            Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+              if (content.isNotBlank()) SelectionContainer {
                 Text(content.trim(), color = c.text, fontSize = 14.sp, lineHeight = 22.sp, letterSpacing = 0.sp,
                     modifier = Modifier.widthIn(max = 560.dp).clip(RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp, bottomStart = 18.dp, bottomEnd = 6.dp))
                         .background(c.selected.copy(alpha = .75f)).padding(horizontal = 15.dp, vertical = 10.dp))
+              }
+              message.attachments.forEach { item -> FilePresentationCard(FilePresentation("attachment:${item.artifactId}", item.name, item.mimeType, item.sizeBytes), onPreviewFile, {}, showReveal = false) }
             }
         }
         return
@@ -790,7 +1132,8 @@ private fun Message(message: AgentMessage, showHeader: Boolean = true, streaming
     LaunchedEffect(copied) { if (copied) { kotlinx.coroutines.delay(1600); copied = false } }
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
-    Row(Modifier.fillMaxWidth().hoverable(interaction), horizontalArrangement = Arrangement.spacedBy(13.dp)) {
+    var hasFocus by remember { mutableStateOf(false) }
+    Row(Modifier.fillMaxWidth().hoverable(interaction).onFocusChanged { hasFocus = it.hasFocus }.focusable(), horizontalArrangement = Arrangement.spacedBy(13.dp)) {
         Box(Modifier.width(21.dp)) { if (showHeader) ChillerMark(Modifier.padding(top = 1.dp).size(21.dp), c.accent) }
         Column(Modifier.weight(1f)) {
             if (showHeader) Row(Modifier.fillMaxWidth().height(24.dp).padding(bottom = 2.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -813,8 +1156,12 @@ private fun Message(message: AgentMessage, showHeader: Boolean = true, streaming
                 }
                 // Copy sits beside the text and shows on hover, so it adds no height to the message.
                 Box(Modifier.width(32.dp).padding(start = 8.dp), contentAlignment = Alignment.TopEnd) {
-                    if (!streaming) androidx.compose.animation.AnimatedVisibility(hovered || copied, enter = fadeIn(tween(120)), exit = fadeOut(tween(120))) {
-                        ChillerIconButton(if (copied) Icons.Outlined.Check else Icons.Outlined.ContentCopy, if (copied) "Скопировано" else "Копировать ответ", { clipboard.setText(AnnotatedString(content)); copied = true }, Modifier.size(24.dp))
+                    if (!streaming) androidx.compose.animation.AnimatedVisibility(hovered || hasFocus || copied, enter = fadeIn(tween(120)), exit = fadeOut(tween(120))) {
+                        Row {
+                            ChillerIconButton(Icons.Outlined.DeleteOutline, "Удалить ход диалога", { onDelete?.invoke(content) }, Modifier.size(24.dp), enabled = onDelete != null)
+                            ChillerIconButton(Icons.Outlined.Edit, "Изменить сообщение", { onEdit?.invoke(content) }, Modifier.size(24.dp), enabled = onEdit != null)
+                            ChillerIconButton(if (copied) Icons.Outlined.Check else Icons.Outlined.ContentCopy, if (copied) "Скопировано" else "Копировать ответ", { clipboard.setText(AnnotatedString(content)); copied = true }, Modifier.size(24.dp))
+                        }
                     }
                 }
             }
@@ -888,6 +1235,90 @@ private fun RenameDialog(session: SessionInfo, onDismiss: () -> Unit, onSave: (S
 }
 
 @Composable
+private fun SessionDeleteDialog(
+    session: SessionInfo,
+    preview: String?,
+    loading: Boolean,
+    previewError: String?,
+    deleting: Boolean,
+    deleteError: String?,
+    onDismiss: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    val c = LocalChillerPalette.current
+    Dialog(
+        onDismissRequest = { if (!deleting) onDismiss() },
+        properties = DialogProperties(dismissOnBackPress = !deleting, dismissOnClickOutside = !deleting),
+    ) {
+        Column(
+            Modifier.widthIn(min = 380.dp, max = 540.dp).clip(RoundedCornerShape(13.dp)).background(c.surface)
+                .border(1.dp, c.border, RoundedCornerShape(13.dp)).padding(22.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            Text("Удалить диалог?", color = c.text, fontSize = 18.sp, fontWeight = FontWeight.Medium)
+            Text(session.title.ifBlank { "Новый диалог" }, color = c.muted, fontSize = 13.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            when {
+                loading -> Text("Загружаю предварительный просмотр…", color = c.muted, fontSize = 12.sp, lineHeight = 18.sp)
+                preview != null -> SelectionContainer {
+                    Text(preview, color = c.text, fontSize = 12.sp, lineHeight = 19.sp,
+                        modifier = Modifier.fillMaxWidth().heightIn(max = 240.dp).verticalScroll(rememberScrollState()).background(c.sidebar, RoundedCornerShape(8.dp)).padding(12.dp))
+                }
+                else -> Text(previewError ?: "Предварительный просмотр недоступен.", color = c.negative, fontSize = 12.sp, lineHeight = 18.sp)
+            }
+            if (previewError != null && preview != null) Text(previewError, color = c.negative, fontSize = 12.sp, lineHeight = 18.sp)
+            if (deleteError != null) Text(deleteError, color = c.negative, fontSize = 12.sp, lineHeight = 18.sp)
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
+                ChillerControl("Отмена", onDismiss, enabled = !deleting)
+                if (preview != null) {
+                    Spacer(Modifier.width(8.dp))
+                    ChillerControl("Удалить диалог", onDelete, icon = Icons.Outlined.DeleteOutline, style = ControlStyle.PRIMARY, enabled = !loading && !deleting)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MessageEditDialog(
+    text: String, error: String?, busy: Boolean, onText: (String) -> Unit, onDismiss: () -> Unit, onSubmit: () -> Unit,
+) {
+    val c = LocalChillerPalette.current
+    Dialog(onDismissRequest = { if (!busy) onDismiss() }, properties = DialogProperties(dismissOnBackPress = !busy, dismissOnClickOutside = !busy)) {
+        Column(Modifier.widthIn(min = 360.dp, max = 560.dp).clip(RoundedCornerShape(13.dp)).background(c.surface).border(1.dp, c.border, RoundedCornerShape(13.dp)).padding(22.dp), verticalArrangement = Arrangement.spacedBy(13.dp)) {
+            Text("Изменить сообщение", color = c.text, fontSize = 18.sp, fontWeight = FontWeight.Medium)
+            Text("Последующие ответы, инструменты и сообщения будут удалены из истории. Изменения файлов останутся на диске. Сохранение не запускает агента.", color = c.muted, fontSize = 12.sp, lineHeight = 18.sp)
+            Text("Текст сообщения", color = c.muted, fontSize = 12.sp)
+            BasicTextField(text, onText, textStyle = TextStyle(color = c.text, fontSize = 13.sp, lineHeight = 20.sp), cursorBrush = SolidColor(c.text),
+                modifier = Modifier.fillMaxWidth().heightIn(min = 120.dp, max = 300.dp).clip(RoundedCornerShape(7.dp)).background(c.canvas).border(1.dp, c.border, RoundedCornerShape(7.dp)).padding(11.dp).verticalScroll(rememberScrollState()))
+            error?.let { Text(it, color = c.negative, fontSize = 12.sp, lineHeight = 18.sp) }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                ChillerControl("Отмена", onDismiss, enabled = !busy)
+                Spacer(Modifier.width(8.dp))
+                ChillerControl("Сохранить", onSubmit, icon = Icons.Outlined.Save, style = ControlStyle.PRIMARY, enabled = !busy && text.isNotBlank())
+            }
+        }
+    }
+}
+
+@Composable
+private fun MessageDeleteDialog(text: String, error: String?, busy: Boolean, onDismiss: () -> Unit, onDelete: () -> Unit) {
+    val c = LocalChillerPalette.current
+    Dialog(onDismissRequest = { if (!busy) onDismiss() }, properties = DialogProperties(dismissOnBackPress = !busy, dismissOnClickOutside = !busy)) {
+        Column(Modifier.widthIn(min = 340.dp, max = 500.dp).clip(RoundedCornerShape(13.dp)).background(c.surface).border(1.dp, c.border, RoundedCornerShape(13.dp)).padding(22.dp), verticalArrangement = Arrangement.spacedBy(13.dp)) {
+            Text("Удалить ход диалога?", color = c.text, fontSize = 18.sp, fontWeight = FontWeight.Medium)
+            if (text.isNotBlank()) Text(text.take(400), color = c.muted, fontSize = 12.sp, lineHeight = 18.sp, maxLines = 5, overflow = TextOverflow.Ellipsis)
+            Text("Это сообщение и связанные ответы и действия будут удалены из истории. Изменения, уже внесённые в файлы, останутся на диске.", color = c.muted, fontSize = 12.sp, lineHeight = 18.sp)
+            error?.let { Text(it, color = c.negative, fontSize = 12.sp, lineHeight = 18.sp) }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                ChillerControl("Отмена", onDismiss, enabled = !busy)
+                Spacer(Modifier.width(8.dp))
+                ChillerControl("Удалить ход", onDelete, icon = Icons.Outlined.DeleteOutline, style = ControlStyle.PRIMARY, enabled = !busy)
+            }
+        }
+    }
+}
+
+@Composable
 private fun ExportPreview(content: String, format: String, onDismiss: () -> Unit, onSave: () -> Unit) {
     val c = LocalChillerPalette.current
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
@@ -941,6 +1372,8 @@ internal fun prettyOutput(output: String): String = runCatching {
     (data as? JsonObject)?.get("output")?.jsonPrimitive?.content ?: Json { prettyPrint = true }.encodeToString(JsonElement.serializer(), data ?: JsonPrimitive(output))
 }.getOrDefault(output)
 internal fun toolLabel(name: String) = when (name) {
+    "web_search" -> "Поиск в интернете"; "web_fetch" -> "Веб-страница"; "create_directory" -> "Папка"; "show_file" -> "Файл"; "capture_window" -> "Снимок окна"; "list_capture_targets" -> "Окно для снимка"
+    "git_status" -> "Состояние Git"; "git_diff" -> "Изменения Git"; "git_log" -> "История Git"; "git_show" -> "Файл из Git"; "find_symbols" -> "Объявления"; "read_symbol" -> "Функция"; "read_diagnostics" -> "Диагностика"
     "read_file" -> "Чтение"; "list_files" -> "Файлы"; "search_text" -> "Поиск"; "edit_file" -> "Правка"; "replace_text" -> "Замена"; "update_plan" -> "План"; "spawn_agent" -> "Помощник"; "list_agents" -> "Помощники"; "wait_agents" -> "Ожидание"; "agent_result" -> "Отчёт"; "message_agent" -> "Сообщение"; "cancel_agent" -> "Стоп"; "create_file" -> "Создание"
     "move_file" -> "Перемещение"; "delete_file" -> "Удаление"; "run_process" -> "Команда"; "read_process" -> "Вывод"; "stop_process" -> "Остановка"
     "read_artifact" -> "Результат"; "ask_user" -> "Вопрос"; "undo" -> "Откат"; else -> name

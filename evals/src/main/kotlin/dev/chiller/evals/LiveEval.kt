@@ -1,5 +1,6 @@
 package dev.chiller.evals
 
+import dev.chiller.agent.RunBudgetProvider
 import dev.chiller.agent.AgentCoordinator
 import dev.chiller.agent.RunTraceSink
 import dev.chiller.agent.SubagentSupervisor
@@ -12,6 +13,7 @@ import dev.chiller.runtime.LocalProcessService
 import dev.chiller.sessions.JsonlEventStore
 import dev.chiller.sessions.LocalArtifactStore
 import dev.chiller.sessions.TraceFile
+import dev.chiller.tools.LocalReadOnlyCodeService
 import dev.chiller.tools.BuiltinTools
 import dev.chiller.workspace.LocalWorkspace
 import dev.chiller.workspace.ProjectInstructions
@@ -41,7 +43,19 @@ data class EvalResult(
 )
 
 @Serializable
-data class EvalReport(val model: String, val endpoint: String, val startedAt: String, val maxRounds: Int, val maxOutputTokens: Int, val results: List<EvalResult>)
+data class EvalSummary(
+    val task: String,
+    val attempts: Int,
+    val passed: Int,
+    val passRate: Double,
+    val durationMs: Long,
+    val promptTokens: Long?,
+    val completionTokens: Long?,
+    val cachedPromptTokens: Long?,
+)
+
+@Serializable
+data class EvalReport(val model: String, val endpoint: String, val startedAt: String, val maxRounds: Int, val maxOutputTokens: Int, val repeats: Int, val results: List<EvalResult>, val summaries: List<EvalSummary>)
 
 /**
  * Opt-in live evaluation of the agent on [EVAL_TASKS]. Never part of `check`.
@@ -93,11 +107,23 @@ fun main() = runBlocking {
                 result.rounds, result.toolCalls, result.failedToolCalls, result.durationMs / 1000.0, result.verdict.take(90)))
         }
     } finally { http.close() }
-    val report = EvalReport(model, baseUrl, stamp, maxRounds, maxOutput, results)
+    val summaries = results.groupBy { it.task }.map { (task, attempts) ->
+        EvalSummary(
+            task = task,
+            attempts = attempts.size,
+            passed = attempts.count { it.passed },
+            passRate = attempts.count { it.passed }.toDouble() / attempts.size,
+            durationMs = attempts.sumOf { it.durationMs },
+            promptTokens = attempts.takeIf { rows -> rows.all { it.promptTokens != null } }?.sumOf { it.promptTokens!! },
+            completionTokens = attempts.takeIf { rows -> rows.all { it.completionTokens != null } }?.sumOf { it.completionTokens!! },
+            cachedPromptTokens = attempts.takeIf { rows -> rows.all { it.cachedPromptTokens != null } }?.sumOf { it.cachedPromptTokens!! },
+        )
+    }
+    val report = EvalReport(model, baseUrl, stamp, maxRounds, maxOutput, repeats, results, summaries)
     Files.writeString(outDir.resolve("report.json"), json.encodeToString(EvalReport.serializer(), report))
     Files.writeString(outDir.resolve("report.md"), renderMarkdown(report))
     val passed = results.count { it.passed }
-    println("PASSED $passed/${results.size} · report: ${outDir.resolve("report.md")}")
+    println("PASSED $passed/${results.size} (${if (results.isEmpty()) 0 else passed * 100 / results.size}%) · report: ${outDir.resolve("report.md")}")
 }
 
 private suspend fun runTask(task: EvalTask, attempt: Int, provider: ChatCompletionsProvider, model: String, thinking: Boolean, maxRounds: Int, maxOutput: Int, outDir: Path): EvalResult {
@@ -110,13 +136,14 @@ private suspend fun runTask(task: EvalTask, attempt: Int, provider: ChatCompleti
     val processes = LocalProcessService(project)
     val builtin = BuiltinTools(LocalWorkspace(project, store, artifacts, session), processes, artifacts, object : InteractionBroker {
         override suspend fun ask(question: UserQuestion) = "No answer is available in an unattended evaluation. Make a reasonable assumption and state it."
-    })
+    }, code = LocalReadOnlyCodeService(project.toString()))
+    val budget = RunBudgetProvider(provider, maxRequests = 48, maxOutputTokens = 32768)
     val traceFile = TraceFile(outDir.resolve("traces/$session.jsonl"))
     val started = System.nanoTime()
     var failure: String? = null
     return kotlinx.coroutines.coroutineScope {
-        val supervisor = SubagentSupervisor(provider, builtin, store, session, model, this)
-        val engine = AgentCoordinator(provider, SubagentTools(builtin, supervisor), store, processes, session, model, thinking, maxRounds = maxRounds, maxOutputTokens = maxOutput,
+        val supervisor = SubagentSupervisor(budget, builtin, store, session, model, this)
+        val engine = AgentCoordinator(budget, SubagentTools(builtin, supervisor), store, processes, session, model, thinking, maxRounds = maxRounds, maxOutputTokens = maxOutput,
             projectInstructions = ProjectInstructions.load(project)?.text, traces = RunTraceSink { traceFile.append(it) }, subagents = supervisor, scope = this)
         try {
             withTimeout(5 * 60_000L) { engine.send(task.prompt, task.mode, task.allowProcesses).join() }
@@ -145,7 +172,7 @@ internal fun renderMarkdown(report: EvalReport): String = buildString {
     val passed = results.count { it.passed }
     appendLine("# Chiller eval · ${report.model}")
     appendLine()
-    appendLine("Endpoint `${report.endpoint}` · started ${report.startedAt} · maxRounds ${report.maxRounds} · maxOutput ${report.maxOutputTokens}")
+    appendLine("Endpoint `${report.endpoint}` · started ${report.startedAt} · repeats ${report.repeats} · maxRounds ${report.maxRounds} · maxOutput ${report.maxOutputTokens}")
     appendLine()
     appendLine("**Passed ${passed}/${results.size}** · rounds ${results.sumOf { it.rounds }} · tool calls ${results.sumOf { it.toolCalls }} (failed ${results.sumOf { it.failedToolCalls }}) · " +
         "time ${"%.1f".format(results.sumOf { it.durationMs } / 1000.0)} s · prompt ${results.sumOf { it.promptTokens ?: 0 }} · completion ${results.sumOf { it.completionTokens ?: 0 }} · cached ${results.sumOf { it.cachedPromptTokens ?: 0 }} tokens")
@@ -154,6 +181,14 @@ internal fun renderMarkdown(report: EvalReport): String = buildString {
     appendLine("|---|---|---|---|---|---|---|---|---|")
     results.forEach { r ->
         appendLine("| ${r.task} | ${r.attempt} | ${if (r.passed) "PASS" else "FAIL"} | ${r.rounds} | ${r.toolCalls} (${r.failedToolCalls}) | ${if (r.subagents > 0) "${r.subagentsCompleted}/${r.subagents}" else "—"} | ${"%.1f".format(r.durationMs / 1000.0)} | ${r.promptTokens ?: "—"} / ${r.completionTokens ?: "—"} | ${r.verdict.replace("|", "\\|").take(120)} |")
+    }
+    appendLine()
+    appendLine("## Per-task aggregate")
+    appendLine()
+    appendLine("| Task | Passed | Rate | Total time, s | Prompt / completion / cached tokens |")
+    appendLine("|---|---:|---:|---:|---:|")
+    report.summaries.forEach { summary ->
+        appendLine("| ${summary.task} | ${summary.passed}/${summary.attempts} | ${"%.0f".format(summary.passRate * 100)}% | ${"%.1f".format(summary.durationMs / 1000.0)} | ${summary.promptTokens ?: "—"} / ${summary.completionTokens ?: "—"} / ${summary.cachedPromptTokens ?: "—"} |")
     }
     val errors = results.flatMap { it.toolErrors.entries }.groupBy({ it.key }, { it.value }).mapValues { it.value.sum() }
     if (errors.isNotEmpty()) {

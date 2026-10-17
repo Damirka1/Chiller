@@ -1,7 +1,7 @@
 plugins { id("org.jetbrains.compose"); id("org.jetbrains.kotlin.plugin.compose") }
 dependencies {
-    // JNA 5.6.0 (Apache-2.0/LGPL-2.1 dual license): macOS Security.framework credential storage.
-    implementation("net.java.dev.jna:jna:5.6.0")
+    // JNA 5.18.1 (Apache-2.0/LGPL-2.1 dual license): macOS Security.framework credential storage.
+    implementation("net.java.dev.jna:jna:5.18.1")
     implementation("io.ktor:ktor-client-core:3.4.1")
     implementation("io.ktor:ktor-client-cio:3.4.1")
     implementation(project(":contracts"))
@@ -28,6 +28,9 @@ compose.desktop {
             packageName = if (preview) "ChillerPreview" else "Chiller"
             macOS.bundleID = if (preview) "dev.chiller.preview" else "dev.chiller.app"
             packageVersion = project.version.toString()
+            macOS.iconFile.set(project.file("icons/Chiller.icns"))
+            windows.iconFile.set(project.file("icons/Chiller.ico"))
+            linux.iconFile.set(project.file("src/main/resources/chiller-icon.png"))
             targetFormats(org.jetbrains.compose.desktop.application.dsl.TargetFormat.Dmg, org.jetbrains.compose.desktop.application.dsl.TargetFormat.Msi)
             windows {
                 menuGroup = "Chiller"
@@ -59,3 +62,13 @@ val writeVersion by tasks.registering {
 }
 sourceSets.named("main") { resources.srcDir(versionResources) }
 tasks.named("processResources") { dependsOn(writeVersion) }
+
+// Explicit native check, isolated from check/test and configured provider credentials.
+tasks.register<JavaExec>("keychainSmoke") {
+    group = "verification"
+    description = "Opt-in macOS Keychain create/reopen/update/delete with one disposable synthetic credential."
+    dependsOn(tasks.named("testClasses"))
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass.set("dev.chiller.app.di.KeychainSmokeKt")
+    jvmArgs("--enable-native-access=ALL-UNNAMED")
+}

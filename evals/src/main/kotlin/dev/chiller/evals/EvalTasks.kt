@@ -4,6 +4,8 @@ import dev.chiller.contracts.ExecutionMode
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.ExecutionException
 
 /** Independent verdict on a task; the model's own claim is never evidence. */
 data class Verdict(val passed: Boolean, val detail: String)
@@ -19,10 +21,12 @@ class EvalTask(
     val files: Map<String, String>,
     val mode: ExecutionMode = ExecutionMode.WORKSPACE_EDIT,
     val allowProcesses: Boolean = true,
-    val check: (project: Path, finalAnswer: String) -> Verdict,
+    check: (project: Path, finalAnswer: String) -> Verdict,
     /** Applies a correct solution to the project and returns a correct final answer. */
     val reference: (project: Path) -> String,
 ) {
+    val check: (Path, String) -> Verdict = protectOracle(files, check)
+
     fun materialize(project: Path) {
         files.forEach { (path, content) ->
             val target = project.resolve(path)
@@ -32,11 +36,54 @@ class EvalTask(
     }
 }
 
+/** Model-visible test files are examples, but changing them must never make the verdict pass. */
+private fun oracleFiles(files: Map<String, String>) = files.filterKeys { path ->
+    val name = path.substringAfterLast('/')
+    name == "checks.py" || (name.startsWith("test_") && name.endsWith(".py"))
+}
+
+private fun protectOracle(files: Map<String, String>, oracle: (Path, String) -> Verdict): (Path, String) -> Verdict = { project, answer ->
+    val changed = oracleFiles(files).filter { (path, content) ->
+        val file = project.resolve(path)
+        !Files.isRegularFile(file, java.nio.file.LinkOption.NOFOLLOW_LINKS) ||
+            !Files.readAllBytes(file).contentEquals(content.toByteArray(Charsets.UTF_8))
+    }.keys
+    if (changed.isNotEmpty()) Verdict(false, "Verification files changed: ${changed.joinToString()}")
+    else oracle(project, answer)
+}
+
 internal fun python(project: Path, vararg args: String): Verdict {
-    val process = ProcessBuilder(listOf("python3") + args).directory(project.toFile()).redirectErrorStream(true).start()
+    // Fresh imports must not accept a stale same-size/same-second .pyc left by a previous
+    // failing check or by the model. -B disables writes; a unique prefix also avoids reads.
+    val cache = Path.of(System.getProperty("java.io.tmpdir"), "chiller-check-${java.util.UUID.randomUUID()}")
+    val process = ProcessBuilder(listOf("python3", "-B", "-X", "pycache_prefix=$cache") + args).directory(project.toFile()).redirectErrorStream(true).start()
+    val captured = StringBuilder()
+    val drain = CompletableFuture.runAsync {
+        process.inputStream.bufferedReader().use { reader ->
+            val buffer = CharArray(2048)
+            while (true) {
+                val count = reader.read(buffer)
+                if (count < 0) break
+                synchronized(captured) {
+                    val remaining = 400 - captured.length
+                    if (remaining > 0) captured.append(buffer, 0, minOf(count, remaining))
+                }
+            }
+        }
+    }
     val finished = process.waitFor(30, TimeUnit.SECONDS)
-    if (!finished) { process.destroyForcibly(); return Verdict(false, "python3 ${args.joinToString(" ")} timed out") }
-    val output = process.inputStream.bufferedReader().readText().trim().take(400)
+    if (!finished) {
+        process.destroyForcibly()
+        process.waitFor(2, TimeUnit.SECONDS)
+        runCatching { drain.get(2, TimeUnit.SECONDS) }
+        return Verdict(false, "python3 ${args.joinToString(" ")} timed out")
+    }
+    try { drain.get(2, TimeUnit.SECONDS) }
+    catch (_: ExecutionException) { /* Exit status remains the primary signal. */ }
+    catch (_: java.util.concurrent.TimeoutException) {
+        process.inputStream.close()
+    }
+    val output = synchronized(captured) { captured.toString().trim() }
     return Verdict(process.exitValue() == 0, "python3 ${args.joinToString(" ")} → exit ${process.exitValue()}${if (output.isNotEmpty()) ": $output" else ""}")
 }
 
@@ -196,6 +243,85 @@ val EVAL_TASKS: List<EvalTask> = listOf(
             "Fixed century rule in dates.py (not executed: commands disabled)."
         },
     ),
+    EvalTask(
+        id = "multifile-retry-policy",
+        title = "实现跨模块的重试策略",
+        prompt = "Implement the retry policy described in policy_spec.py. Update the client to honor the policy and ensure the package tests pass. Preserve the public fetch(url, attempts=...) signature.",
+        files = mapOf(
+            "app/client.py" to "from app.retry import should_retry, wait_seconds\n\n\ndef fetch(url, attempts=3):\n    waits = []\n    for attempt in range(attempts):\n        waits.append(wait_seconds(attempt))\n        if not should_retry(attempt, attempts):\n            break\n    return url, waits\n",
+            "app/retry.py" to "def should_retry(attempt, attempts):\n    raise NotImplementedError\n\n\ndef wait_seconds(attempt):\n    raise NotImplementedError\n",
+            "policy_spec.py" to "Retry at most `attempts` times: attempt indices are zero-based and should_retry is true exactly when another attempt remains. Wait is min(4, 0.25 * 2**attempt). Do not sleep; return the planned waits.\n",
+            "checks.py" to "from app.client import fetch\nfrom app.retry import should_retry, wait_seconds\nassert [should_retry(i, 3) for i in range(4)] == [True, True, False, False]\nassert [wait_seconds(i) for i in range(5)] == [0.25, 0.5, 1.0, 2.0, 4]\nassert fetch('u', 3) == ('u', [0.25, 0.5, 1.0])\nassert fetch('u', 0) == ('u', [])\nprint('retry policy ok')\n",
+        ),
+        check = { project, _ -> python(project, "checks.py") },
+        reference = { project ->
+            Files.writeString(project.resolve("app/retry.py"), "def should_retry(attempt, attempts):\n    return attempt + 1 < attempts\n\n\ndef wait_seconds(attempt):\n    return min(4, 0.25 * (2 ** attempt))\n")
+            Files.writeString(project.resolve("app/client.py"), "from app.retry import should_retry, wait_seconds\n\n\ndef fetch(url, attempts=3):\n    waits = []\n    for attempt in range(attempts):\n        waits.append(wait_seconds(attempt))\n        if not should_retry(attempt, attempts):\n            break\n    return url, waits\n")
+            "Implemented retry limit and capped exponential wait across app/retry.py and app/client.py."
+        },
+    ),
+    EvalTask(
+        id = "crlf-unicode-exact-edit",
+        title = "Сохранить окончания строк и Unicode при точечной правке",
+        prompt = "In messages.txt replace only the exact phrase `Доброе утро, мир!` with `Доброе утро, Chiller!`. Keep every other byte unchanged, including CRLF line endings and the Unicode characters. Do not run commands.",
+        files = mapOf("messages.txt" to "# привет\r\nДоброе утро, мир!\r\nОставить: café ☕\r\n"),
+        allowProcesses = false,
+        check = { project, _ ->
+            val expected = "# привет\r\nДоброе утро, Chiller!\r\nОставить: café ☕\r\n".toByteArray(Charsets.UTF_8)
+            val actual = Files.readAllBytes(project.resolve("messages.txt"))
+            Verdict(actual.contentEquals(expected), if (actual.contentEquals(expected)) "only requested UTF-8 bytes changed; CRLF preserved" else "unexpected byte or line-ending change")
+        },
+        reference = { project -> replaceIn(project, "messages.txt", "Доброе утро, мир!", "Доброе утро, Chiller!"); "Replaced the exact phrase and preserved CRLF and Unicode." },
+    ),
+    EvalTask(
+        id = "preserve-user-edits",
+        title = "Сохранить несвязанные изменения пользователя",
+        prompt = "Fix the off-by-one error in pricing.py so checks.py passes. Keep the existing customer note and the custom tax rate exactly as they are; these are user changes.",
+        files = mapOf(
+            "pricing.py" to "# Customer note: keep legacy rounding for invoices\nCUSTOM_TAX_RATE = 0.075\n\ndef subtotal(prices):\n    return sum(prices[:-1])\n",
+            "checks.py" to "from pricing import subtotal, CUSTOM_TAX_RATE\nassert subtotal([1.25, 2.75, 4.0]) == 8.0\nassert CUSTOM_TAX_RATE == 0.075\nprint('pricing ok')\n",
+        ),
+        check = { project, _ ->
+            val expected = "# Customer note: keep legacy rounding for invoices\nCUSTOM_TAX_RATE = 0.075\n\ndef subtotal(prices):\n    return sum(prices)\n"
+            val source = Files.readString(project.resolve("pricing.py"))
+            if (source != expected) Verdict(false, "pricing.py differs from the exact expected fix or changed user content")
+            else python(project, "checks.py")
+        },
+        reference = { project -> replaceIn(project, "pricing.py", "sum(prices[:-1])", "sum(prices)"); "Fixed subtotal and preserved the customer note and tax rate." },
+    ),
+    EvalTask(
+        id = "diagnose-cause-chain",
+        title = "Проследить причину сбоя через несколько модулей",
+        prompt = "Run python3 checks.py. Diagnose the failure through the call chain and fix its root cause while preserving the documented API and default behavior. Do not special-case the test inputs.",
+        files = mapOf(
+            "checks.py" to "from app.report import render\nassert render([1, 2, 3]) == 'total=6'\nassert render([]) == 'total=0'\nprint('report ok')\n",
+            "app/report.py" to "from app.aggregate import total\n\ndef render(values):\n    return f'total={total(values)}'\n",
+            "app/aggregate.py" to "from app.numeric import add\n\ndef total(values):\n    result = 0\n    for value in values:\n        result = add(result, value)\n    return result\n",
+            "app/numeric.py" to "def add(left, right):\n    # API: return the arithmetic sum of two numeric values.\n    return left - right\n",
+        ),
+        check = { project, _ -> python(project, "checks.py") },
+        reference = { project -> replaceIn(project, "app/numeric.py", "return left - right", "return left + right"); "Fixed the arithmetic root cause in app/numeric.py." },
+    ),
+    EvalTask(
+        id = "lexical-navigation-decoys",
+        title = "Найти определение среди одноимённых вызовов и примеров",
+        prompt = "Find the production function that chooses the cache expiration duration. Give its file path, function name, and the rule it uses. Ignore documentation examples and test doubles.",
+        files = mapOf(
+            "docs/cache.md" to "Example only: def ttl_for(key): return 1\nProduction behavior is configured in the application package.\n",
+            "tests/fakes.py" to "def ttl_for(key):\n    return 999\n",
+            "app/cache/api.py" to "from app.cache.policy import ttl_for\n\ndef get(key):\n    return ttl_for(key)\n",
+            "app/cache/policy.py" to "def ttl_for(key):\n    if key.startswith('session:'):\n        return 900\n    return 60\n",
+        ),
+        mode = ExecutionMode.PLAN,
+        allowProcesses = false,
+        check = { _, answer ->
+            val hasFile = answer.contains("app/cache/policy.py")
+            val hasFunction = Regex("\\bttl_for\\b").containsMatchIn(answer)
+            val hasRule = answer.contains("900") && answer.contains("60") && answer.contains("session:")
+            Verdict(hasFile && hasFunction && hasRule, "answer must identify production policy and both TTL rules")
+        },
+        reference = { "app/cache/policy.py, function ttl_for: session: keys get 900 seconds; other keys get 60." },
+    ),
 )
 
 /**
@@ -208,7 +334,12 @@ fun verifyEvalChecks(workDir: Path): List<String> = EVAL_TASKS.mapNotNull { task
     val before = task.check(project, "")
     val answer = task.reference(project)
     val after = task.check(project, answer)
+    val alteredOracleAccepted = oracleFiles(task.files).keys.firstOrNull()?.let { file ->
+        Files.writeString(project.resolve(file), "print('forged success')\n")
+        task.check(project, answer).passed
+    } ?: false
     when {
+        alteredOracleAccepted -> "${task.id}: altered verification file was accepted"
         before.passed -> "${task.id}: check passes before solving (${before.detail})"
         !after.passed -> "${task.id}: reference fails (${after.detail})"
         else -> null

@@ -10,11 +10,23 @@ class BuiltinTools(
     private val processes: ProcessService,
     private val artifacts: ArtifactStore,
     private val questions: InteractionBroker,
+    private val code: ReadOnlyCodeService = UnsupportedReadOnlyCodeService,
+    private val web: WebService = DisabledWebService,
+    private val screens: ScreenCaptureService? = null,
 ) : ToolExecutor {
     private val json = Json { encodeDefaults = true }
     override val specs: List<ToolSpec> = listOf(
-        spec("list_files", "List project files respecting ignore rules. Results are bounded.", ToolEffect.READ, mapOf("path" to string(), "glob" to string(), "limit" to integer())),
-        spec("search_text", "Search text in project; literal by default. Optional context adds surrounding lines.", ToolEffect.READ, mapOf("query" to string(), "path" to string(), "glob" to string(), "regex" to boolean(), "limit" to integer(), "context" to integer()), "query"),
+        spec("list_files", "List project files respecting ignore rules. Results are bounded; copy returned nextCursor to cursor to continue.", ToolEffect.READ, mapOf("path" to string(), "glob" to string(), "limit" to integer(), "cursor" to string())),
+        spec("search_text", "Search text in project; literal by default. Optional context adds surrounding lines. Copy returned nextCursor to cursor, keeping the same query options.", ToolEffect.READ, mapOf("query" to string(), "path" to string(), "glob" to string(), "regex" to boolean(), "limit" to integer(), "context" to integer(), "cursor" to string()), "query"),
+        spec("git_status", "Show bounded read-only Git status, including untracked and tracked changes.", ToolEffect.READ, emptyMap()),
+        spec("git_diff", "Show a bounded read-only Git diff. No external diff or text conversion is used.", ToolEffect.READ, mapOf("staged" to boolean(), "path" to string())),
+        spec("git_log", "Show up to 30 recent commits, optionally from a simple revision name.", ToolEffect.READ, mapOf("limit" to integer(), "revision" to string())),
+        spec("git_show", "Read one file from a commit or branch. This does not access the working-tree file.", ToolEffect.READ, mapOf("revision" to string(), "path" to string()), "revision", "path"),
+        spec("web_search", "Search the public web for up to five results. Sends the query to DuckDuckGo when network permission is enabled.", ToolEffect.NETWORK, mapOf("query" to boundedString(300), "limit" to boundedInteger(1, 5)), "query"),
+        spec("web_fetch", "Fetch bounded HTML, plain text, or JSON from a public URL when network permission is enabled. Redirect destinations are revalidated.", ToolEffect.NETWORK, mapOf("url" to boundedString(2048)), "url"),
+        spec("find_symbols", "Find lexical class, function, and type declarations in supported source files; this is not semantic/LSP navigation.", ToolEffect.READ, mapOf("query" to string(), "path" to string(), "limit" to integer()), "query"),
+        spec("read_symbol", "Read one complete block-bodied Kotlin class or function. For large files, pass start_line from find_symbols. Refuses ambiguity and expression-bodied declarations; lexical only, not a parser.", ToolEffect.READ, mapOf("path" to string(), "symbol" to string(), "start_line" to integer()), "path", "symbol"),
+        spec("show_file", "Present an existing workspace file to the user, with an image preview when supported. This does not send image pixels to the model.", ToolEffect.READ, mapOf("path" to string()), "path"),
         spec("read_file", "Read numbered lines and obtain snapshot_id. Copy snapshot_id exactly for edits.", ToolEffect.READ, mapOf("path" to string(), "start_line" to integer(), "end_line" to integer()), "path"),
         spec("edit_file", "Edit read lines of the exact snapshot by line number. 1-based inclusive ranges. For small changes replace_text is simpler. All edits use the original snapshot. The returned snapshotId can be used for further edits without re-reading.", ToolEffect.FILE_WRITE,
             mapOf("path" to string(), "snapshot_id" to string(), "edits" to buildJsonObject { put("type", "array"); put("maxItems", 32); put("items", buildJsonObject {
@@ -24,11 +36,13 @@ class BuiltinTools(
             }) }), "path", "snapshot_id", "edits"),
         spec("replace_text", "Replace exact text in a file you have read. Copy old_text from read_file output without the line-number prefix, including indentation. Must match exactly expected_count times (default 1); otherwise nothing changes. Prefer this for small changes. Returns snapshotId for further edits.", ToolEffect.FILE_WRITE,
             mapOf("path" to string(), "snapshot_id" to string(), "old_text" to string(), "new_text" to string(), "expected_count" to integer()), "path", "snapshot_id", "old_text", "new_text"),
-        spec("create_file", "Create a new UTF-8 file. Never overwrites existing files.", ToolEffect.FILE_WRITE, mapOf("path" to string(), "content" to string()), "path", "content"),
+        spec("create_file", "Create a new UTF-8 file, safely creating missing parent directories. Never overwrites existing files.", ToolEffect.FILE_WRITE, mapOf("path" to string(), "content" to string()), "path", "content"),
+        spec("create_directory", "Create a directory and missing parents inside the workspace; succeeds if the directory already exists, refuses files and symlinks.", ToolEffect.FILE_WRITE, mapOf("path" to string()), "path"),
         spec("move_file", "Move one file without overwriting destination; snapshot required.", ToolEffect.FILE_WRITE, mapOf("path" to string(), "snapshot_id" to string(), "destination" to string()), "path", "snapshot_id", "destination"),
         spec("delete_file", "Delete one read file with a recoverable checkpoint; snapshot required.", ToolEffect.FILE_WRITE, mapOf("path" to string(), "snapshot_id" to string()), "path", "snapshot_id"),
         spec("run_process", "Run an executable with argument array. Explicit process permission required. cwd is relative. Shell commands require explicit shell argv.", ToolEffect.PROCESS, mapOf("argv" to array(string()), "cwd" to string(), "timeout_ms" to integer(), "background" to boolean()), "argv"),
         spec("read_process", "Read new process output using cursor; inspect exit code before claiming checks passed.", ToolEffect.READ, mapOf("process_id" to string(), "cursor" to integer()), "process_id"),
+        spec("read_diagnostics", "Parse a bounded set of Kotlin, Java, and Python file/line diagnostics from new process output. Partial parser; inspect process state and exit_code separately.", ToolEffect.READ, mapOf("process_id" to string(), "cursor" to integer()), "process_id"),
         spec("stop_process", "Stop a process by its opaque id.", ToolEffect.PROCESS, mapOf("process_id" to string()), "process_id"),
         spec("read_artifact", "Read part of a large saved result from this session.", ToolEffect.READ, mapOf("artifact_id" to string(), "offset" to integer(), "limit" to integer()), "artifact_id"),
         spec("update_plan", "Keep a short checklist for a multi-step task. Send the whole list each time; at most one step in_progress. Does not change the project.", ToolEffect.READ,
@@ -38,21 +52,55 @@ class BuiltinTools(
                 put("required", JsonArray(listOf(JsonPrimitive("step"), JsonPrimitive("status"))))
             }) }), "steps"),
         spec("ask_user", "Ask the user a necessary question, optionally with choices.", ToolEffect.USER_INTERACTION, mapOf("question" to string(), "options" to array(string())), "question"),
-    )
+    ) + if (screens?.supported == true) listOf(
+        spec("list_capture_targets", "List only the window explicitly selected by the user for capture. Ask the user to choose in Settings if empty.", ToolEffect.SCREEN_CAPTURE, emptyMap()),
+        spec("capture_window", "Capture the user's selected window and present its PNG. Requires app and OS permission. Never captures the entire display; pixels are not sent as model vision input.", ToolEffect.SCREEN_CAPTURE, emptyMap()),
+    ) else emptyList()
 
     override suspend fun execute(call: ToolCall, context: ToolContext): ToolResult {
         return try {
             val spec = specs.find { it.name == call.name } ?: return ToolResult.failure("UNKNOWN_TOOL", "Unknown tool")
             if (context.mode == ExecutionMode.PLAN && spec.effect in setOf(ToolEffect.FILE_WRITE, ToolEffect.PROCESS))
                 return ToolResult.failure("PERMISSION_DENIED", "Plan mode permits reads and questions only")
+            if (spec.effect == ToolEffect.SCREEN_CAPTURE && !context.allowScreenshots)
+                return ToolResult.failure("PERMISSION_DENIED", "Window capture was not enabled by the user")
             if (spec.effect == ToolEffect.PROCESS && !context.allowProcesses)
                 return ToolResult.failure("PERMISSION_DENIED", "Process execution was not enabled by the user")
+            if (spec.effect == ToolEffect.NETWORK && !context.allowNetwork)
+                return ToolResult.failure("PERMISSION_DENIED", "Network access was not enabled by the user")
             if (call.arguments.length > 262_144) return ToolResult.failure("INVALID_ARGUMENTS", "Arguments exceed limit")
             val args = json.parseToJsonElement(call.arguments).jsonObject
             validateObject(args, spec.parameters)
             val result = when (call.name) {
-                "list_files" -> workspace.list(args.str("path", "."), args.optionalString("glob"), args.int("limit", 200))
-                "search_text" -> workspace.search(args.str("query"), args.str("path", "."), args.optionalString("glob"), args.bool("regex"), args.int("limit", 100), args.int("context", 0))
+                "list_files" -> workspace.listPage(args.str("path", "."), args.optionalString("glob"), args.int("limit", 200), args.optionalString("cursor"))
+                "search_text" -> workspace.searchPage(args.str("query"), args.str("path", "."), args.optionalString("glob"), args.bool("regex"), args.int("limit", 100), args.int("context", 0), args.optionalString("cursor"))
+                "git_status" -> code.gitStatus()
+                "git_diff" -> code.gitDiff(args.bool("staged"), args.optionalString("path"))
+                "git_log" -> code.gitLog(args.int("limit", 10), args.optionalString("revision"))
+                "git_show" -> code.gitShow(args.str("revision"), args.str("path"))
+                "web_search" -> web.search(args.str("query"), args.int("limit", 5))
+                "web_fetch" -> web.fetch(args.str("url"))
+                "find_symbols" -> code.findSymbols(args.str("query"), args.optionalString("path"), args.int("limit", 30))
+                "read_symbol" -> {
+                    val path = args.str("path")
+                    if (path.substringAfterLast('.', "").lowercase() !in setOf("kt", "kts"))
+                        throw ToolException("UNSUPPORTED_LANGUAGE", "read_symbol currently supports Kotlin .kt and .kts files")
+                    val anchored = args.optionalInt("start_line") != null
+                    val startLine = args.int("start_line", 1)
+                    if (startLine < 1) throw ToolException("INVALID_ARGUMENTS", "start_line must be positive")
+                    val file = workspace.read(ReadFileRequest(path, startLine))
+                    if (!anchored && file.truncated) throw ToolException("FILE_TOO_LARGE", "Use find_symbols and retry with its start_line")
+                    val symbol = args.str("symbol")
+                    val block = LexicalSymbolReader.read(file.content, symbol, startLine, anchored)
+                    ToolResult(true, buildJsonObject {
+                        put("path", file.path); put("snapshot_id", file.snapshotId); put("symbol", symbol)
+                        put("start_line", block.startLine); put("end_line", block.endLine); put("content", block.content)
+                        put("lexical", true)
+                    })
+                }
+                "show_file" -> ToolResult(true, buildJsonObject { put("file", json.encodeToJsonElement(workspace.describeFile(args.str("path")))) })
+                "list_capture_targets" -> ToolResult(true, buildJsonObject { put("targets", json.encodeToJsonElement(screens!!.targets())) })
+                "capture_window" -> ToolResult(true, buildJsonObject { put("file", json.encodeToJsonElement(screens!!.capture())); put("model_can_view", false) })
                 "read_file" -> {
                     val r = workspace.read(ReadFileRequest(args.str("path"), args.int("start_line", 1), args.optionalInt("end_line")))
                     ToolResult(true, buildJsonObject {
@@ -78,10 +126,26 @@ class BuiltinTools(
                     })
                 }
                 "create_file" -> success(workspace.create(args.str("path"), args.str("content")))
+                "create_directory" -> workspace.createDirectory(args.str("path"))
                 "move_file" -> success(workspace.move(args.str("path"), args.str("snapshot_id"), args.str("destination")))
                 "delete_file" -> success(workspace.delete(args.str("path"), args.str("snapshot_id")))
                 "run_process" -> success(processes.start(StartProcessRequest(args.getValue("argv").jsonArray.map { it.jsonPrimitive.content }, args.str("cwd", "."), args.long("timeout_ms", 60_000), args.bool("background")), context.runId))
                 "read_process" -> success(processes.read(args.str("process_id"), args.long("cursor", 0)))
+                "read_diagnostics" -> {
+                    val page = processes.read(args.str("process_id"), args.long("cursor", 0))
+                    val raw = page.output.take(20_000)
+                    val diagnostics = DiagnosticsParser.parse(raw)
+                    val diagnosticsLimited = diagnostics.size == 100
+                    ToolResult(true, buildJsonObject {
+                        put("process_id", page.processId); put("cursor", page.cursor); put("state", page.state)
+                        page.exitCode?.let { put("exit_code", it) }
+                        put("diagnostics", JsonArray(diagnostics.map { d -> buildJsonObject {
+                            put("file", d.file); put("line", d.line); d.column?.let { put("column", it) }
+                            d.severity?.let { put("severity", it) }; put("message", d.message)
+                        } }))
+                        put("parser_partial", true); put("diagnostics_limited", diagnosticsLimited); put("raw_output", raw)
+                    }, truncated = page.truncated || page.output.length > raw.length || diagnosticsLimited, nextCursor = page.cursor.toString())
+                }
                 "stop_process" -> success(processes.stop(args.str("process_id")))
                 "read_artifact" -> ToolResult(true, buildJsonObject { put("content", artifacts.read(context.sessionId, args.str("artifact_id"), args.int("offset", 0), args.int("limit", 16_384))) })
                 "ask_user" -> ToolResult(true, buildJsonObject { put("answer", questions.ask(UserQuestion(question = args.str("question"), options = args["options"]?.jsonArray?.map { it.jsonPrimitive.content }.orEmpty()))) })
@@ -90,7 +154,7 @@ class BuiltinTools(
             val text = json.encodeToString(result)
             if (text.length > 24_000) {
                 val artifact = artifacts.put(context.sessionId, text)
-                ToolResult(result.ok, buildJsonObject { put("summary", "Result saved as artifact; read it in pages"); put("preview", text.take(6000)) }, result.error, truncated = true, artifactId = artifact.id)
+                ToolResult(result.ok, buildJsonObject { put("summary", "Result saved as artifact; read it in pages"); put("preview", text.take(6000)) }, result.error, truncated = true, nextCursor = result.nextCursor, artifactId = artifact.id)
             } else result
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (e: ToolException) { ToolResult.failure(e.code, e.message, e.code in setOf("STALE_SNAPSHOT", "UNKNOWN_SNAPSHOT"), e.recovery ?: if (e.code.contains("SNAPSHOT")) "Read the file again" else null) }
@@ -108,8 +172,12 @@ class BuiltinTools(
     }
     private fun validateValue(item: JsonElement, schema: JsonObject) {
         when (schema["type"]?.jsonPrimitive?.content) {
-            "string" -> require(item is JsonPrimitive && item.isString)
-            "integer" -> require(item is JsonPrimitive && !item.isString && item.longOrNull != null)
+            "string" -> { require(item is JsonPrimitive && item.isString); schema["maxLength"]?.jsonPrimitive?.int?.let { require(item.content.length <= it) } }
+            "integer" -> {
+                require(item is JsonPrimitive && !item.isString && item.longOrNull != null)
+                schema["minimum"]?.jsonPrimitive?.long?.let { require(item.long >= it) }
+                schema["maximum"]?.jsonPrimitive?.long?.let { require(item.long <= it) }
+            }
             "boolean" -> require(item is JsonPrimitive && !item.isString && item.booleanOrNull != null)
             "array" -> { require(item is JsonArray); require(item.size <= (schema["maxItems"]?.jsonPrimitive?.int ?: 64)); item.forEach { validateValue(it, schema.getValue("items").jsonObject) } }
             "object" -> { require(item is JsonObject); validateObject(item, schema) }
@@ -125,7 +193,9 @@ class BuiltinTools(
 
     companion object {
         private fun string() = buildJsonObject { put("type", "string") }
+        private fun boundedString(maxLength: Int) = buildJsonObject { put("type", "string"); put("maxLength", maxLength) }
         private fun integer() = buildJsonObject { put("type", "integer") }
+        private fun boundedInteger(minimum: Int, maximum: Int) = buildJsonObject { put("type", "integer"); put("minimum", minimum); put("maximum", maximum) }
         private fun boolean() = buildJsonObject { put("type", "boolean") }
         private fun array(item: JsonObject) = buildJsonObject { put("type", "array"); put("items", item); put("maxItems", 64) }
         private fun spec(name: String, description: String, effect: ToolEffect, props: Map<String, JsonObject>, vararg required: String) = ToolSpec(name, description, buildJsonObject {

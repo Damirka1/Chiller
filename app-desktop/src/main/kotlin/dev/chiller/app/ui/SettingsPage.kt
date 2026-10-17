@@ -37,6 +37,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.chiller.app.di.*
+import dev.chiller.contracts.CaptureTarget
 import dev.chiller.design.*
 
 /** Everything the settings page shows. Keys themselves are never part of it — only where they came from. */
@@ -47,6 +48,7 @@ data class SettingsData(
     val preferences: UiPreferences = UiPreferences(), val allowProcesses: Boolean = false, val agent: AgentOptions = AgentOptions(),
     val recent: List<String> = emptyList(), val dataDir: String = "", val demoCount: Int = 0,
     val version: String = "dev", val build: String = "", val commit: String = "", val runtime: String = "", val os: String = "",
+    val captureTargets: List<CaptureTarget> = emptyList(), val selectedCaptureTarget: String? = null, val screenshotSupported: Boolean = false,
 )
 
 class SettingsActions(
@@ -56,6 +58,7 @@ class SettingsActions(
     val removeRecent: (String) -> Unit = {}, val openPath: (String) -> Unit = {}, val openUrl: (String) -> Unit = {},
     val deleteDemos: () -> Unit = {}, val close: () -> Unit = {},
     val saveCredential: () -> Unit = {}, val deleteCredential: () -> Unit = {},
+    val refreshCaptureTargets: () -> Unit = {}, val selectCaptureTarget: (String) -> Unit = {},
 )
 
 private enum class Section(val title: String, val icon: ImageVector) {
@@ -231,11 +234,11 @@ private fun AgentSection(data: SettingsData, actions: SettingsActions) {
             ChillerIconButton(Icons.Outlined.Add, "Больше", { actions.agent(a.copy(maxRounds = a.maxRounds + 4)) }, enabled = a.maxRounds < 60)
         }
         Text("Общий бюджет: основной агент и все помощники", color = c.text, fontSize = 13.sp)
-        Text("Запросов за задачу", color = c.faint, fontSize = 11.sp)
+        Text("Логические запросы к модели на всю задачу; транспортные повторы не считаются", color = c.faint, fontSize = 11.sp, lineHeight = 16.sp)
         Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             listOf(24, 48, 96).forEach { v -> ChillerControl("$v", { actions.agent(a.copy(maxRequests = v)) }, style = if (a.maxRequests == v) ControlStyle.SELECTED else ControlStyle.QUIET) }
         }
-        Text("Выходных токенов суммарно (не денежный лимит)", color = c.faint, fontSize = 11.sp)
+        Text("Сумма сгенерированных выходных токенов на всю задачу, включая помощников. Это не лимит стоимости; входные токены не учитываются.", color = c.faint, fontSize = 11.sp, lineHeight = 16.sp)
         Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             listOf(16384, 32768, 65536).forEach { v -> ChillerControl(formatK(v), { actions.agent(a.copy(totalOutputTokens = v)) }, style = if (a.totalOutputTokens == v) ControlStyle.SELECTED else ControlStyle.QUIET) }
         }
@@ -249,6 +252,26 @@ private fun AgentSection(data: SettingsData, actions: SettingsActions) {
         SettingToggle("Помощники (субагенты)", "До 3 параллельных помощников только на чтение: ищут и читают код, присылают отчёт", a.subagents) { actions.agent(a.copy(subagents = it)) }
         SettingToggle("Инструкции проекта", "Читать AGENTS.md, CLAUDE.md и .chiller/instructions.md как указания (не как разрешения)", a.projectInstructions) { actions.agent(a.copy(projectInstructions = it)) }
         SettingToggle("Команды процессов", "Разрешить запуск тестов и сборки в режиме «Изменения». Это не песочница ОС", data.allowProcesses) { actions.allowProcesses(it) }
+        SettingToggle("Веб-поиск", "Поисковые запросы отправляются внешнему сервису и покидают этот компьютер", a.allowNetwork) { actions.agent(a.copy(allowNetwork = it)) }
+        SettingToggle("Снимки окна", "Захват доступен по явному запросу; ОС может спросить разрешение. Просмотр изображения зависит от модели", a.allowScreenshots) { actions.agent(a.copy(allowScreenshots = it)) }
+        when {
+            !data.screenshotSupported -> Text("Захват окна недоступен на этой платформе.", color = c.faint, fontSize = 11.sp)
+            !a.allowScreenshots -> Text("Сначала включите «Снимки окна», затем выберите конкретное окно для захвата.", color = c.faint, fontSize = 11.sp)
+            else -> {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Окно для снимка", color = c.text, fontSize = 13.sp, modifier = Modifier.weight(1f))
+                    ChillerControl("Обновить список", actions.refreshCaptureTargets, icon = Icons.Outlined.Refresh)
+                }
+                val selected = data.captureTargets.firstOrNull { it.id == data.selectedCaptureTarget }
+                if (selected != null) Text("Выбрано: ${selected.application} · ${selected.title}", color = c.muted, fontSize = 11.sp, lineHeight = 16.sp)
+                else Text("Окно не выбрано. Снимок не будет сделан, пока вы явно не выберете цель.", color = c.faint, fontSize = 11.sp, lineHeight = 16.sp)
+                data.captureTargets.forEach { target ->
+                    ChillerControl("${target.application} · ${target.title}", { actions.selectCaptureTarget(target.id) }, icon = Icons.Outlined.CropFree,
+                        style = if (target.id == data.selectedCaptureTarget) ControlStyle.SELECTED else ControlStyle.QUIET)
+                }
+                if (data.captureTargets.isEmpty()) Text("Список окон пуст. Обновите его и выберите окно явно.", color = c.faint, fontSize = 11.sp)
+            }
+        }
     }
 }
 

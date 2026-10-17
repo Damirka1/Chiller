@@ -61,6 +61,8 @@ jobs:
         with:
           files: dist/*
           generate_release_notes: true
+          prerelease: ${{ github.ref_name == 'v1.1.0' }}
+          name: Chiller ${{ github.ref_name }}
           # Installers are not code-signed yet: macOS asks to confirm the first launch, Windows SmartScreen may warn.
           body: |
             Unsigned builds: on macOS open with right-click → Open the first time; on Windows SmartScreen may ask to confirm.

@@ -26,7 +26,9 @@ interface CredentialStore {
             override fun delete(origin: String) = Unit
         }
 
-        fun system(): CredentialStore = if (MacKeychainCredentialStore.isMacOs()) MacKeychainCredentialStore() else None
+        fun system(): CredentialStore = if (MacKeychainCredentialStore.isMacOs()) {
+            try { MacKeychainCredentialStore() } catch (_: CredentialStoreException) { None }
+        } else None
     }
 }
 
@@ -171,9 +173,8 @@ private class JnaKeychainNative : KeychainNative {
             memory.write(0, value, 0, value.size)
             return block(memory)
         } finally {
-            // JNA 5.6 exposes no public close/dispose on Memory; clear sensitive bytes now and
-            // let JNA's native-memory cleaner release the allocation.
             memory.clear()
+            memory.close()
         }
     }
 

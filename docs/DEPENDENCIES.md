@@ -1,3 +1,7 @@
 # Дополнение к зависимостям
 
 17 октября 2026: app-desktop явно фиксирует `net.java.dev.jna:jna:5.6.0` для прямых вызовов macOS Security.framework/CoreFoundation. Версия совпадает с доступной локальной совместимой JNA, без jna-platform и без shell-команд с секретами. Лицензирование JNA: dual Apache-2.0 / LGPL-2.1; при распространении использовать Apache-2.0 и сохранять upstream LICENSE/NOTICE. Это дополнение, не полный SBOM проекта. Системные frameworks предоставляет macOS.
+
+В последующем нативном smoke выявлено: 5.6.0 содержит darwin i386/x86_64 и не загружается на Apple Silicon. Предыдущая формулировка «совместимая» была основана только на fake-тестах и отозвана. Версия повышена до **5.18.1**, стабильного выпуска с Darwin aarch64; проверка обновления — компиляция, полный offline check, native Keychain smoke и desktop package. Источник: [официальный changelog JNA](https://github.com/java-native-access/jna/blob/master/CHANGES.md). Лицензия остаётся dual Apache-2.0/LGPL-2.1, выбран Apache-2.0. Memory после очистки освобождается явно через close(). Если нативное хранилище не инициализируется, приложение сохраняет доступ к session/env credentials вместо падения при запуске.
+
+App icon: original Chiller geometry, no stock/third-party asset. Swift/AppKit + macOS sips/iconutil are offline asset-generation tools only; committed PNG/ICNS/ICO keep them out of CI/runtime dependencies. No additional library was introduced for web tools (JDK HttpClient + Swing HTML parser) or attachment previews (JDK ImageIO).

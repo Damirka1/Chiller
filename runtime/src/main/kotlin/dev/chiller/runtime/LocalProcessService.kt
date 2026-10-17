@@ -5,11 +5,20 @@ import kotlinx.coroutines.*
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.ConcurrentHashMap
+import java.util.ArrayDeque
+import java.util.LinkedHashSet
 
 class LocalProcessService(root: Path) : ProcessService {
     private val root = root.toRealPath()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val records = ConcurrentHashMap<String, Record>()
+    private val lifecycleLock = Any()
+    private val finishedOrder = ArrayDeque<String>()
+    private val expiredIds = LinkedHashSet<String>()
+    private val closeCompleted = CompletableDeferred<Unit>()
+    private var closed = false
+    private val maxRetainedFinished = 64
+    private val maxExpiredIds = 256
     private class Record(val id: String, val runId: String, val process: Process, val background: Boolean) {
         val text = StringBuilder()
         var truncated = false
@@ -21,34 +30,47 @@ class LocalProcessService(root: Path) : ProcessService {
     override suspend fun start(request: StartProcessRequest, runId: String): ProcessOutput = withContext(Dispatchers.IO) {
         if (request.argv.isEmpty() || request.argv.any { it.contains('\u0000') } || request.timeoutMs !in 100..600_000)
             throw ToolException("INVALID_ARGUMENTS", "Provide argv and a timeout from 100 to 600000 ms")
-        if (records.values.count { synchronized(it) { it.state == "running" } } >= 8)
-            throw ToolException("PROCESS_LIMIT", "At most eight running processes are supported")
         val relative = Path.of(request.cwd)
         if (relative.isAbsolute) throw ToolException("PATH_OUTSIDE_WORKSPACE", "cwd must be relative to workspace")
         val cwd = try { root.resolve(relative).normalize().toRealPath() }
             catch (_: java.io.IOException) { throw ToolException("INVALID_CWD", "Working directory is unavailable") }
         if (!cwd.startsWith(root) || !Files.isDirectory(cwd)) throw ToolException("PATH_OUTSIDE_WORKSPACE", "Invalid cwd")
-        val process = ProcessBuilder(request.argv).directory(cwd.toFile()).start()
-        process.outputStream.close()
-        val record = Record(newId(), runId, process, request.background)
-        records[record.id] = record
-        val stdout = pump(record, process.inputStream, "stdout")
-        val stderr = pump(record, process.errorStream, "stderr")
-        scope.launch {
-            try {
-                val exit = runInterruptible { process.waitFor() }
-                synchronized(record) { record.exitCode = exit; if (record.state == "running") record.state = "exited" }
-                val drained = withTimeoutOrNull(1_000) { joinAll(stdout, stderr); true } ?: false
-                if (!drained) {
-                    synchronized(record) { record.truncated = true }
-                    process.inputStream.close(); process.errorStream.close()
-                    stdout.cancel(); stderr.cancel()
+        val record = synchronized(lifecycleLock) {
+            if (closed) throw ToolException("PROCESS_SERVICE_CLOSED", "Process service is closed; create a new run service")
+            pruneFinishedLocked()
+            if (records.values.count { it.process.isAlive } >= 8)
+                throw ToolException("PROCESS_LIMIT", "At most eight running processes are supported")
+            val process = ProcessBuilder(request.argv).directory(cwd.toFile()).start()
+            process.outputStream.close()
+            Record(newId(), runId, process, request.background).also { started ->
+                records[started.id] = started
+                val stdout = pump(started, process.inputStream, "stdout")
+                val stderr = pump(started, process.errorStream, "stderr")
+                scope.launch {
+                    try {
+                        val exit = runInterruptible { process.waitFor() }
+                        synchronized(started) { started.exitCode = exit; if (started.state == "running") started.state = "exited" }
+                        val drained = withTimeoutOrNull(1_000) { joinAll(stdout, stderr); true } ?: false
+                        if (!drained) {
+                            synchronized(started) { started.truncated = true }
+                            process.inputStream.close(); process.errorStream.close()
+                            stdout.cancel(); stderr.cancel()
+                        }
+                    } finally {
+                        started.exited.complete(Unit)
+                        retainFinished(started)
+                    }
                 }
-            } finally { record.exited.complete(Unit) }
-        }
-        scope.launch {
-            delay(request.timeoutMs)
-            if (process.isAlive) { synchronized(record) { record.state = "timed_out" }; terminate(record) }
+                scope.launch {
+                    // A completed process must not leave a timeout coroutine alive for the full timeout.
+                    val completed = async { started.exited.await() }
+                    val timedOut = withTimeoutOrNull(request.timeoutMs) { completed.await(); false } ?: true
+                    if (timedOut && process.isAlive) {
+                        synchronized(started) { if (started.state == "running") started.state = "timed_out" }
+                        terminate(started)
+                    }
+                }
+            }
         }
         try {
             if (!request.background) record.exited.await()
@@ -96,15 +118,59 @@ class LocalProcessService(root: Path) : ProcessService {
     }
 
     override suspend fun stopRun(runId: String) {
-        records.values.filter { it.runId == runId && !it.background }.forEach { stop(it.id) }
+        val ownedActive = synchronized(lifecycleLock) { records.values.filter { it.runId == runId && it.process.isAlive }.toList() }
+        ownedActive.forEach { stop(it.id) }
     }
 
     override suspend fun close() {
-        withContext(NonCancellable) { records.values.forEach { terminate(it) } }
-        scope.cancel()
+        val (active, owner) = synchronized(lifecycleLock) {
+            if (closed) emptyList<Record>() to false
+            else {
+                closed = true
+                records.values.filterNot { it.exited.isCompleted }.toList() to true
+            }
+        }
+        if (!owner) return withContext(NonCancellable) { closeCompleted.await() }
+        withContext(NonCancellable) {
+            try {
+                active.filter { it.process.isAlive }.forEach { record ->
+                    synchronized(record) { if (record.state == "running") record.state = "stopped" }
+                    terminate(record)
+                }
+                active.forEach { withTimeoutOrNull(2_000) { it.exited.await() } }
+                scope.cancel()
+            } finally {
+                closeCompleted.complete(Unit)
+            }
+        }
     }
 
-    private fun find(id: String) = records[id] ?: throw ToolException("NOT_FOUND", "Unknown process id")
+    private fun find(id: String): Record = synchronized(lifecycleLock) {
+        records[id] ?: if (id in expiredIds) {
+            throw ToolException("PROCESS_EXPIRED", "Output for this completed process has expired", recovery = "Output is no longer retained. Consult the journal or saved artifacts; do not repeat a side-effecting command to recover output")
+        } else {
+            throw ToolException("NOT_FOUND", "Unknown process id")
+        }
+    }
+
+    private fun retainFinished(record: Record) = synchronized(lifecycleLock) {
+        if (records[record.id] !== record || record.process.isAlive) return@synchronized
+        finishedOrder.remove(record.id)
+        finishedOrder.addLast(record.id)
+        pruneFinishedLocked()
+    }
+
+    private fun pruneFinishedLocked() {
+        while (finishedOrder.size > maxRetainedFinished) {
+            val id = finishedOrder.removeFirst()
+            val record = records[id] ?: continue
+            if (record.process.isAlive || !record.exited.isCompleted) continue
+            records.remove(id, record)
+            expiredIds.remove(id)
+            expiredIds.add(id)
+            while (expiredIds.size > maxExpiredIds) expiredIds.remove(expiredIds.first())
+        }
+    }
     private fun page(record: Record, cursor: Long): ProcessOutput = synchronized(record) {
         val start = cursor.coerceAtMost(record.text.length.toLong()).toInt()
         val end = (start + 16_384).coerceAtMost(record.text.length)
