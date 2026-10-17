@@ -583,6 +583,32 @@ class DesktopController(
         catch (_: Exception) { showError("Откат не выполнен. Файл мог измениться.") }
     }
 
+    /** Outcome of rewinding a turn: how many changes were undone and why the others were not. */
+    data class RewindResult(val undone: Int, val failed: List<String>)
+
+    /**
+     * Undoes a whole turn's file changes, newest first. Each undo still checks that the file is exactly as the
+     * change left it, so a file edited afterwards is refused (and so are its older changes) instead of overwritten.
+     */
+    suspend fun rewindTurn(changeIds: List<String>): RewindResult = commands.withLock {
+        if (busy()) return@withLock RewindResult(0, listOf("Задача ещё выполняется"))
+        if (changeIds.isEmpty()) return@withLock RewindResult(0, emptyList())
+        val w = try { workspaceService ?: run { buildEngine(); workspaceService!! } } catch (_: Exception) { return@withLock RewindResult(0, listOf("Папка проекта недоступна")) }
+        var undone = 0
+        val failed = mutableListOf<String>()
+        for (id in changeIds.asReversed()) {
+            try {
+                val change = w.undo(id)
+                undone++
+                _state.update { it.copy(run = it.run.copy(activities = it.run.activities + Activity(name = "undo", target = change.path, status = "completed", diff = change.diff))) }
+            } catch (e: ToolException) { failed += "${e.code}: ${e.message}" }
+            catch (e: Exception) { failed += "Откат не выполнен (${e.javaClass.simpleName}: ${e.message?.take(160)})" }
+        }
+        runCatching { events.append(_state.value.sessionId, "turn.rewound", buildJsonObject { put("requested", changeIds.size); put("undone", undone); put("failed", failed.size) }) }
+        if (failed.isNotEmpty()) showError("Откачено $undone из ${changeIds.size}. Не откатилось: ${failed.distinct().take(3).joinToString("; ")}")
+        RewindResult(undone, failed)
+    }
+
     /** Per-session trace of model rounds under the app data directory. */
     fun tracePath(sessionId: String): Path = directory.resolve("traces").resolve("$sessionId.jsonl")
     private fun traceSink(sessionId: String): RunTraceSink { val file = TraceFile(tracePath(sessionId)); return RunTraceSink { file.append(it) } }

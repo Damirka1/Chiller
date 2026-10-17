@@ -140,6 +140,8 @@ fun ChillerApp(
     openSettingsOnStart: String? = null,
     /** Model comparison page content; null hides the feature. */
     comparison: ComparisonModel? = null,
+    /** Undo all file changes of one turn (change ids oldest first). */
+    onRewindTurn: (List<String>) -> Unit = {},
     openComparisonOnStart: Boolean = false,
     onOpenTrace: (() -> Unit)? = null,
     /** macOS full-window content: the native title bar is transparent and the traffic lights float over the app. */
@@ -369,7 +371,8 @@ fun ChillerApp(
                                             onEdit = { index, text -> if (!active) targetMessage(index, text)?.let { messageEditTarget = it; messageEditText = text; messageActionError = null } },
                                             onDelete = { index, text -> if (!active) targetMessage(index, text)?.let { messageDeleteTarget = it; messageActionError = null } },
                                             onRecoverInterrupted = onRecoverInterrupted,
-                                            modifier = Modifier.weight(1f).fillMaxWidth())
+                                            modifier = Modifier.weight(1f).fillMaxWidth(),
+                                            onRewind = { ids -> if (!active) onRewindTurn(ids) })
                                     }
                                     Box(Modifier.fillMaxWidth().padding(horizontal = if (compact) 20.dp else 32.dp).padding(top = 6.dp, bottom = 18.dp), contentAlignment = Alignment.Center) {
                                         Column(Modifier.widthIn(max = 760.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1020,7 +1023,7 @@ private fun FolderToolbarChip(workspace: String?, onChoose: () -> Unit, enabled:
 }
 
 @Composable
-private fun Conversation(state: RunState, reduced: Boolean, onAnswer: (String) -> Unit, onUndo: (String) -> Unit, canUndo: Boolean, onRestoreDraft: (String) -> Unit, onPreviewFile: suspend (String) -> ByteArray?, onRevealFile: (String) -> Unit, onEdit: (Int, String) -> Unit, onDelete: (Int, String) -> Unit, onRecoverInterrupted: () -> Unit, modifier: Modifier) {
+private fun Conversation(state: RunState, reduced: Boolean, onAnswer: (String) -> Unit, onUndo: (String) -> Unit, canUndo: Boolean, onRestoreDraft: (String) -> Unit, onPreviewFile: suspend (String) -> ByteArray?, onRevealFile: (String) -> Unit, onEdit: (Int, String) -> Unit, onDelete: (Int, String) -> Unit, onRecoverInterrupted: () -> Unit, modifier: Modifier, onRewind: (List<String>) -> Unit = {}) {
     val c = LocalChillerPalette.current
     val scroll = rememberLazyListState()
     val scope = rememberCoroutineScope()
@@ -1059,7 +1062,9 @@ private fun Conversation(state: RunState, reduced: Boolean, onAnswer: (String) -
                         if (!entry.message.content.isNullOrBlank() || entry.message.attachments.isNotEmpty()) Message(entry.message, showHeader = !(entry.message.role == "assistant" && previous == "assistant"),
                             onPreviewFile = onPreviewFile,
                             onEdit = if (canUndo) ({ _ -> onEdit(entry.index, entry.message.content.orEmpty()) }) else null,
-                            onDelete = if (canUndo) ({ _ -> onDelete(entry.index, entry.message.content.orEmpty()) }) else null)
+                            onDelete = if (canUndo) ({ _ -> onDelete(entry.index, entry.message.content.orEmpty()) }) else null,
+                            rewindCount = if (entry.message.role == "user" && canUndo) turnChangeIds(state.messages, state.activities, entry.index).size else 0,
+                            onRewind = if (canUndo) ({ onRewind(turnChangeIds(state.messages, state.activities, entry.index)) }) else null)
                         ToolGroup(entry.activities, reduced, onUndo, canUndo, onPreviewFile, onRevealFile)
                     }
                 }
@@ -1144,7 +1149,8 @@ private fun Hint(text: String, content: @Composable () -> Unit) {
 }
 
 @Composable
-private fun Message(message: AgentMessage, showHeader: Boolean = true, streaming: Boolean = false, onEdit: ((String) -> Unit)? = null, onDelete: ((String) -> Unit)? = null, onPreviewFile: suspend (String) -> ByteArray? = { null }) {
+private fun Message(message: AgentMessage, showHeader: Boolean = true, streaming: Boolean = false, onEdit: ((String) -> Unit)? = null, onDelete: ((String) -> Unit)? = null, onPreviewFile: suspend (String) -> ByteArray? = { null },
+    rewindCount: Int = 0, onRewind: (() -> Unit)? = null) {
     val content = message.content.orEmpty()
     val c = LocalChillerPalette.current
     if (message.role == "user") {
@@ -1155,7 +1161,14 @@ private fun Message(message: AgentMessage, showHeader: Boolean = true, streaming
         var hasFocus by remember { mutableStateOf(false) }
         Row(Modifier.fillMaxWidth().padding(start = 64.dp).hoverable(interaction).onFocusChanged { hasFocus = it.hasFocus }.focusable(), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.Bottom) {
             androidx.compose.animation.AnimatedVisibility(hovered || hasFocus, enter = fadeIn(tween(120)), exit = fadeOut(tween(120))) {
-                Row(Modifier.padding(end = 6.dp)) {
+                Row(Modifier.padding(end = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    // Rewind undoes every file change of this turn; the first click asks, the second does it.
+                    if (onRewind != null && rewindCount > 0) {
+                        var confirm by remember(rewindCount) { mutableStateOf(false) }
+                        LaunchedEffect(confirm) { if (confirm) { kotlinx.coroutines.delay(4000); confirm = false } }
+                        if (confirm) ChillerControl("Откатить $rewindCount ${plural(rewindCount, "правку", "правки", "правок")}?", { confirm = false; onRewind() }, icon = Icons.Outlined.History, style = ControlStyle.OUTLINE)
+                        else ChillerIconButton(Icons.Outlined.History, "Откатить изменения файлов этого хода", { confirm = true }, Modifier.size(26.dp))
+                    }
                     onEdit?.let { ChillerIconButton(Icons.Outlined.Edit, "Изменить сообщение", { it(content) }, Modifier.size(26.dp)) }
                     onDelete?.let { ChillerIconButton(Icons.Outlined.DeleteOutline, "Удалить ход диалога", { it(content) }, Modifier.size(26.dp)) }
                     ChillerIconButton(Icons.Outlined.ContentCopy, "Копировать", { clipboard.setText(AnnotatedString(content)) }, Modifier.size(26.dp))

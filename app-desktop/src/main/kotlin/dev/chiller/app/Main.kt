@@ -129,6 +129,7 @@ fun main() = application {
                 version = dev.chiller.app.di.BuildInfo.version, build = BuildStamp.value, commit = dev.chiller.app.di.BuildInfo.commit,
                 runtime = dev.chiller.app.di.BuildInfo.runtime, os = dev.chiller.app.di.BuildInfo.os,
             ),
+            onRewindTurn = { ids -> scope.launch { controller.rewindTurn(ids) } },
             comparison = dev.chiller.app.ui.ComparisonModel(
                 comparisonState, state.settings.baseUrl,
                 (listOf(state.settings.model) + state.catalog.models.map { it.id } + controller.configuredModels()).filter { it.isNotBlank() }.distinct(),

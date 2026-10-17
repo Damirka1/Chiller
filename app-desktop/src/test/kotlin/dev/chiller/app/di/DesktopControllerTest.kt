@@ -149,6 +149,30 @@ class DesktopControllerTest {
         } finally { controller.close() }
     }
 
+    @Test fun `rewinding the demo turn restores every file it changed`() = runBlocking {
+        val controller = DesktopController(directory.resolve("rewind"), initialCredential = null)
+        try {
+            controller.initialize()
+            controller.startDemo()
+            val root = java.nio.file.Path.of(controller.state.value.settings.workspace!!)
+            val original = java.nio.file.Files.list(root).use { files -> files.toList() }.associate { it.fileName.toString() to java.nio.file.Files.readString(it) }
+            kotlinx.coroutines.withTimeout(90_000) {
+                while (controller.state.value.run.status !in setOf("completed", "failed")) {
+                    if (controller.state.value.run.question != null) controller.answer("Да, добавь")
+                    kotlinx.coroutines.delay(50)
+                }
+            }
+            val run = controller.state.value.run
+            val userIndex = run.messages.indexOfFirst { it.role == "user" }
+            val ids = dev.chiller.app.ui.turnChangeIds(run.messages, run.activities, userIndex)
+            assertTrue(ids.size >= 6, "demo makes at least six file changes, got ${ids.size}")
+            val result = controller.rewindTurn(ids)
+            assertEquals(ids.size, result.undone, result.failed.joinToString())
+            val after = java.nio.file.Files.list(root).use { files -> files.toList() }.filter { java.nio.file.Files.isRegularFile(it) }.associate { it.fileName.toString() to java.nio.file.Files.readString(it) }
+            assertEquals(original, after, "the project is back to its state before the turn")
+        } finally { controller.close() }
+    }
+
     @Test fun `new dialog after the demo returns to the chosen project and close leaves it`() = runBlocking {
         val project = java.nio.file.Files.createDirectories(directory.resolve("work/app")).toRealPath()
         val controller = DesktopController(directory.resolve("data"), initialCredential = null)
