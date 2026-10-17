@@ -42,7 +42,7 @@ import dev.chiller.design.*
 /** Everything the settings page shows. Keys themselves are never part of it — only where they came from. */
 data class SettingsData(
     val baseUrl: String, val model: String, val thinking: Boolean, val keyConfigured: Boolean,
-    val keySources: Map<String, String> = emptyMap(),
+    val keySources: Map<String, String> = emptyMap(), val secureStorageSupported: Boolean = false,
     val connection: ConnectionState = ConnectionState(), val catalog: ModelCatalogState = ModelCatalogState(),
     val preferences: UiPreferences = UiPreferences(), val allowProcesses: Boolean = false, val agent: AgentOptions = AgentOptions(),
     val recent: List<String> = emptyList(), val dataDir: String = "", val demoCount: Int = 0,
@@ -55,6 +55,7 @@ class SettingsActions(
     val preferences: (UiPreferences) -> Unit = {}, val allowProcesses: (Boolean) -> Unit = {}, val agent: (AgentOptions) -> Unit = {},
     val removeRecent: (String) -> Unit = {}, val openPath: (String) -> Unit = {}, val openUrl: (String) -> Unit = {},
     val deleteDemos: () -> Unit = {}, val close: () -> Unit = {},
+    val saveCredential: () -> Unit = {}, val deleteCredential: () -> Unit = {},
 )
 
 private enum class Section(val title: String, val icon: ImageVector) {
@@ -115,6 +116,7 @@ private fun ConnectionSection(data: SettingsData, actions: SettingsActions) {
                     val status = when {
                         p.keyless -> "без ключа" to c.muted
                         data.keySources[origin] == "env" -> "ключ из .env" to c.positive
+                        data.keySources[origin] == "keychain" -> "сохранён в Keychain" to c.positive
                         data.keySources[origin] == "ui" -> "ключ задан" to c.positive
                         else -> "нужен ключ" to c.faint
                     }
@@ -137,28 +139,36 @@ private fun ConnectionSection(data: SettingsData, actions: SettingsActions) {
                 Text(catalogLine(data.catalog, data.keyConfigured), color = c.faint, fontSize = 11.sp, modifier = Modifier.weight(1f))
                 ChillerControl("Загрузить список моделей", actions.refreshModels, icon = Icons.Outlined.Refresh, enabled = data.catalog.status != "loading")
             }
-            if (data.catalog.models.isNotEmpty()) ChipFlow(data.catalog.models.map { it.id }.take(24), model) { model = it }
-        } else Text("Список моделей можно загрузить после применения адреса.", color = c.faint, fontSize = 11.sp)
+            if (data.catalog.models.isNotEmpty()) ChipFlow(data.catalog.models.map { it.id }.take(24), model, data.catalog.models.associate { it.id to (it.displayName?.let { name -> "$name · ${it.id}" } ?: it.id) }) { model = it }
+        } else Text("Примените адрес и ключ, затем загрузите список моделей. ID заранее знать не нужно.", color = c.faint, fontSize = 11.sp)
         val keyHint = when {
             preset?.keyless == true || isLoopback(url) -> "Локальный сервер: ключ не нужен"
             data.keySources[formOrigin] == "env" -> "Ключ загружен из .env или переменной окружения. Новый заменит его до выхода"
+            data.keySources[formOrigin] == "keychain" -> "Ключ сохранён в macOS Keychain. Новый заменит его только после сохранения"
             data.keySources[formOrigin] == "ui" -> "Ключ задан. Пустое поле оставляет его"
             else -> "Введите ключ" + (preset?.keyVariables?.firstOrNull()?.let { " или задайте $it в .env" } ?: "")
         }
         ChillerField(key, { key = it }, "API-ключ", keyHint, secret = true)
+        if (originOf(data.baseUrl) == formOrigin && data.keyConfigured && !isLoopback(url)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (data.secureStorageSupported) ChillerControl("Сохранить текущий ключ в Keychain", actions.saveCredential, enabled = !changed)
+                ChillerControl("Удалить текущий ключ", actions.deleteCredential, enabled = !changed)
+            }
+        }
+        Text(if (data.secureStorageSupported) "Применить — использовать до выхода. Для постоянного хранения нажмите «Сохранить текущий ключ в Keychain»." else "На этой платформе ключ из поля действует до выхода. Для запуска используйте переменную окружения или .env.", color = c.faint, fontSize = 11.sp)
         preset?.keysUrl?.let { link -> ChillerControl("Где взять ключ: ${link.removePrefix("https://")}", { actions.openUrl(link) }, icon = Icons.AutoMirrored.Outlined.OpenInNew) }
         SettingToggle("Рассуждения модели", "Если провайдер поддерживает режим thinking", thinking) { thinking = it }
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            ChillerControl("Применить", { actions.applyConnection(url.trim(), model.trim(), thinking, key.takeIf { it.isNotBlank() }); key = "" }, style = ControlStyle.PRIMARY, enabled = changed && url.isNotBlank() && model.isNotBlank())
+            ChillerControl("Применить", { actions.applyConnection(url.trim(), model.trim(), thinking, key.takeIf { it.isNotBlank() }); key = "" }, style = ControlStyle.PRIMARY, enabled = changed && url.isNotBlank() )
             if (data.connection.status == "checking") ChillerControl("Отменить проверку", actions.cancelCheck, style = ControlStyle.OUTLINE)
-            else ChillerControl("Проверить подключение", actions.checkConnection, style = ControlStyle.OUTLINE, enabled = !changed && data.keyConfigured)
+            else ChillerControl("Проверить подключение", actions.checkConnection, style = ControlStyle.OUTLINE, enabled = !changed && data.keyConfigured && model.isNotBlank())
         }
         val (line, color) = connectionSummary(data.connection, data.keyConfigured)
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(7.dp).clip(CircleShape).background(color)); Spacer(Modifier.width(8.dp))
             Text(if (changed) "Изменения не применены" else data.connection.message.ifBlank { line }, color = if (data.connection.status == "failed" && !changed) c.negative else c.muted, fontSize = 12.sp)
         }
-        Text("Применение начинает новый диалог. Проверка отправляет один короткий запрос без файлов и инструментов. Ключи хранятся в памяти до выхода; из .env и переменных окружения читаются при запуске. Вживую в Chiller проверен только DeepSeek.", color = c.faint, fontSize = 11.sp, lineHeight = 17.sp)
+        Text("Применение начинает новый диалог. Проверка отправляет один короткий запрос без файлов и инструментов. Ключ действует до выхода, если не сохранён явно в Keychain; из .env и переменных окружения читается при запуске. Вживую в Chiller проверен только DeepSeek.", color = c.faint, fontSize = 11.sp, lineHeight = 17.sp)
     }
 }
 
@@ -188,14 +198,14 @@ private fun PresetCard(preset: ProviderPreset, status: Pair<String, Color>, sele
 }
 
 @Composable
-private fun ChipFlow(items: List<String>, selected: String, onPick: (String) -> Unit) {
+private fun ChipFlow(items: List<String>, selected: String, labels: Map<String, String> = emptyMap(), onPick: (String) -> Unit) {
     val c = LocalChillerPalette.current
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         items.chunked(3).forEach { row ->
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 row.forEach { id ->
                     val active = id == selected
-                    Text(id, color = if (active) c.text else c.muted, fontSize = 11.sp, fontFamily = FontFamily.Monospace, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    Text(labels[id] ?: id, color = if (active) c.text else c.muted, fontSize = 11.sp, fontFamily = FontFamily.Monospace, maxLines = 1, overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f).clip(RoundedCornerShape(6.dp)).background(if (active) c.selected else c.sidebar)
                             .pointerHoverIcon(PointerIcon.Hand).clickable { onPick(id) }.padding(horizontal = 8.dp, vertical = 5.dp))
                 }
@@ -219,6 +229,15 @@ private fun AgentSection(data: SettingsData, actions: SettingsActions) {
             ChillerIconButton(Icons.Outlined.Remove, "Меньше", { actions.agent(a.copy(maxRounds = a.maxRounds - 4)) }, enabled = a.maxRounds > 4)
             Text("${a.maxRounds}", color = c.text, fontSize = 14.sp, fontWeight = FontWeight.Medium, modifier = Modifier.widthIn(min = 36.dp), textAlign = androidx.compose.ui.text.style.TextAlign.Center)
             ChillerIconButton(Icons.Outlined.Add, "Больше", { actions.agent(a.copy(maxRounds = a.maxRounds + 4)) }, enabled = a.maxRounds < 60)
+        }
+        Text("Общий бюджет: основной агент и все помощники", color = c.text, fontSize = 13.sp)
+        Text("Запросов за задачу", color = c.faint, fontSize = 11.sp)
+        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            listOf(24, 48, 96).forEach { v -> ChillerControl("$v", { actions.agent(a.copy(maxRequests = v)) }, style = if (a.maxRequests == v) ControlStyle.SELECTED else ControlStyle.QUIET) }
+        }
+        Text("Выходных токенов суммарно (не денежный лимит)", color = c.faint, fontSize = 11.sp)
+        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            listOf(16384, 32768, 65536).forEach { v -> ChillerControl(formatK(v), { actions.agent(a.copy(totalOutputTokens = v)) }, style = if (a.totalOutputTokens == v) ControlStyle.SELECTED else ControlStyle.QUIET) }
         }
         Text("Длина ответа за шаг, токенов", color = c.text, fontSize = 13.sp)
         Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {

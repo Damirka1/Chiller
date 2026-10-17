@@ -24,9 +24,10 @@ import javax.swing.JFileChooser
 
 fun main() = application {
     val scope = rememberCoroutineScope()
-    val directory = remember { System.getenv("CHILLER_DATA_DIR")?.let(Path::of) ?: Path.of(System.getProperty("user.home"), ".chiller") }
+    val directory = remember { System.getenv("CHILLER_DATA_DIR")?.let(Path::of) ?: if (java.lang.Boolean.getBoolean("chiller.offlinePreview")) Path.of(System.getProperty("java.io.tmpdir"), "chiller-preview") else Path.of(System.getProperty("user.home"), ".chiller") }
     val controller = remember { DesktopController(directory, if (java.lang.Boolean.getBoolean("chiller.offlinePreview")) null else LocalCredentials.load(),
-        namedKeys = if (java.lang.Boolean.getBoolean("chiller.offlinePreview")) emptyMap() else LocalCredentials.loadNamed(dev.chiller.app.di.ProviderPresets.keyVariables)) }
+        namedKeys = if (java.lang.Boolean.getBoolean("chiller.offlinePreview")) emptyMap() else LocalCredentials.loadNamed(dev.chiller.app.di.ProviderPresets.keyVariables),
+        credentialStore = if (java.lang.Boolean.getBoolean("chiller.offlinePreview")) dev.chiller.app.di.CredentialStore.None else dev.chiller.app.di.CredentialStore.system()) }
     val state by controller.state.collectAsState()
     val actions = remember { MutableSharedFlow<DesktopAction>(extraBufferCapacity = 16) }
     val mac = remember { System.getProperty("os.name").startsWith("Mac") }
@@ -108,12 +109,14 @@ fun main() = application {
             subagents = state.subagents, onCancelSubagent = { id -> scope.launch { controller.cancelSubagent(id) } },
             settingsData = dev.chiller.app.ui.SettingsData(
                 state.settings.baseUrl, state.settings.model, state.settings.thinking, state.apiKeyConfigured,
-                keySources = controller.keySources(), connection = state.connection, catalog = state.catalog, allowProcesses = state.allowProcesses,
+                secureStorageSupported = controller.secureStorageSupported, keySources = controller.keySources(), connection = state.connection, catalog = state.catalog, allowProcesses = state.allowProcesses,
                 agent = state.settings.agent, recent = state.settings.recentWorkspaces, dataDir = controller.dataDirectory().toString(), demoCount = demoCount,
                 version = dev.chiller.app.di.BuildInfo.version, build = BuildStamp.value, commit = dev.chiller.app.di.BuildInfo.commit,
                 runtime = dev.chiller.app.di.BuildInfo.runtime, os = dev.chiller.app.di.BuildInfo.os,
             ),
             settingsActions = dev.chiller.app.ui.SettingsActions(
+                saveCredential = { scope.launch { controller.saveCredential() } },
+                deleteCredential = { scope.launch { controller.deleteCredential() } },
                 agent = { options -> scope.launch { controller.updateAgentOptions(options) } },
                 removeRecent = { path -> scope.launch { controller.removeRecentWorkspace(path) } },
                 openPath = { path -> runCatching { java.io.File(path).also { it.mkdirs() }.let(java.awt.Desktop.getDesktop()::open) } },

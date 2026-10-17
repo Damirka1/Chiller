@@ -114,9 +114,9 @@ internal fun StartScreen(
                 Text("Что сделаем в $name?", fontSize = 24.sp, lineHeight = 32.sp, letterSpacing = (-.6).sp, fontWeight = FontWeight.Medium, color = c.text, textAlign = TextAlign.Center, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 Spacer(Modifier.height(18.dp))
                 val overview by produceState<ProjectOverview?>(null, workspacePath) { value = withContext(Dispatchers.IO) { runCatching { inspectProject(Path.of(workspacePath)) }.getOrNull() } }
-                ProjectCard(workspacePath, overview, modelName, connectionLine, connectionColor, onOpenFolder, onCloseProject)
-                Spacer(Modifier.height(18.dp))
-                SectionLabel("С чего начать")
+                ProjectCard(workspacePath, overview, onOpenFolder, onCloseProject)
+                Spacer(Modifier.height(14.dp))
+                SectionLabel("Начать с задачи")
                 val tasks = overview?.let(::starters) ?: starters(ProjectOverview(name, workspacePath, null, emptyList(), null, 0))
                 tasks.chunked(2).forEach { pair ->
                     Row(Modifier.fillMaxWidth().padding(bottom = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -236,7 +236,7 @@ private fun ShortcutHints() {
 }
 
 @Composable
-private fun ProjectCard(path: String, overview: ProjectOverview?, modelName: String, connectionLine: String, connectionColor: Color, onChange: () -> Unit, onClose: () -> Unit) {
+private fun ProjectCard(path: String, overview: ProjectOverview?, onChange: () -> Unit, onClose: () -> Unit) {
     val c = LocalChillerPalette.current
     val shape = RoundedCornerShape(12.dp)
     Column(Modifier.fillMaxWidth().clip(shape).background(c.sidebar.copy(alpha = .6f)).border(1.dp, c.border, shape).padding(horizontal = 16.dp, vertical = 14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -261,9 +261,6 @@ private fun ProjectCard(path: String, overview: ProjectOverview?, modelName: Str
                     Fact(Icons.Outlined.Description, overview.files?.let { "$it ${plural(it, "файл", "файла", "файлов")}" } ?: "больше ${overview.limit} файлов")
                 }
             }
-            Spacer(Modifier.weight(1f))
-            Box(Modifier.size(7.dp).clip(RoundedCornerShape(50)).background(connectionColor))
-            Text("$modelName · $connectionLine", color = c.muted, fontSize = 11.sp, lineHeight = 16.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
 }

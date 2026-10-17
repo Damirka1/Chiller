@@ -1,5 +1,7 @@
 plugins { id("org.jetbrains.compose"); id("org.jetbrains.kotlin.plugin.compose") }
 dependencies {
+    // JNA 5.6.0 (Apache-2.0/LGPL-2.1 dual license): macOS Security.framework credential storage.
+    implementation("net.java.dev.jna:jna:5.6.0")
     implementation("io.ktor:ktor-client-core:3.4.1")
     implementation("io.ktor:ktor-client-cio:3.4.1")
     implementation(project(":contracts"))

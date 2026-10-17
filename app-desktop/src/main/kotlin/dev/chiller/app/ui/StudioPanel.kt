@@ -34,6 +34,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import dev.chiller.contracts.*
 import dev.chiller.design.*
 
@@ -116,6 +118,7 @@ private fun ChangesTab(files: List<FileChanges>, onUndo: (String) -> Unit, canUn
     val c = LocalChillerPalette.current
     if (files.isEmpty()) { EmptyState(Icons.Outlined.Difference, "Пока без изменений", "Здесь появятся файлы, которые агент создал, изменил или удалил, с диффом и отменой.", modifier); return }
     var selected by remember { mutableStateOf<String?>(null) }
+    var expandedDiff by remember { mutableStateOf<Pair<String, String>?>(null) }
     val current = files.firstOrNull { it.path == selected } ?: files.last()
     val (added, removed) = files.map { it.stats }.fold(0 to 0) { a, b -> a.first + b.first to a.second + b.second }
     Column(modifier) {
@@ -139,12 +142,25 @@ private fun ChangesTab(files: List<FileChanges>, onUndo: (String) -> Unit, canUn
                     Row(Modifier.fillMaxWidth().background(c.sidebar.copy(alpha = .6f)).padding(start = 10.dp, end = 4.dp, top = 2.dp, bottom = 2.dp), verticalAlignment = Alignment.CenterVertically) {
                         Text("${index + 1}. ${toolLabel(change.name)}", color = c.muted, fontSize = 11.sp, modifier = Modifier.weight(1f))
                         change.diff?.let { val (a, r) = diffStats(it); DiffStat(a, r); Spacer(Modifier.width(6.dp)) }
+                        change.diff?.let { ChillerIconButton(Icons.Outlined.OpenInFull, "Развернуть дифф", { expandedDiff = current.path to it }, Modifier.size(26.dp)) }
                         val id = if (canUndo) changeId(change.output) else null
                         if (id != null) ChillerControl("Отменить", { onUndo(id) }, icon = Icons.AutoMirrored.Outlined.Undo)
                         else Spacer(Modifier.height(28.dp))
                     }
                     change.diff?.let { Diff(it) } ?: Text("Без диффа", color = c.faint, fontSize = 11.sp, modifier = Modifier.padding(10.dp))
                 }
+            }
+        }
+    }
+    expandedDiff?.let { (path, diff) ->
+        Dialog(onDismissRequest = { expandedDiff = null }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+            Column(Modifier.fillMaxWidth(.88f).fillMaxHeight(.86f).clip(RoundedCornerShape(14.dp)).background(c.surface).border(1.dp, c.border, RoundedCornerShape(14.dp))) {
+                Row(Modifier.fillMaxWidth().padding(start = 18.dp, end = 10.dp, top = 10.dp, bottom = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(path, color = c.text, fontSize = 13.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                    ChillerIconButton(Icons.Outlined.Close, "Закрыть дифф", { expandedDiff = null })
+                }
+                Box(Modifier.height(1.dp).fillMaxWidth().background(c.border))
+                Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(12.dp)) { Diff(diff) }
             }
         }
     }

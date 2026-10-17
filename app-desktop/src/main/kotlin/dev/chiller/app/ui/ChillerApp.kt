@@ -146,6 +146,7 @@ fun ChillerApp(
     val density = LocalDensity.current
     val inspectorResize = rememberDraggableState { delta -> view = view.copy(inspectorWidth = (inspectorWidth - with(density) { delta.toDp() }).value.coerceIn(280f, 480f)) }
     val active = pendingSend || state.status in setOf("preparing", "streaming", "executing")
+    val demoCompleted = isCompletedDemo(isDemo, state.status)
     val empty = state.messages.none { it.role in setOf("user", "assistant") } && state.activities.isEmpty() && state.error == null
     val contextNote = state.contextEstimatedTokens?.let { tokens -> "≈ $tokens токенов${if (state.droppedContextMessages > 0) " · контекст сокращён" else ""}" }
     val send = {
@@ -219,6 +220,7 @@ fun ChillerApp(
                                 checkConnection = onCheckConnection, cancelCheck = onCancelConnection, refreshModels = onRefreshModels,
                                 preferences = updateView, allowProcesses = onAllowProcessesChange, agent = base.agent,
                                 removeRecent = base.removeRecent, openPath = base.openPath, openUrl = base.openUrl, deleteDemos = base.deleteDemos,
+                                saveCredential = base.saveCredential, deleteCredential = base.deleteCredential,
                                 close = { settings = false },
                             ), Modifier.weight(1f).fillMaxWidth(), initial = openSettingsOnStart)
                         } else
@@ -249,7 +251,17 @@ fun ChillerApp(
                                     Box(Modifier.fillMaxWidth().padding(horizontal = if (compact) 20.dp else 32.dp).padding(top = 6.dp, bottom = 18.dp), contentAlignment = Alignment.Center) {
                                         Column(Modifier.widthIn(max = 760.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                             sendError?.let { Text(it, color = c.negative, fontSize = 12.sp, lineHeight = 18.sp) }
-                                            Composer(draft, updateDraft, mode, { mode = it }, providerModel, active, send, onStop, { settings = true }, Modifier.fillMaxWidth(), apiKeyConfigured, models, { selected ->
+                                            if (demoCompleted) {
+                                                Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(c.sidebar).border(1.dp, c.border, RoundedCornerShape(12.dp)).padding(horizontal = 14.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                                                    Icon(Icons.Outlined.CheckCircleOutline, null, Modifier.size(17.dp), tint = c.positive)
+                                                    Spacer(Modifier.width(9.dp))
+                                                    Column(Modifier.weight(1f)) {
+                                                        Text(if (state.status == "completed") "Демо завершено" else "Демо остановлено", color = c.text, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                                                        Text("История учебная и не отправляет новые запросы", color = c.muted, fontSize = 11.sp, lineHeight = 16.sp)
+                                                    }
+                                                    ChillerControl("Начать обычный диалог", { if (!active) onNewSession() }, icon = Icons.AutoMirrored.Outlined.ArrowForward, style = ControlStyle.PRIMARY, enabled = !active)
+                                                }
+                                            } else Composer(draft, updateDraft, mode, { mode = it }, providerModel, active, send, onStop, { settings = true }, Modifier.fillMaxWidth(), apiKeyConfigured, models, { selected ->
                                                 val oldDraft = draft
                                                 scope.launch { onSelectModel(selected)?.let { id -> drafts.putIfAbsent(id, oldDraft) } }
                                             }, { composing = it }, pendingSend, contextNote, catalog, onRefreshModels, onCancelCatalogRefresh, allowProcesses, onAllowProcessesChange,
@@ -457,8 +469,8 @@ private fun Composer(
     var modelClosedAt by remember { mutableStateOf(0L) }
     var field by remember { mutableStateOf(TextFieldValue(draft)) }
     LaunchedEffect(draft) { if (field.text != draft) { field = TextFieldValue(draft, TextRange(draft.length)); onComposition(false) } }
-    // Empty block: 24 dp folder chip + 26 dp text + 20 dp vertical padding + 6 dp gap + 32 dp toolbar = 108 dp. The text area grows to 144 dp
-    // (a ~200 dp block at normal type) and then scrolls; the block grows only with the toolbar at larger type.
+    val density = LocalDensity.current
+    var measuredFieldHeight by remember { mutableStateOf(26.dp) }
     val fieldMaxHeight = 144.dp
     val shape = RoundedCornerShape(16.dp)
     val borderColor by animateColorAsState(if (focused) c.muted.copy(alpha = .55f) else c.border, tween(if (LocalChillerReducedMotion.current) 0 else 120))
@@ -478,13 +490,10 @@ private fun Composer(
             val text = field.text.replaceRange(start, end, "@$path ")
             field = TextFieldValue(text, TextRange(start + path.length + 2)); onDraft(text)
         }
-        ContextChips(workspace, onChooseWorkspace, enabled = !running, mentioned = mentionedFiles(field.text, files), onRemoveMention = { path ->
-            val text = field.text.replace(Regex("(?<=^|\\s)@" + Regex.escape(path) + "\\s?"), "")
-            field = TextFieldValue(text, TextRange(text.length)); onDraft(text)
-        })
-        Box {
-            BasicTextField(field, { field = it; onDraft(it.text); onComposition(it.composition != null); if (mentionAt(it.text, it.selection.start)?.first != dismissedAt) dismissedAt = -1 },
-                modifier = Modifier.fillMaxWidth().heightIn(min = 26.dp, max = fieldMaxHeight).onFocusChanged { focused = it.isFocused }
+        val mentioned = mentionedFiles(field.text, files)
+        BasicTextField(field, { field = it; onDraft(it.text); onComposition(it.composition != null); if (mentionAt(it.text, it.selection.start)?.first != dismissedAt) dismissedAt = -1 },
+                onTextLayout = { layout -> measuredFieldHeight = with(density) { layout.size.height.toDp() }.coerceIn(26.dp, fieldMaxHeight) },
+                modifier = Modifier.fillMaxWidth().height(measuredFieldHeight.coerceIn(26.dp, fieldMaxHeight)).onFocusChanged { focused = it.isFocused }
                     .onPreviewKeyEvent { event ->
                         if (matches.isEmpty() || event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                         when (event.key) {
@@ -498,11 +507,16 @@ private fun Composer(
                 textStyle = TextStyle(color = c.text, fontSize = 14.sp, lineHeight = 22.sp, letterSpacing = 0.sp), cursorBrush = SolidColor(c.text),
                 decorationBox = { inner -> Box { if (draft.isEmpty()) Text(if (workspace != null) "Напишите задачу… @ — упомянуть файл" else "Напишите задачу…", color = c.faint, fontSize = 14.sp, lineHeight = 22.sp); inner() } },
             )
+        if (mentioned.isNotEmpty()) MentionChips(mentioned) { path ->
+            val text = field.text.replace(Regex("(?<=^|\\s)@" + Regex.escape(path) + "\\s?"), "")
+            field = TextFieldValue(text, TextRange(text.length)); onDraft(text)
+        }
+        Box {
             if (matches.isNotEmpty() && focused) MentionPopover(matches, highlight.coerceIn(0, matches.lastIndex), ::insert) { dismissedAt = mention?.first ?: -1 }
         }
-        Spacer(Modifier.height(6.dp))
+        Spacer(Modifier.height(4.dp))
         ComposerToolbar(mode, onMode, model, running, pending, draft.isNotBlank(), modelMenu, { if (System.currentTimeMillis() - modelClosedAt > 200) modelMenu = !modelMenu }, allowProcesses, onAllow, onSend, onStop,
-            connectionDot, contextTokens, catalog.models.firstOrNull { it.id == model }?.contextWindow) {
+            connectionDot, contextTokens, catalog.models.firstOrNull { it.id == model }?.contextWindow, workspace, onChooseWorkspace) {
             ModelPickerPopover(
                 model = model, models = models, configured = configured, running = running, catalog = catalog, contextNote = contextNote,
                 onRefresh = onRefreshModels, onCancelRefresh = onCancelCatalogRefresh,
@@ -514,11 +528,30 @@ private fun Composer(
 }
 
 @Composable
+private fun MentionChips(paths: List<String>, onRemove: (String) -> Unit) {
+    val c = LocalChillerPalette.current
+    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(top = 3.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        paths.take(6).forEach { path ->
+            Row(Modifier.clip(RoundedCornerShape(6.dp)).background(c.accent.copy(alpha = .10f)).padding(start = 7.dp, end = 3.dp, top = 3.dp, bottom = 3.dp), verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Outlined.Description, null, Modifier.size(12.dp), tint = c.accent)
+                Spacer(Modifier.width(4.dp))
+                Text(path.substringAfterLast('/'), color = c.text, fontSize = 11.sp, lineHeight = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Box(Modifier.padding(start = 2.dp).size(18.dp).clip(CircleShape).pointerHoverIcon(PointerIcon.Hand).clickable(role = Role.Button) { onRemove(path) }.semantics { contentDescription = "Убрать $path" }, contentAlignment = Alignment.Center) {
+                    Icon(Icons.Outlined.Close, null, Modifier.size(11.dp), tint = c.muted)
+                }
+            }
+        }
+        if (paths.size > 6) Text("+${paths.size - 6}", color = c.faint, fontSize = 11.sp, modifier = Modifier.align(Alignment.CenterVertically))
+    }
+}
+
+@Composable
 private fun ComposerToolbar(
     mode: ExecutionMode, onMode: (ExecutionMode) -> Unit, model: String, running: Boolean,
     pending: Boolean, draftNotEmpty: Boolean, modelMenuOpen: Boolean, onToggleModel: () -> Unit,
     allowProcesses: Boolean, onAllow: (Boolean) -> Unit, onSend: () -> Unit, onStop: () -> Unit,
     connectionDot: androidx.compose.ui.graphics.Color, contextTokens: Int?, contextWindow: Int?,
+    workspace: String?, onChooseWorkspace: () -> Unit,
     modelPopover: @Composable () -> Unit,
 ) {
     val c = LocalChillerPalette.current
@@ -557,6 +590,8 @@ private fun ComposerToolbar(
                     if (modelMenuOpen) modelPopover()
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
+                    FolderToolbarChip(workspace, onChooseWorkspace, enabled = !running)
+                    Spacer(Modifier.width(8.dp))
                     contextTokens?.let { ContextMeter(it, contextWindow); Spacer(Modifier.width(10.dp)) }
                     ChillerIconButton(if (running && !pending) Icons.Outlined.Stop else Icons.Outlined.ArrowUpward, if (pending) "Сохранение сообщения" else if (running) "Остановить" else "Отправить", if (running && !pending) onStop else onSend, enabled = !pending && (running || draftNotEmpty), primary = true)
                 }
@@ -587,6 +622,21 @@ private fun ComposerToolbar(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun FolderToolbarChip(workspace: String?, onChoose: () -> Unit, enabled: Boolean) {
+    val c = LocalChillerPalette.current
+    Row(
+        Modifier.widthIn(max = 150.dp).height(28.dp).clip(RoundedCornerShape(7.dp)).background(c.sidebar)
+            .pointerHoverIcon(PointerIcon.Hand).clickable(enabled = enabled, role = Role.Button, onClick = onChoose)
+            .padding(horizontal = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(if (workspace == null) Icons.Outlined.CreateNewFolder else Icons.Outlined.Folder, null, Modifier.size(13.dp), tint = if (workspace == null) c.faint else c.muted)
+        Spacer(Modifier.width(5.dp))
+        Text(workspace?.substringAfterLast('/') ?: "Выбрать папку", color = if (workspace == null) c.faint else c.muted, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 

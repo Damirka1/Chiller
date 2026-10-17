@@ -46,6 +46,11 @@ private val RUNNING = setOf("running", "executing", "preparing")
 private val SUCCESS = setOf("completed", "applied", "exited")
 private val FILE_EFFECTS = setOf("edit_file", "replace_text", "create_file", "move_file", "delete_file")
 
+internal fun compactToolActivities(activities: List<Activity>, expanded: Boolean): List<Activity> {
+    if (expanded || activities.size <= 1) return activities
+    return activities.filter { it.status in FAILED || it.name in setOf("ask_user", "request_approval") }.distinctBy { it.id }
+}
+
 /** One card per assistant turn: a summary header, then compact rows. Failures stay visible when collapsed. */
 @Composable
 internal fun ToolGroup(activities: List<Activity>, reduced: Boolean, onUndo: (String) -> Unit, canUndo: Boolean) {
@@ -54,7 +59,11 @@ internal fun ToolGroup(activities: List<Activity>, reduced: Boolean, onUndo: (St
     val shape = RoundedCornerShape(10.dp)
     val failed = activities.filter { it.status in FAILED }
     val running = activities.any { it.status in RUNNING }
-    var open by remember(activities.first().id) { mutableStateOf(activities.size <= 3) }
+    val questions = activities.filter { it.name in setOf("ask_user", "request_approval") }
+    var open by remember(activities.first().id) { mutableStateOf(running || questions.isNotEmpty()) }
+    LaunchedEffect(activities.map { it.status }, questions.map { it.id }) {
+        open = running || questions.isNotEmpty()
+    }
     Column(Modifier.fillMaxWidth().clip(shape).border(1.dp, c.border, shape)) {
         if (activities.size > 1) {
             HeaderRow(open, { open = !open }) {
@@ -66,7 +75,7 @@ internal fun ToolGroup(activities: List<Activity>, reduced: Boolean, onUndo: (St
                 if (failed.isNotEmpty()) Text("  ·  ошибок: ${failed.size}", color = c.negative, fontSize = 12.sp, lineHeight = 18.sp)
             }
         }
-        val visible = if (open || activities.size == 1) activities else failed
+        val visible = compactToolActivities(activities, open)
         visible.forEachIndexed { index, activity ->
             if (index > 0 || activities.size > 1) Box(Modifier.fillMaxWidth().height(1.dp).background(c.border.copy(alpha = .6f)))
             ToolRow(activity, reduced, onUndo, canUndo, framed = false)

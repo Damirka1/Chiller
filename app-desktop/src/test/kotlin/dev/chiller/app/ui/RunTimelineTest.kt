@@ -2,6 +2,7 @@ package dev.chiller.app.ui
 
 import dev.chiller.contracts.RunState
 import dev.chiller.contracts.TokenUsage
+import dev.chiller.contracts.Activity
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -22,5 +23,13 @@ class RunTimelineTest {
     @Test fun `diff stats ignore file headers`() {
         assertEquals(2 to 1, diffStats("--- a/x\n+++ b/x\n@@\n-old\n+new\n+more\n ctx"))
         assertEquals("1,5k", compactTokens(1_500))
+    }
+
+    @Test fun `compact tool groups retain errors and questions`() {
+        val read = Activity(id = "read", name = "read_file", target = "README.md", status = "completed")
+        val error = Activity(id = "error", name = "edit_file", target = "src/App.kt", status = "failed")
+        val question = Activity(id = "question", name = "ask_user", target = "", status = "completed")
+        assertEquals(listOf(error, question), compactToolActivities(listOf(read, error, question), expanded = false))
+        assertEquals(listOf(read, error, question), compactToolActivities(listOf(read, error, question), expanded = true))
     }
 }

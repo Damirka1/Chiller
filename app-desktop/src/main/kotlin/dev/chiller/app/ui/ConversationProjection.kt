@@ -5,6 +5,8 @@ import dev.chiller.contracts.*
 data class ConversationEntry(val index: Int, val message: AgentMessage, val activities: List<Activity>)
 data class ConversationProjection(val entries: List<ConversationEntry>, val unlinked: List<Activity>)
 
+fun isCompletedDemo(isDemo: Boolean, status: String): Boolean = isDemo && status in setOf("completed", "failed", "cancelled")
+
 fun projectConversation(messages: List<AgentMessage>, activities: List<Activity>): ConversationProjection {
     val pending = activities.filter { it.toolCallId != null }.groupBy { it.toolCallId }.mapValues { ArrayDeque(it.value) }
     val used = mutableSetOf<String>()

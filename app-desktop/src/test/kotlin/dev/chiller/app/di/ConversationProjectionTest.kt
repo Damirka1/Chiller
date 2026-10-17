@@ -1,6 +1,7 @@
 package dev.chiller.app.di
 
 import dev.chiller.app.ui.activityGroupLabel
+import dev.chiller.app.ui.isCompletedDemo
 import dev.chiller.app.ui.projectConversation
 import dev.chiller.contracts.Activity
 import dev.chiller.contracts.AgentMessage
@@ -9,6 +10,13 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 
 class ConversationProjectionTest {
+    @Test fun completedDemoIsDistinguishedFromNormalConversationStates() {
+        assertEquals(true, isCompletedDemo(true, "completed"))
+        assertEquals(true, isCompletedDemo(true, "failed"))
+        assertEquals(false, isCompletedDemo(false, "completed"))
+        assertEquals(false, isCompletedDemo(true, "streaming"))
+    }
+
     @Test fun mapsActivitiesByToolCallIdWhenActivityPositionDoesNotMatchMessagePosition() {
         val messages = listOf(
             AgentMessage("user", "Inspect these files"),

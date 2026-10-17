@@ -21,6 +21,44 @@ import kotlin.test.assertNull
 class DesktopControllerTest {
     @TempDir lateinit var directory: Path
 
+    @Test fun `endpoint can be applied without knowing a model and blank model cannot send`() = runBlocking {
+        val controller = DesktopController(directory, initialCredential = null)
+        try {
+            controller.initialize()
+            controller.configure("https://example.test/v1", "", false, "synthetic")
+            assertEquals("https://example.test/v1", controller.state.value.settings.baseUrl)
+            assertEquals("", controller.state.value.settings.model)
+            assertFalse(controller.send("hello", ExecutionMode.PLAN).accepted)
+            assertTrue(controller.state.value.run.messages.isEmpty())
+        } finally { controller.close() }
+    }
+
+    @Test fun `keychain saved key restores and deletes without writing secret to settings`() = runBlocking {
+        val entries = mutableMapOf<String, String>()
+        val store = object : CredentialStore {
+            override val supported = true
+            override fun load(origin: String) = entries[origin]
+            override fun save(origin: String, key: String) { entries[origin] = key }
+            override fun delete(origin: String) { entries.remove(origin) }
+        }
+        val first = DesktopController(directory, initialCredential = null, credentialStore = store)
+        try {
+            first.initialize()
+            first.configure("https://example.test/v1", "fixture", false, "fixture-secret")
+            assertTrue(first.saveCredential())
+            assertFalse(java.nio.file.Files.readString(directory.resolve("settings.json")).contains("fixture-secret"))
+        } finally { first.close() }
+        val second = DesktopController(directory, initialCredential = null, credentialStore = store)
+        try {
+            second.initialize()
+            assertTrue(second.state.value.apiKeyConfigured)
+            assertEquals("keychain", second.keySources()[originOf("https://example.test")])
+            assertTrue(second.deleteCredential())
+            assertFalse(second.state.value.apiKeyConfigured)
+            assertTrue(entries.isEmpty())
+        } finally { second.close() }
+    }
+
     @Test fun `history without a workspace can be viewed without creating an engine`() = runBlocking {
         val store = JsonlEventStore(directory.resolve("sessions"))
         val message = AgentMessage("user", "Offline fixture")
@@ -49,6 +87,7 @@ class DesktopControllerTest {
                 if (controller.state.value.run.question != null) controller.answer("Нет, не нужно")
                 kotlinx.coroutines.delay(50)
             } }
+            assertEquals("completed", controller.state.value.run.status)
             controller.newSession()
             assertEquals(project.toString(), controller.state.value.settings.workspace)
             assertFalse(demo in controller.state.value.settings.recentWorkspaces)
