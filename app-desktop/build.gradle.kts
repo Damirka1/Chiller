@@ -85,3 +85,14 @@ tasks.register<JavaExec>("richResultsPreview") {
     jvmArgs("--enable-native-access=ALL-UNNAMED")
     if (providers.gradleProperty("richResultsInteractive").isPresent) args("--interactive")
 }
+
+// README screenshots from the scripted demo through the real loop; no provider or key.
+tasks.register<JavaExec>("readmeShots") {
+    group = "documentation"
+    description = "Render README screenshots of the app (scripted demo, offscreen) into docs/images."
+    dependsOn(tasks.named("testClasses"))
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass.set("dev.chiller.app.ui.ReadmeShotsKt")
+    jvmArgs("--enable-native-access=ALL-UNNAMED")
+    workingDir = rootProject.projectDir
+}

@@ -238,3 +238,14 @@ User explicitly resumed after limits reset. Read-only audit began at14:43 Asia/A
 - Checks after merging master: 261 tests, 0 failures/errors/skipped; offline smoke with 14 task oracles passed.
 - Not verified: Gemma/vLLM (including structured-output extras), the new pages by hand in the running app (comparison page rendered offscreen; the banner and rewind button only through tests).
 
+
+## Paste, vision, loss metrics, smart context — 17 October (late night)
+
+- Branch feat/paste-vision-context. Instant paste cards with background encoding (4K image ~160 ms, off the UI thread).
+- Vision: image_url parts for the two newest user messages, at most four images per request, downscaled to 1568 px JPEG; Settings → Agent → Изображения (auto by model id / on / off); the composer note says whether the model will see images. Offline tests only: DeepSeek Flash does not accept images and the Gemma server is unavailable.
+- Eval loss metrics: repeated reads (same path and range with no write in between), failed file-changing calls and tool output characters, in the CLI line, report.md, summaries and the in-app comparison.
+- Compact profile: project map (files by folder with top-level declarations, ≤3000 chars) as a stable system message, find_symbols in the toolbox, prompt for fragment reads.
+- Live A/B, deepseek-flash, compact, 14 tasks, n=1 each: without map 14/14, 67 rounds, 78 calls, prompt 154 826, 120 s; with map 14/14, 56 rounds, 61 calls, prompt 143 344, 108 s. Navigation tasks went from 4 to 2 rounds; edit-large-file went from 4 to 5 rounds. Repeated reads and failed edits were 0 in both runs.
+- Found and fixed: four tests (ReadOnlyCodeService ×3, RunBudgetProvider ×1) plus two attachment tests were never executed because runBlocking returned a value and JUnit 5 skips non-void tests. All now run and pass; declared and executed counts match (277).
+- Demo scenario marks its last plan step done. README rewritten with screenshots rendered from the real app; details moved to docs/USAGE.md.
+- Not verified: vision with a real vision model, Gemma/vLLM, the new settings toggle by hand in the running app (rendered offscreen only).
