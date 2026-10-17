@@ -18,9 +18,22 @@ class BuiltinToolsTest {
             override suspend fun read(sessionId: String, artifactId: String, offset: Int, limit: Int) = ""
         }
         val questions = object : InteractionBroker { override suspend fun ask(question: UserQuestion) = "answer" }
-        val tools = BuiltinTools(workspace, processes, artifacts, questions)
+        var captures = 0
+        val screen = object : ScreenCaptureService {
+            override val supported = true
+            override suspend fun targets() = listOf(CaptureTarget("selected", "Synthetic window", "Fixture"))
+            override suspend fun capture(): FilePresentation {
+                captures++
+                return FilePresentation("synthetic.png", "synthetic.png", "image/png", 42)
+            }
+        }
+        val tools = BuiltinTools(workspace, processes, artifacts, questions, screens = screen)
         try {
             val plan = ToolContext("s", "r", ExecutionMode.PLAN)
+            assertEquals("PERMISSION_DENIED", tools.execute(ToolCall("capture-denied", "capture_window", "{}"), plan).error?.code)
+            assertEquals(0, captures)
+            assertTrue(tools.execute(ToolCall("capture-allowed", "capture_window", "{}"), plan.copy(allowScreenshots = true)).ok)
+            assertEquals(1, captures)
             val network = tools.execute(ToolCall("net-1", "web_search", """{"query":"Kotlin"}"""), plan)
             assertEquals("PERMISSION_DENIED", network.error?.code)
             val explicitlyAllowedNetwork = tools.execute(ToolCall("net-2", "web_search", """{"query":"Kotlin"}"""), plan.copy(allowNetwork = true))

@@ -9,12 +9,12 @@
 
 | Проверка | Команда | Результат |
 |---|---|---|
-| Юнит-тесты | `./gradlew check` | 241 тест, 0 падений, 0 skipped (macOS; на Windows POSIX-тесты процессов пропускаются) |
+| Юнит-тесты | `./gradlew check` | 243 тест, 0 падений, 0 skipped (macOS; на Windows POSIX-тесты процессов пропускаются) |
 | Offline smoke | `./gradlew :evals:offlineSmoke` | пройден: search → read → chained edit → реальные Python-проверки → final → restart → stale-отказ; все 14 eval-проверок падают на нетронутой задаче и проходят на эталоне |
 | Live eval | `./gradlew :evals:liveEval` | `deepseek-flash`, 17.10 вечер: **9/9** (включая delegate-research с двумя помощниками), 1 прогон на задачу, 0 ошибок инструментов; отдельно delegate-research ×2: 2/2, помощники 2/2 завершены. Задачи простые, n=1 — базовая линия, не статистика |
-| Live DeepSeek | `./gradlew :evals:liveDeepSeekSmoke` | пройден дважды на финальном коде: 5 раундов, 6 tool-вызовов, 0 ошибок, 9.1–9.8 с; prompt ~10.8k, completion 576–634, cached 8 192–9 600 |
+| Live DeepSeek | `./gradlew :evals:liveDeepSeekSmoke` | пройден дважды на предыдущем checkpoint: 5 раундов, 6 tool-вызовов, 0 ошибок, 9.1–9.8 с; prompt ~10.8k, completion 576–634, cached 8 192–9 600 |
 | macOS-пакет | `./gradlew :app-desktop:createDistributable`, `packageDmg` | собраны; `Chiller-1.1.0.dmg` локально |
-| CI | `.github/workflows/ci.yml`, `release.yml` | YAML валиден; на GitHub **не запускались** (ничего не запушено) |
+| CI | `.github/workflows/ci.yml`, `release.yml` | CI запущен на master; итог и релизный workflow фиксируются в RUN_REPORT |
 | Запуск приложения | `./gradlew :app-desktop:run` (изолированные данные, без ключа) | процесс стартовал, исключений в логе нет; **визуальная приёмка — вручную** |
 
 Live-прогон — это **один** сценарий на `deepseek-flash`. Он подтверждает, что реальная модель
@@ -70,7 +70,7 @@ Live-прогон — это **один** сценарий на `deepseek-flash`
 
 ## Последующий проход надёжности и инструментов
 
-241 тест, 0 failures/errors/skipped; `check :evals:offlineSmoke :app-desktop:keychainSmoke :app-desktop:createDistributable` прошёл. Offline oracle проверяет 14 задач и отклоняет изменение model-visible verification files. Keychain smoke нашёл несовместимую с Apple Silicon JNA 5.6.0; после обновления до 5.18.1 нативные операции прошли. Платных запросов в этом проходе не было: live-результаты таблицы относятся к предыдущей версии и прежним 9 задачам. Детали и дальнейшие gates: RELIABILITY_PASS_2026_10_17.md.
+243 тест, 0 failures/errors/skipped; `check :evals:offlineSmoke :app-desktop:keychainSmoke :app-desktop:createDistributable` прошёл. Offline oracle проверяет 14 задач и отклоняет изменение model-visible verification files. Keychain smoke нашёл несовместимую с Apple Silicon JNA 5.6.0; после обновления до 5.18.1 нативные операции прошли. Платных запросов в этом проходе не было: live-результаты таблицы относятся к предыдущей версии и прежним 9 задачам. Детали и дальнейшие gates: RELIABILITY_PASS_2026_10_17.md.
 
 
 ### Текущая функциональная доводка

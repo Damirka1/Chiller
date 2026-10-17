@@ -195,3 +195,9 @@ User explicitly resumed after limits reset. Read-only audit began at14:43 Asia/A
 - Original matte mint/snowflake icon generated from code-native ChillerMark geometry, no external art. PNG/ICNS/multi-resolution ICO committed; Main window and platform packages configured. Rebuilt main .app Info.plist points to Chiller.icns; bundled bytes exactly match source. Generator scripts committed; CI uses prebuilt assets.
 - User explicitly authorized push and first-release tag after completion. Target is existing private Damirka1/Chiller repo/master; no existing tags/releases at preflight. Version1.1.0 retained, first release marked Preview. Remote CI/release outcome recorded in a following checkpoint once actually executed.
 - Run: `./gradlew :app-desktop:run`; normal package `app-desktop/build/compose/binaries/main/app/Chiller.app`. Unsigned installers, Gemma/live-new-tool behavior and native Windows/Linux remain limits. OS sandbox/PTY/LSP/writable helper worktrees/MCP/multi-file transactions are not claimed complete.
+
+
+### Release gate follow-up
+
+- Synchronous transferable snapshot now captures text/file paths/image reference before native drop completes; async importer never re-reads the expired transferable. One-shot expiring6 KiB transferable regression added. Explicit screenshot/network catalog admission and denied-capture-no-invocation assertions added.
+- `./gradlew check :evals:offlineSmoke :app-desktop:createDistributable`: passed again, **243 tests,0 failures/errors/skipped**. Current master was pushed as51755a6; CI39050486193 started, macOS tests+offline passed while other jobs were pending at this checkpoint. Follow-up commit will trigger a fresh full matrix before tagging.

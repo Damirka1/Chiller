@@ -59,6 +59,31 @@ class AgentCoordinatorTest {
         assertEquals("completed", fixture.coordinator.state.value.status)
     }
 
+    @Test fun externalToolCatalogRequiresEachExplicitPermissionEvenInEditMode() = runTest {
+        val requests = mutableListOf<ModelRequest>()
+        val provider = ScriptedProvider { request -> flow {
+            requests += request
+            emit(ModelEvent.Completed(AgentMessage("assistant", "done"), "stop"))
+        } }
+        val tools = object : ToolExecutor {
+            override val specs = listOf(
+                ToolSpec("web", "web", JsonObject(emptyMap()), ToolEffect.NETWORK),
+                ToolSpec("capture", "capture", JsonObject(emptyMap()), ToolEffect.SCREEN_CAPTURE),
+            )
+            override suspend fun execute(call: ToolCall, context: ToolContext) = error("No execution expected")
+        }
+        val fixture = fixture(provider, tools, dispatcher = StandardTestDispatcher(testScheduler))
+        fixture.coordinator.send("default", ExecutionMode.WORKSPACE_EDIT)
+        advanceUntilIdle()
+        assertTrue(requests.last().tools.isEmpty())
+        fixture.coordinator.send("network", ExecutionMode.PLAN, allowNetwork = true)
+        advanceUntilIdle()
+        assertEquals(listOf("web"), requests.last().tools.map { it.name })
+        fixture.coordinator.send("capture", ExecutionMode.PLAN, allowScreenshots = true)
+        advanceUntilIdle()
+        assertEquals(listOf("capture"), requests.last().tools.map { it.name })
+    }
+
     @Test fun projectInstructionsAreAStableSystemMessageAndRoundsAreTraced() = runTest {
         val requests = mutableListOf<ModelRequest>()
         var round = 0

@@ -710,20 +710,22 @@ private fun Composer(
         }
     }
     val importTransferable: (Transferable) -> Unit = { transferable ->
-        launchImport {
-                when {
-                    transferable.isDataFlavorSupported(DataFlavor.javaFileListFlavor) -> {
-                        @Suppress("UNCHECKED_CAST")
-                        val paths = (transferable.getTransferData(DataFlavor.javaFileListFlavor) as List<File>).map { it.absolutePath }
-                        appendImported(onImportFiles(attachmentOwnerKey, paths))
-                    }
-                    transferable.isDataFlavorSupported(DataFlavor.imageFlavor) -> {
-                        val image = transferable.getTransferData(DataFlavor.imageFlavor) as? AwtImage
-                        val bytes = image?.let(::encodeClipboardImage) ?: error("Clipboard image cannot be encoded within the size limit")
+        if (pending) importError = "Сообщение уже отправляется. Добавьте вложение после завершения отправки."
+        else {
+            var snapshotFailed = false
+            val payload = try { snapshotComposerTransferPayload(transferable) }
+            catch (_: Exception) { snapshotFailed = true; null }
+            if (payload == null) {
+                importError = if (snapshotFailed) "Не удалось получить данные из буфера обмена. Повторите попытку." else "Этот формат буфера обмена не поддерживается."
+            } else launchImport {
+                when (payload) {
+                    is ComposerTransferPayload.Files -> appendImported(onImportFiles(attachmentOwnerKey, payload.paths))
+                    is ComposerTransferPayload.Image -> {
+                        val bytes = encodeClipboardImage(payload.value) ?: error("Clipboard image cannot be encoded within the size limit")
                         appendImported(listOf(onImportImageAttachment(attachmentOwnerKey, bytes) ?: error("Image import failed")))
                     }
-                    transferable.isDataFlavorSupported(DataFlavor.stringFlavor) -> {
-                        val pasted = transferable.getTransferData(DataFlavor.stringFlavor) as? String ?: error("Clipboard does not contain text")
+                    is ComposerTransferPayload.Text -> {
+                        val pasted = payload.value
                         if (pasted.toByteArray(Charsets.UTF_8).size > 5_120) {
                             appendImported(listOf(onImportTextAttachment(attachmentOwnerKey, pasted) ?: error("Text import failed")))
                         } else {
@@ -733,8 +735,8 @@ private fun Composer(
                             field = TextFieldValue(text, TextRange(start + pasted.length)); onDraft(text); onComposition(false)
                         }
                     }
-                    else -> error("Unsupported clipboard content")
                 }
+            }
         }
     }
     val dropTarget = remember(attachmentOwnerKey, attachments) {
@@ -856,6 +858,33 @@ internal fun mergeComposerAttachments(current: List<ComposerAttachment>, additio
 internal fun nextPendingImportCount(current: Int, delta: Int): Int? {
     val next = (current + delta).coerceAtLeast(0)
     return next.takeIf { it > 0 }
+}
+
+internal sealed interface ComposerTransferPayload {
+    data class Files(val paths: List<String>) : ComposerTransferPayload
+    data class Text(val value: String) : ComposerTransferPayload
+    data class Image(val value: AwtImage) : ComposerTransferPayload
+}
+
+/** Must be called while the clipboard or DnD callback still owns the Transferable. */
+internal fun snapshotComposerTransferPayload(transferable: Transferable): ComposerTransferPayload? = when {
+    transferable.isDataFlavorSupported(DataFlavor.javaFileListFlavor) -> {
+        @Suppress("UNCHECKED_CAST")
+        val files = transferable.getTransferData(DataFlavor.javaFileListFlavor) as? List<File>
+            ?: error("Clipboard file list has an unexpected type")
+        ComposerTransferPayload.Files(files.map { it.absolutePath }.toList())
+    }
+    transferable.isDataFlavorSupported(DataFlavor.imageFlavor) -> {
+        val image = transferable.getTransferData(DataFlavor.imageFlavor) as? AwtImage
+            ?: error("Clipboard image has an unexpected type")
+        ComposerTransferPayload.Image(image)
+    }
+    transferable.isDataFlavorSupported(DataFlavor.stringFlavor) -> {
+        val text = transferable.getTransferData(DataFlavor.stringFlavor) as? String
+            ?: error("Clipboard text has an unexpected type")
+        ComposerTransferPayload.Text(text)
+    }
+    else -> null
 }
 
 @Composable
