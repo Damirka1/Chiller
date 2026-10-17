@@ -194,7 +194,8 @@ fun ChillerApp(
                                             Composer(draft, updateDraft, mode, { mode = it }, providerModel, active, send, onStop, { settings = true }, Modifier.fillMaxWidth(), apiKeyConfigured, models, { selected ->
                                                 val oldDraft = draft
                                                 scope.launch { onSelectModel(selected)?.let { id -> drafts.putIfAbsent(id, oldDraft) } }
-                                            }, { composing = it }, pendingSend, contextNote, catalog, onRefreshModels, onCancelCatalogRefresh, allowProcesses, onAllowProcessesChange)
+                                            }, { composing = it }, pendingSend, contextNote, catalog, onRefreshModels, onCancelCatalogRefresh, allowProcesses, onAllowProcessesChange,
+                                                workspacePath, onChooseWorkspace, state.contextEstimatedTokens, connectionSummary(connection, apiKeyConfigured).second)
                                         }
                                     }
                                 }
@@ -323,6 +324,7 @@ private fun Composer(
     onModel: (String) -> Unit, onComposition: (Boolean) -> Unit, pending: Boolean, contextNote: String?,
     catalog: ModelCatalogState, onRefreshModels: () -> Unit, onCancelCatalogRefresh: () -> Unit,
     allowProcesses: Boolean, onAllow: (Boolean) -> Unit,
+    workspace: String?, onChooseWorkspace: () -> Unit, contextTokens: Int?, connectionDot: androidx.compose.ui.graphics.Color,
 ) {
     val c = LocalChillerPalette.current
     var focused by remember { mutableStateOf(false) }
@@ -330,7 +332,7 @@ private fun Composer(
     var modelClosedAt by remember { mutableStateOf(0L) }
     var field by remember { mutableStateOf(TextFieldValue(draft)) }
     LaunchedEffect(draft) { if (field.text != draft) { field = TextFieldValue(draft, TextRange(draft.length)); onComposition(false) } }
-    // Empty block: 26 dp text + 20 dp vertical padding + 6 dp gap + 32 dp toolbar = 84 dp. The text area grows to 144 dp
+    // Empty block: 24 dp folder chip + 26 dp text + 20 dp vertical padding + 6 dp gap + 32 dp toolbar = 108 dp. The text area grows to 144 dp
     // (a ~200 dp block at normal type) and then scrolls; the block grows only with the toolbar at larger type.
     val fieldMaxHeight = 144.dp
     val shape = RoundedCornerShape(16.dp)
@@ -339,13 +341,15 @@ private fun Composer(
         modifier.shadow(3.dp, shape, ambientColor = c.text.copy(alpha = .04f), spotColor = c.text.copy(alpha = .04f)).clip(shape).background(c.surface)
             .border(1.dp, borderColor, shape).padding(horizontal = 12.dp, vertical = 10.dp)
     ) {
+        ContextChips(workspace, onChooseWorkspace, enabled = !running)
         BasicTextField(field, { field = it; onDraft(it.text); onComposition(it.composition != null) },
             modifier = Modifier.fillMaxWidth().heightIn(min = 26.dp, max = fieldMaxHeight).onFocusChanged { focused = it.isFocused }.verticalScroll(rememberScrollState()),
             textStyle = TextStyle(color = c.text, fontSize = 14.sp, lineHeight = 22.sp, letterSpacing = 0.sp), cursorBrush = SolidColor(c.text),
             decorationBox = { inner -> Box { if (draft.isEmpty()) Text("Напишите задачу…", color = c.faint, fontSize = 14.sp, lineHeight = 22.sp); inner() } },
         )
         Spacer(Modifier.height(6.dp))
-        ComposerToolbar(mode, onMode, model, running, pending, draft.isNotBlank(), modelMenu, { if (System.currentTimeMillis() - modelClosedAt > 200) modelMenu = !modelMenu }, allowProcesses, onAllow, onSend, onStop) {
+        ComposerToolbar(mode, onMode, model, running, pending, draft.isNotBlank(), modelMenu, { if (System.currentTimeMillis() - modelClosedAt > 200) modelMenu = !modelMenu }, allowProcesses, onAllow, onSend, onStop,
+            connectionDot, contextTokens, catalog.models.firstOrNull { it.id == model }?.contextWindow) {
             ModelPickerPopover(
                 model = model, models = models, configured = configured, running = running, catalog = catalog, contextNote = contextNote,
                 onRefresh = onRefreshModels, onCancelRefresh = onCancelCatalogRefresh,
@@ -361,6 +365,7 @@ private fun ComposerToolbar(
     mode: ExecutionMode, onMode: (ExecutionMode) -> Unit, model: String, running: Boolean,
     pending: Boolean, draftNotEmpty: Boolean, modelMenuOpen: Boolean, onToggleModel: () -> Unit,
     allowProcesses: Boolean, onAllow: (Boolean) -> Unit, onSend: () -> Unit, onStop: () -> Unit,
+    connectionDot: androidx.compose.ui.graphics.Color, contextTokens: Int?, contextWindow: Int?,
     modelPopover: @Composable () -> Unit,
 ) {
     val c = LocalChillerPalette.current
@@ -395,10 +400,13 @@ private fun ComposerToolbar(
                     }
                 }
                 Box {
-                    ChillerControl(friendlyModel(model), onToggleModel, enabled = !running, trailing = "⌄", inlineTrailing = true, style = if (modelMenuOpen) ControlStyle.SELECTED else ControlStyle.QUIET)
+                    ChillerControl(friendlyModel(model), onToggleModel, enabled = !running, trailing = "⌄", inlineTrailing = true, style = if (modelMenuOpen) ControlStyle.SELECTED else ControlStyle.QUIET, dot = connectionDot)
                     if (modelMenuOpen) modelPopover()
                 }
-                ChillerIconButton(if (running && !pending) Icons.Outlined.Stop else Icons.Outlined.ArrowUpward, if (pending) "Сохранение сообщения" else if (running) "Остановить" else "Отправить", if (running && !pending) onStop else onSend, enabled = !pending && (running || draftNotEmpty), primary = true)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    contextTokens?.let { ContextMeter(it, contextWindow); Spacer(Modifier.width(10.dp)) }
+                    ChillerIconButton(if (running && !pending) Icons.Outlined.Stop else Icons.Outlined.ArrowUpward, if (pending) "Сохранение сообщения" else if (running) "Остановить" else "Отправить", if (running && !pending) onStop else onSend, enabled = !pending && (running || draftNotEmpty), primary = true)
+                }
             },
             modifier = Modifier.fillMaxWidth()
         ) { measurables, constraints ->

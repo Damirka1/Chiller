@@ -18,6 +18,8 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Check
+import androidx.compose.material.icons.outlined.CreateNewFolder
+import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Search
@@ -253,3 +255,46 @@ internal fun modelSubtitle(id: String, catalog: ModelCatalogState): String? {
 }
 
 private fun formatTokens(value: Int): String = if (value >= 1_000) "${(value + 500) / 1_000}k" else value.toString()
+
+/** The folder the next message works in. Clicking it opens the folder chooser. */
+@Composable
+internal fun ContextChips(workspace: String?, onChoose: () -> Unit, enabled: Boolean) {
+    val c = LocalChillerPalette.current
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    Row(Modifier.padding(bottom = 6.dp)) {
+        Row(
+            Modifier.clip(RoundedCornerShape(6.dp)).background(if (hovered && enabled) c.hover else c.sidebar)
+                .hoverable(interaction).pointerHoverIcon(PointerIcon.Hand)
+                .clickable(interactionSource = interaction, indication = null, enabled = enabled, role = Role.Button, onClick = onChoose)
+                .padding(horizontal = 7.dp, vertical = 3.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(if (workspace == null) Icons.Outlined.CreateNewFolder else Icons.Outlined.Folder, null, Modifier.size(12.dp), tint = if (workspace == null) c.faint else c.muted)
+            Spacer(Modifier.width(5.dp))
+            Text(workspace?.substringAfterLast('/') ?: "Папка не выбрана", color = if (workspace == null) c.faint else c.muted, fontSize = 11.sp, lineHeight = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 220.dp))
+        }
+    }
+}
+
+/**
+ * Estimated prompt size of the last request (characters / 4, not a tokenizer) against the
+ * model's declared context window when the provider listed one.
+ */
+@Composable
+internal fun ContextMeter(tokens: Int, window: Int?) {
+    val c = LocalChillerPalette.current
+    val fraction = window?.takeIf { it > 0 }?.let { (tokens.toFloat() / it).coerceIn(0f, 1f) }
+    val color = when { fraction == null -> c.faint; fraction > .9f -> c.negative; fraction > .7f -> c.muted; else -> c.accent }
+    Row(Modifier.semantics { contentDescription = "Контекст: примерно $tokens токенов" + (window?.let { " из $it" } ?: "") }, verticalAlignment = Alignment.CenterVertically) {
+        if (fraction != null) {
+            androidx.compose.foundation.Canvas(Modifier.size(14.dp)) {
+                val stroke = androidx.compose.ui.graphics.drawscope.Stroke(width = 2.dp.toPx(), cap = androidx.compose.ui.graphics.StrokeCap.Round)
+                drawArc(c.border, 0f, 360f, false, style = stroke)
+                drawArc(color, -90f, 360f * fraction.coerceAtLeast(.02f), false, style = stroke)
+            }
+            Spacer(Modifier.width(6.dp))
+        }
+        Text("≈ ${compactTokens(tokens.toLong())}" + (window?.let { " / ${compactTokens(it.toLong())}" } ?: " ток."), color = c.faint, fontSize = 11.sp, lineHeight = 16.sp, maxLines = 1)
+    }
+}
