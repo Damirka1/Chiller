@@ -37,11 +37,16 @@ class LocalWorkspace(
     private val maxReadBytes = 2 * 1024 * 1024
     private val maxVisibleLines = 200
     private val maxVisibleChars = 6_000
+    private val searchTextLimit = 400
     private var loadedJournal = false
 
     private data class Snapshot(val path: Path, val hash: String, val observed: Set<Int>)
     private data class ChangeRecord(val path: Path, val before: ByteArray?, val afterHash: String?, val afterBytes: ByteArray?, val id: String, val restorePath: Path? = null)
     private data class TextFile(val bom: Boolean, val body: String, val lines: List<String>, val endings: List<String>, val finalNewline: Boolean)
+    private data class EditOp(val start: Int, val end: Int, val lines: List<String>)
+    private data class ObservedRegion(val start: Int, val removed: Int, val inserted: Int, val shiftBefore: Int)
+    private data class Applied(val file: TextFile, val observed: Set<Int>)
+    private data class SearchEntry(val kind: String, val path: String, val line: Int, val text: String)
     private data class Captured(val stdout: ByteArray, val stderr: ByteArray, val exitCode: Int, val truncated: Boolean)
 
     override suspend fun read(request: ReadFileRequest): FileReadResult = withContext(Dispatchers.IO) {
@@ -50,20 +55,27 @@ class LocalWorkspace(
         val text = decode(bytes)
         val total = text.lines.size
         val start = request.startLine
+        val eol = text.endings.firstOrNull() ?: "LF"
         if (start < 1) fail("INVALID_RANGE", "Line numbers start at 1")
         if (total == 0) {
-            if (start != 1 || request.endLine != null) fail("INVALID_RANGE", "Empty files can only be read from line 1")
+            if (start != 1) fail("INVALID_RANGE", "An empty file has no lines beyond line 1")
             val id = snapshotId()
             lock.withLock { saveSnapshot(id, Snapshot(file, sha(bytes), emptySet())) }
-            return@withContext FileReadResult(relative(file), id, 0, "", eol = "LF")
+            return@withContext FileReadResult(relative(file), id, 0, "", truncated = request.endLine != null, eol = "LF")
         }
-        val requestedEnd = request.endLine ?: total
-        if (start > total || requestedEnd < start || requestedEnd > total) fail("INVALID_RANGE", "Requested line range is outside the file")
+        if (start > total) {
+            val id = snapshotId()
+            lock.withLock { saveSnapshot(id, Snapshot(file, sha(bytes), emptySet())) }
+            return@withContext FileReadResult(relative(file), id, total, "", truncated = true, eol = eol)
+        }
+        val declaredEnd = request.endLine ?: total
+        if (declaredEnd < start) fail("INVALID_RANGE", "Requested line range is outside the file")
+        val requestedEnd = minOf(declaredEnd, total)
         var visibleEnd = start - 1
         var visibleChars = 0
         for (lineNumber in start..requestedEnd) {
             val line = text.lines[lineNumber - 1]
-            if (line.length > maxVisibleChars) fail("FILE_LINE_TOO_LARGE", "Line $lineNumber exceeds the 6000 character read limit")
+            if (line.length > maxVisibleChars) fail("FILE_LINE_TOO_LARGE", "Line $lineNumber is too long to read: ${line.length} characters exceed the $maxVisibleChars character per-line limit")
             val addition = line.length + if (visibleEnd >= start) 1 else 0
             if (visibleChars + addition > maxVisibleChars || lineNumber - start >= maxVisibleLines) break
             visibleChars += addition
@@ -72,7 +84,7 @@ class LocalWorkspace(
         val content = if (visibleEnd < start) "" else text.lines.subList(start - 1, visibleEnd).joinToString("\n")
         val id = snapshotId()
         lock.withLock { saveSnapshot(id, Snapshot(file, sha(bytes), (if (visibleEnd < start) emptyList() else start..visibleEnd).toSet())) }
-        FileReadResult(relative(file), id, total, content, truncated = visibleEnd < requestedEnd, eol = text.endings.firstOrNull() ?: "LF")
+        FileReadResult(relative(file), id, total, content, truncated = visibleEnd < declaredEnd, eol = eol)
     }
 
     override suspend fun list(path: String, glob: String?, limit: Int): ToolResult = withContext(Dispatchers.IO) {
@@ -82,7 +94,7 @@ class LocalWorkspace(
         val args = mutableListOf("rg", "--files", "--null", "--color", "never", "--hidden", "--no-require-git", "--glob", "!.git/**", "--glob", "!**/.git/**")
         val ignore = base.resolve(".chillerignore")
         if (Files.isRegularFile(ignore, LinkOption.NOFOLLOW_LINKS)) { args += "--ignore-file"; args += ignore.toString() }
-        if (glob != null) { args += "--glob"; args += glob }
+        // A user glob is applied in Kotlin: ripgrep globs override ignore rules, which would surface node_modules and similar.
         args += listOf("--", relative(dir).ifEmpty { "." })
         val captured = try { runRg(args, 4 * 1024 * 1024) }
         catch (e: IOException) { return@withContext ToolResult.failure("RG_UNAVAILABLE", "ripgrep could not be started: ${e.message}") }
@@ -91,15 +103,23 @@ class LocalWorkspace(
         val pathParts = captured.stdout.toString(StandardCharsets.UTF_8).split('\u0000').filter(String::isNotEmpty).toMutableList()
         if (captured.truncated && !captured.stdout.lastOrNull().let { it == 0.toByte() }) pathParts.removeLastOrNull()
         val paths = pathParts.map { raw -> Paths.get(raw).let { if (it.isAbsolute) it else base.resolve(it) } }.sorted()
-        val all = paths.map { p -> buildJsonObject { put("path", relative(p)); put("type", "file"); runCatching { put("size", Files.size(p)) } } }
+        val all = paths.map(::relative).filter { glob == null || matchesGlob(it, glob) }
         val truncated = captured.truncated || all.size > max
-        ToolResult(true, buildJsonObject { put("entries", JsonArray(all.take(max))); put("truncated", truncated) }, truncated = truncated)
+        ToolResult(true, buildJsonObject { put("entries", JsonArray(all.take(max).map { JsonPrimitive(it) })); put("truncated", truncated) }, truncated = truncated)
     }
 
-    override suspend fun search(query: String, path: String, glob: String?, regex: Boolean, limit: Int): ToolResult = withContext(Dispatchers.IO) {
+    private fun matchesGlob(relativePath: String, glob: String): Boolean = runCatching {
+        val pattern = glob.removePrefix("./")
+        val matcher = java.nio.file.FileSystems.getDefault().getPathMatcher("glob:$pattern")
+        if ('/' in pattern) matcher.matches(Paths.get(relativePath)) else matcher.matches(Paths.get(relativePath).fileName)
+    }.getOrDefault(false)
+
+    override suspend fun search(query: String, path: String, glob: String?, regex: Boolean, limit: Int, context: Int): ToolResult = withContext(Dispatchers.IO) {
         if (query.isEmpty()) return@withContext ToolResult.failure("INVALID_QUERY", "Search query must not be empty")
         val dir = resolve(path, true)
+        val contextLines = context.coerceIn(0, 5)
         val args = mutableListOf("rg", "--json", "--line-number", "--color", "never", "--no-require-git", "--sort", "path", "--max-filesize", "2M", "--max-columns", "2000", "--max-columns-preview")
+        if (contextLines > 0) { args += "-C"; args += contextLines.toString() }
         val ignore = base.resolve(".chillerignore")
         if (Files.isRegularFile(ignore, LinkOption.NOFOLLOW_LINKS)) { args += "--ignore-file"; args += ignore.toString() }
         if (!regex) args += "--fixed-strings"
@@ -110,11 +130,55 @@ class LocalWorkspace(
         catch (e: ToolException) { return@withContext ToolResult.failure(e.code, e.message) }
         if (captured.exitCode !in 0..1 && !captured.truncated) return@withContext ToolResult.failure("SEARCH_FAILED", captured.stderr.toString(StandardCharsets.UTF_8).take(1000))
         val maxMatches = limit.coerceIn(1, 1000)
-        val records = captured.stdout.toString(StandardCharsets.UTF_8).lineSequence().filter { it.startsWith("{\"type\":\"match\"") }.take(maxMatches + 1).mapNotNull { runCatching { Json.parseToJsonElement(it) }.getOrNull() }.toList()
-        // Preserve rg's structured records; callers can decode match records without losing byte offsets.
-        val truncated = records.size > maxMatches
-        ToolResult(true, buildJsonObject { put("matches", JsonArray(records.take(maxMatches))); put("truncated", truncated || captured.truncated) }, truncated = truncated || captured.truncated)
+        val entries = captured.stdout.toString(StandardCharsets.UTF_8).lineSequence().mapNotNull(::searchEntry).toList()
+        val hits = entries.filter { it.kind == "match" }
+        val byPath = if (contextLines > 0) entries.groupBy { it.path } else emptyMap()
+        val matches = hits.take(maxMatches).map { hit ->
+            buildJsonObject {
+                put("path", locatedPath(hit.path) ?: hit.path); put("line", hit.line); put("text", clip(hit.text.trimEnd()))
+                if (contextLines > 0) put("context", JsonArray(contextAround(byPath[hit.path].orEmpty(), hit, contextLines).map { JsonPrimitive(clip(it.trimEnd())) }))
+            }
+        }
+        val truncated = hits.size > maxMatches || captured.truncated
+        ToolResult(true, buildJsonObject { put("matches", JsonArray(matches)); put("truncated", truncated) }, truncated = truncated)
     }
+
+    private fun searchEntry(line: String): SearchEntry? {
+        val record = runCatching { Json.parseToJsonElement(line) }.getOrNull() as? JsonObject ?: return null
+        val kind = record.string("type") ?: return null
+        if (kind != "match" && kind != "context") return null
+        val data = record["data"] as? JsonObject ?: return null
+        val pathText = (data["path"] as? JsonObject)?.string("text") ?: return null
+        val lineNumber = (data["line_number"] as? JsonPrimitive)?.intOrNull ?: return null
+        val text = (data["lines"] as? JsonObject)?.string("text") ?: ""
+        return SearchEntry(kind, pathText, lineNumber, text)
+    }
+
+    private fun locatedPath(raw: String): String? = runCatching {
+        val path = Paths.get(raw).let { if (it.isAbsolute) it else base.resolve(it) }.normalize()
+        if (path.startsWith(base)) relative(path) else null
+    }.getOrNull()
+
+    /** Up to [count] contiguous lines before and after [hit], in file order, drawn from rg context records. */
+    private fun contextAround(entries: List<SearchEntry>, hit: SearchEntry, count: Int): List<String> {
+        val index = entries.indexOf(hit)
+        if (index < 0) return emptyList()
+        val before = mutableListOf<String>()
+        var expected = hit.line - 1
+        var cursor = index - 1
+        while (cursor >= 0 && before.size < count && entries[cursor].path == hit.path && entries[cursor].line == expected) {
+            before += entries[cursor].text; expected--; cursor--
+        }
+        val after = mutableListOf<String>()
+        expected = hit.line + 1
+        cursor = index + 1
+        while (cursor < entries.size && after.size < count && entries[cursor].path == hit.path && entries[cursor].line == expected) {
+            after += entries[cursor].text; expected++; cursor++
+        }
+        return before.asReversed() + after
+    }
+
+    private fun clip(text: String) = if (text.length <= searchTextLimit) text else text.take(searchTextLimit) + "…"
 
     private suspend fun runRg(args: List<String>, maxOutput: Int): Captured = coroutineScope {
         val process = ProcessBuilder(args).directory(base.toFile()).start()
@@ -141,10 +205,13 @@ class LocalWorkspace(
         if (snap.path != file) fail("SNAPSHOT_PATH_MISMATCH", "Snapshot belongs to another path")
         val before = readBytes(file)
         if (sha(before) != snap.hash) fail("STALE_SNAPSHOT", "File changed after it was read; no edit was applied")
-        val original = decode(before)
-        val next = applyEdits(original, request.edits, snap.observed)
-        val nextBytes = encode(next)
-        commit(file, before, nextBytes)
+        val applied = applyEdits(decode(before), request.edits, snap.observed)
+        val nextBytes = encode(applied.file)
+        val change = commit(file, before, nextBytes)
+        // Lineage: the written bytes get their own snapshot so the next edit can chain without a re-read.
+        val next = snapshotId()
+        saveSnapshot(next, Snapshot(file, sha(nextBytes), applied.observed))
+        change.copy(snapshotId = next)
     } }
 
     override suspend fun create(path: String, content: String): FileChange = withContext(Dispatchers.IO) { lock.withLock {
@@ -347,23 +414,22 @@ class LocalWorkspace(
         snapshots[id] = snapshot
     }
 
-    private fun applyEdits(f: TextFile, edits: List<FileEdit>, observed: Set<Int>): TextFile {
+    private fun applyEdits(f: TextFile, edits: List<FileEdit>, observed: Set<Int>): Applied {
         if (edits.isEmpty()) fail("EMPTY_EDIT", "At least one edit is required")
-        data class Op(val start: Int, val end: Int, val lines: List<String>)
         val ops = edits.map { e ->
             when (e.op) {
                 "replace", "delete" -> {
                     val s = e.startLine ?: fail("INVALID_EDIT", "startLine is required"); val end = e.endLine ?: s
                     if (s < 1 || end < s || end > f.lines.size) fail("INVALID_RANGE", "Edit range is outside the file")
                     if ((s..end).any { it !in observed }) fail("UNOBSERVED_RANGE", "Read the lines before editing them")
-                    Op(s - 1, end, if (e.op == "delete") emptyList() else contentLines(e.content))
+                    EditOp(s - 1, end, if (e.op == "delete") emptyList() else contentLines(e.content))
                 }
                 "insert" -> {
                     val before = e.beforeLine ?: fail("INVALID_EDIT", "beforeLine is required")
                     if (before < 1 || before > f.lines.size + 1) fail("INVALID_RANGE", "Insert position is outside the file")
                     val boundary = if (before <= f.lines.size) before else f.lines.size
                     if (boundary > 0 && boundary !in observed && boundary - 1 !in observed) fail("UNOBSERVED_RANGE", "Read a boundary line before inserting")
-                    Op(before - 1, before - 1, contentLines(e.content))
+                    EditOp(before - 1, before - 1, contentLines(e.content))
                 }
                 else -> fail("INVALID_EDIT", "Unsupported operation '${e.op}'")
             }
@@ -384,7 +450,33 @@ class LocalWorkspace(
         while (endings.size < lines.size) endings += eol
         if (!wantsEnding && endings.isNotEmpty()) endings.removeAt(endings.lastIndex)
         if (wantsEnding && lines.isNotEmpty() && endings.size < lines.size) endings += eol
-        return f.copy(body = render(lines, endings), lines = lines, endings = endings)
+        return Applied(f.copy(body = render(lines, endings), lines = lines, endings = endings), shiftedObserved(ops, observed))
+    }
+
+    /**
+     * Maps observed line numbers through sorted, non-overlapping edits expressed in original coordinates.
+     * Lines outside every edited range keep their status at their shifted position; removed lines are
+     * dropped; inserted (and replacement) lines become observed because the model authored them.
+     */
+    private fun shiftedObserved(ops: List<EditOp>, observed: Set<Int>): Set<Int> {
+        var shift = 0
+        val regions = ops.map { op ->
+            val removed = op.end - op.start
+            ObservedRegion(op.start, removed, op.lines.size, shift).also { shift += it.inserted - removed }
+        }
+        val next = mutableSetOf<Int>()
+        for (oldLine in observed) {
+            val index = oldLine - 1
+            if (regions.any { index >= it.start && index < it.start + it.removed }) continue
+            var offset = 0
+            for (region in regions) { if (region.start + region.removed <= index) offset += region.inserted - region.removed else break }
+            next += oldLine + offset
+        }
+        for (region in regions) {
+            val first = region.start + region.shiftBefore + 1
+            for (line in first until first + region.inserted) next += line
+        }
+        return next
     }
 
     private suspend fun commit(file: Path, before: ByteArray, after: ByteArray): FileChange {

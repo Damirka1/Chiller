@@ -43,9 +43,28 @@ data class ModelRequest(
     val maxOutputTokens: Int = 4096,
 )
 
+/** Provider-reported token counters. Null means the provider did not report the value. */
+@Serializable
+data class TokenUsage(
+    val promptTokens: Long? = null,
+    val completionTokens: Long? = null,
+    val cachedPromptTokens: Long? = null,
+) {
+    val isEmpty: Boolean get() = promptTokens == null && completionTokens == null && cachedPromptTokens == null
+}
+
+operator fun TokenUsage.plus(other: TokenUsage) = TokenUsage(
+    promptTokens = listOfNotNull(promptTokens, other.promptTokens).takeIf { it.isNotEmpty() }?.sum(),
+    completionTokens = listOfNotNull(completionTokens, other.completionTokens).takeIf { it.isNotEmpty() }?.sum(),
+    cachedPromptTokens = listOfNotNull(cachedPromptTokens, other.cachedPromptTokens).takeIf { it.isNotEmpty() }?.sum(),
+)
+
 sealed interface ModelEvent {
     data class TextDelta(val text: String) : ModelEvent
     data class ReasoningDelta(val text: String) : ModelEvent
+
+    /** Reported at most once per request, before [Completed]. */
+    data class Usage(val usage: TokenUsage) : ModelEvent
     data class Completed(val message: AgentMessage, val finishReason: String) : ModelEvent
     data class Failed(val code: String, val message: String) : ModelEvent
 }
@@ -97,7 +116,7 @@ interface WorkspaceService {
     val root: String
     suspend fun read(request: ReadFileRequest): FileReadResult
     suspend fun list(path: String = ".", glob: String? = null, limit: Int = 200): ToolResult
-    suspend fun search(query: String, path: String = ".", glob: String? = null, regex: Boolean = false, limit: Int = 100): ToolResult
+    suspend fun search(query: String, path: String = ".", glob: String? = null, regex: Boolean = false, limit: Int = 100, context: Int = 0): ToolResult
     suspend fun edit(request: EditFileRequest): FileChange
     suspend fun create(path: String, content: String): FileChange
     suspend fun move(path: String, snapshotId: String, destination: String): FileChange
@@ -152,4 +171,8 @@ data class RunState(
     val droppedContextMessages: Int = 0,
     val modelRounds: Int = 0,
     val activeModelId: String? = null,
+    val usage: TokenUsage = TokenUsage(),
+    val toolCalls: Int = 0,
+    val failedToolCalls: Int = 0,
+    val runDurationMs: Long? = null,
 )

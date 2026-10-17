@@ -127,7 +127,123 @@ class LocalWorkspaceTest {
         assertTrue(read.truncated)
         assertEquals(200, read.content.lines().size)
         expectError("UNOBSERVED_RANGE") { ws.edit(EditFileRequest("many.txt", read.snapshotId, listOf(FileEdit(startLine = 201, content = "changed")))) }
-        expectError("INVALID_RANGE") { ws.read(ReadFileRequest("many.txt", 206)) }
+        val beyond = ws.read(ReadFileRequest("many.txt", 206))
+        assertEquals("", beyond.content)
+        assertEquals(205, beyond.totalLines)
+        assertTrue(beyond.truncated)
+    }
+
+    @Test fun readClampsEndLinePastEofInsteadOfFailing() = workspace { root, ws ->
+        Files.writeString(root.resolve("a.txt"), "one\ntwo\nthree\n")
+        val clamped = ws.read(ReadFileRequest("a.txt", 2, 99))
+        assertEquals("two\nthree", clamped.content)
+        assertEquals(3, clamped.totalLines)
+        assertTrue(clamped.truncated)
+        val beyond = ws.read(ReadFileRequest("a.txt", 10))
+        assertEquals("", beyond.content)
+        assertEquals(3, beyond.totalLines)
+        assertTrue(beyond.truncated)
+        expectError("UNOBSERVED_RANGE") { ws.edit(EditFileRequest("a.txt", beyond.snapshotId, listOf(FileEdit(startLine = 1, content = "x")))) }
+    }
+
+    @Test fun readsEmptyFileWithoutSpecialCasingEndLine() = workspace { root, ws ->
+        Files.write(root.resolve("empty"), byteArrayOf())
+        val snapshot = ws.read(ReadFileRequest("empty"))
+        assertEquals(0, snapshot.totalLines)
+        assertEquals("", snapshot.content)
+        val clamped = ws.read(ReadFileRequest("empty", 1, 5))
+        assertEquals("", clamped.content)
+        assertTrue(clamped.truncated)
+        expectError("INVALID_RANGE") { ws.read(ReadFileRequest("empty", 2)) }
+    }
+
+    @Test fun chainedEditsReuseReturnedSnapshotWithoutRereading() = workspace { root, ws ->
+        Files.writeString(root.resolve("a.txt"), "one\ntwo\nthree\n")
+        val snapshot = ws.read(ReadFileRequest("a.txt"))
+        val first = ws.edit(EditFileRequest("a.txt", snapshot.snapshotId, listOf(FileEdit(startLine = 2, content = "TWO"))))
+        val next = first.snapshotId ?: error("A successful edit must return a snapshot id")
+        assertTrue(next != snapshot.snapshotId)
+        assertEquals("one\nTWO\nthree\n", Files.readString(root.resolve("a.txt")))
+        val second = ws.edit(EditFileRequest("a.txt", next, listOf(FileEdit(startLine = 3, content = "THREE"))))
+        assertEquals("one\nTWO\nTHREE\n", Files.readString(root.resolve("a.txt")))
+        assertTrue(second.snapshotId != null)
+    }
+
+    @Test fun chainedSnapshotOnlyObservesLinesMappedThroughEdits() = workspace { root, ws ->
+        Files.writeString(root.resolve("a.txt"), "1\n2\n3\n4\n5\n")
+        val snapshot = ws.read(ReadFileRequest("a.txt", 1, 3))
+        val change = ws.edit(EditFileRequest("a.txt", snapshot.snapshotId, listOf(FileEdit(startLine = 2, endLine = 3, content = "x\ny"))))
+        val next = change.snapshotId ?: error("A successful edit must return a snapshot id")
+        assertEquals("1\nx\ny\n4\n5\n", Files.readString(root.resolve("a.txt")))
+        // Replacement lines 2-3 were authored, so they stay observed; untouched line 4 was never read.
+        val again = ws.edit(EditFileRequest("a.txt", next, listOf(FileEdit(startLine = 2, content = "X"))))
+        assertEquals("1\nX\ny\n4\n5\n", Files.readString(root.resolve("a.txt")))
+        val afterAuthored = again.snapshotId ?: error("A successful edit must return a snapshot id")
+        expectError("UNOBSERVED_RANGE") { ws.edit(EditFileRequest("a.txt", afterAuthored, listOf(FileEdit(startLine = 4, content = "4?")))) }
+        assertEquals("1\nX\ny\n4\n5\n", Files.readString(root.resolve("a.txt")))
+    }
+
+    @Test fun insertAndDeleteShiftObservedLines() = workspace { root, ws ->
+        Files.writeString(root.resolve("a.txt"), "1\n2\n")
+        val snapshot = ws.read(ReadFileRequest("a.txt", 1, 1))
+        val inserted = ws.edit(EditFileRequest("a.txt", snapshot.snapshotId, listOf(FileEdit(op = "insert", beforeLine = 2, content = "a\nb"))))
+        assertEquals("1\na\nb\n2\n", Files.readString(root.resolve("a.txt")))
+        val afterInsert = inserted.snapshotId ?: error("A successful edit must return a snapshot id")
+        val edited = ws.edit(EditFileRequest("a.txt", afterInsert, listOf(FileEdit(startLine = 3, content = "B"))))
+        assertEquals("1\na\nB\n2\n", Files.readString(root.resolve("a.txt")))
+        val afterAuthored = edited.snapshotId ?: error("A successful edit must return a snapshot id")
+        // "2" moved from line 2 to line 4 through the insertion and was never observed.
+        expectError("UNOBSERVED_RANGE") { ws.edit(EditFileRequest("a.txt", afterAuthored, listOf(FileEdit(startLine = 4, content = "two")))) }
+
+        Files.writeString(root.resolve("d.txt"), "1\n2\n3\n4\n")
+        val readAll = ws.read(ReadFileRequest("d.txt"))
+        val deleted = ws.edit(EditFileRequest("d.txt", readAll.snapshotId, listOf(FileEdit(op = "delete", startLine = 2, endLine = 3))))
+        assertEquals("1\n4\n", Files.readString(root.resolve("d.txt")))
+        val afterDelete = deleted.snapshotId ?: error("A successful edit must return a snapshot id")
+        // Line 4 shifted up to line 2 and remains observed.
+        ws.edit(EditFileRequest("d.txt", afterDelete, listOf(FileEdit(startLine = 2, content = "four"))))
+        assertEquals("1\nfour\n", Files.readString(root.resolve("d.txt")))
+    }
+
+    @Test fun chainedSnapshotStillDetectsExternalWrite() = workspace { root, ws ->
+        Files.writeString(root.resolve("a.txt"), "one\ntwo\n")
+        val snapshot = ws.read(ReadFileRequest("a.txt"))
+        val first = ws.edit(EditFileRequest("a.txt", snapshot.snapshotId, listOf(FileEdit(startLine = 1, content = "ONE"))))
+        val next = first.snapshotId ?: error("A successful edit must return a snapshot id")
+        Files.writeString(root.resolve("a.txt"), "external\n")
+        expectError("STALE_SNAPSHOT") { ws.edit(EditFileRequest("a.txt", next, listOf(FileEdit(startLine = 2, content = "TWO")))) }
+        assertEquals("external\n", Files.readString(root.resolve("a.txt")))
+    }
+
+    @Test fun searchReturnsCompactMatchesWithOptionalContext() = kotlinx.coroutines.runBlocking {
+        val check = runCatching { ProcessBuilder("rg", "--version").start().waitFor() == 0 }.getOrDefault(false)
+        org.junit.jupiter.api.Assumptions.assumeTrue(check, "ripgrep is required for workspace search")
+        val root = Files.createTempDirectory("chiller-search-")
+        try {
+            Files.writeString(root.resolve("a.txt"), "alpha\nmatch-here   \ntrailing   \nomega\n")
+            Files.createDirectories(root.resolve("sub"))
+            Files.writeString(root.resolve("sub/b.txt"), "match-sub\n")
+            val ws = LocalWorkspace(root)
+            val plain = ws.search("match", limit = 10)
+            assertTrue(plain.ok)
+            val matches = plain.data!!.jsonObject["matches"]!!.jsonArray.map { it.jsonObject }
+            assertEquals(2, matches.size)
+            val byPath = matches.associateBy { it["path"]!!.jsonPrimitive.content }
+            val main = byPath.getValue("a.txt")
+            assertEquals(2, main["line"]!!.jsonPrimitive.int)
+            assertEquals("match-here", main["text"]!!.jsonPrimitive.content)
+            assertFalse(main.containsKey("context"))
+            assertEquals(1, byPath.getValue("sub/b.txt")["line"]!!.jsonPrimitive.int)
+            assertFalse(plain.truncated)
+            val limited = ws.search("match", limit = 1)
+            assertEquals(1, limited.data!!.jsonObject["matches"]!!.jsonArray.size)
+            assertTrue(limited.truncated)
+            val withContext = ws.search("match-here", limit = 10, context = 1)
+            val entry = withContext.data!!.jsonObject["matches"]!!.jsonArray.single().jsonObject
+            val context = entry["context"]!!.jsonArray.map { it.jsonPrimitive.content }
+            assertEquals(listOf("alpha", "trailing"), context)
+            assertEquals("match-here", entry["text"]!!.jsonPrimitive.content)
+        } finally { root.toFile().deleteRecursively() }
     }
 
     @Test fun rejectsSingleLineLargerThanVisibleReadLimit() = workspace { root, ws ->
@@ -181,10 +297,16 @@ class LocalWorkspaceTest {
             Files.writeString(root.resolve("private.txt"), "private")
             val result = LocalWorkspace(root).list(limit = 50)
             assertTrue(result.ok)
-            val entries = result.data!!.jsonObject["entries"]!!.jsonArray.map { it.jsonObject["path"]!!.jsonPrimitive.content }
+            val entries = result.data!!.jsonObject["entries"]!!.jsonArray.map { it.jsonPrimitive.content }
+            assertTrue(entries.all { !it.startsWith("/") })
             assertTrue("kept.txt" in entries)
             assertFalse("ignored.txt" in entries)
             assertFalse("private.txt" in entries)
+            val limited = LocalWorkspace(root).list(limit = 2)
+            assertEquals(2, limited.data!!.jsonObject["entries"]!!.jsonArray.size)
+            assertTrue(limited.truncated)
+            val narrowed = LocalWorkspace(root).list(".", "*.txt", 50)
+            assertEquals(setOf("kept.txt"), narrowed.data!!.jsonObject["entries"]!!.jsonArray.map { it.jsonPrimitive.content }.toSet())
         } finally { root.toFile().deleteRecursively() }
     }
 

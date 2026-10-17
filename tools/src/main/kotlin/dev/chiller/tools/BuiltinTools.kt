@@ -14,9 +14,9 @@ class BuiltinTools(
     private val json = Json { encodeDefaults = true }
     override val specs: List<ToolSpec> = listOf(
         spec("list_files", "List project files respecting ignore rules. Results are bounded.", ToolEffect.READ, mapOf("path" to string(), "glob" to string(), "limit" to integer())),
-        spec("search_text", "Search text in project; literal by default. Read files before editing.", ToolEffect.READ, mapOf("query" to string(), "path" to string(), "glob" to string(), "regex" to boolean(), "limit" to integer()), "query"),
+        spec("search_text", "Search text in project; literal by default. Optional context adds surrounding lines.", ToolEffect.READ, mapOf("query" to string(), "path" to string(), "glob" to string(), "regex" to boolean(), "limit" to integer(), "context" to integer()), "query"),
         spec("read_file", "Read numbered lines and obtain snapshot_id. Copy snapshot_id exactly for edits.", ToolEffect.READ, mapOf("path" to string(), "start_line" to integer(), "end_line" to integer()), "path"),
-        spec("edit_file", "Edit read lines of the exact snapshot. 1-based inclusive ranges. All edits use original snapshot.", ToolEffect.FILE_WRITE,
+        spec("edit_file", "Edit read lines of the exact snapshot. 1-based inclusive ranges. All edits use the original snapshot. The returned snapshotId can be used for further edits without re-reading.", ToolEffect.FILE_WRITE,
             mapOf("path" to string(), "snapshot_id" to string(), "edits" to buildJsonObject { put("type", "array"); put("maxItems", 32); put("items", buildJsonObject {
                 put("type", "object"); put("additionalProperties", false)
                 put("properties", buildJsonObject { put("op", buildJsonObject { put("type", "string"); put("enum", JsonArray(listOf("replace", "insert", "delete").map(::JsonPrimitive))) }); put("start_line", integer()); put("end_line", integer()); put("before_line", integer()); put("content", string()) })
@@ -44,7 +44,7 @@ class BuiltinTools(
             validateObject(args, spec.parameters)
             val result = when (call.name) {
                 "list_files" -> workspace.list(args.str("path", "."), args.optionalString("glob"), args.int("limit", 200))
-                "search_text" -> workspace.search(args.str("query"), args.str("path", "."), args.optionalString("glob"), args.bool("regex"), args.int("limit", 100))
+                "search_text" -> workspace.search(args.str("query"), args.str("path", "."), args.optionalString("glob"), args.bool("regex"), args.int("limit", 100), args.int("context", 0))
                 "read_file" -> {
                     val r = workspace.read(ReadFileRequest(args.str("path"), args.int("start_line", 1), args.optionalInt("end_line")))
                     ToolResult(true, buildJsonObject {
