@@ -130,3 +130,10 @@ User explicitly resumed after limits reset. Read-only audit began at14:43 Asia/A
 - New opt-in task `:evals:liveDeepSeekSmoke` (key from `DEEPSEEK_API_KEY`/`API_TOKEN`, bounded rounds/output, never part of `check`). It ran twice on the final code against `deepseek-flash`: status completed, 5 rounds, 6 tool calls, 0 failed calls, 9.1–9.8 s, prompt ~10.8k, completion 576–634, cached 8 192–9 600; an independent `python3 checks.py` after the run exited 0. The model actually used list/read/edit/process tools, not a scripted provider.
 - Commits: `feat(workspace)`, `feat(agent)`, `feat(providers)`, `test(workspace)`, `docs`, `feat(ui)`.
 - Not verified: visual acceptance of the new composer, keyboard/IME/VoiceOver, Windows/Linux, Gemma/vLLM, model-catalog discovery, subagents, read-only Git tools. Local vLLM without a credential is still unreachable.
+
+### Model catalog and popup follow-up
+
+- The composer popup covered the toolbar and the input: menus are now anchored to the composer width, open 6 dp above the toolbar with elevation, and no longer hide the mode/model controls. Widths are 224/300 dp with font-scale caps.
+- The model menu now shows discovered API models, remembered/manual ids and the selected one with source tags and exact-ID tooltips, plus explicit refresh with loading/failed/stale states.
+- New `ModelCatalogClient` + `KtorModelCatalogClient`: one bounded `GET <base>/models` (no redirects, 20 s timeout, 1 MiB body, 500 models, sanitized errors). `DesktopController` owns a revision-guarded refresh, clears the cache on endpoint/credential change and keeps the last list marked stale on failure.
+- `./gradlew check :evals:offlineSmoke` passed with **121 tests, 0 failures, 0 skipped**; offline smoke passed. No live request was made for discovery; the provider fixtures are loopback-only.

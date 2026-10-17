@@ -25,7 +25,7 @@ Live-прогон — это **один** сценарий на `deepseek-flash`
 | Контракты | реализовано | `contracts/Contracts.kt` — источник истины; String ID, `ToolEffect`, typed results |
 | Агентный цикл | реализовано | до 24 раундов (настраивается), параллельные READ-вызовы, эффекты строго по порядку, отмена, лимит повторяющихся ошибок |
 | Провайдер DeepSeek | live-подтверждён | SSE, thinking replay, usage, bounded retry 429/5xx до первого delta |
-| Каталог моделей | нет | discovery `GET /models` не реализован; список — выбранная + запомненные модели |
+| Каталог моделей | реализовано | явное `GET /models` с bounded-разбором, кэш на endpoint, ручной fallback; список не доказывает поддержку tools/reasoning |
 | Файловые инструменты | реализовано | 12 tools; snapshot-lineage после edit (без повторного чтения), clamp чтения, компактный search с context |
 | Undo / recovery | реализовано | before-images, журнал, reconcile, отказ при расхождении; move только внутри каталога |
 | Процессы | реализовано | argv, cwd, timeout, caps, отмена; это не OS-sandbox и не process groups |
