@@ -466,12 +466,40 @@ private fun Composer(
         modifier.shadow(3.dp, shape, ambientColor = c.text.copy(alpha = .04f), spotColor = c.text.copy(alpha = .04f)).clip(shape).background(c.surface)
             .border(1.dp, borderColor, shape).padding(horizontal = 12.dp, vertical = 10.dp)
     ) {
-        ContextChips(workspace, onChooseWorkspace, enabled = !running)
-        BasicTextField(field, { field = it; onDraft(it.text); onComposition(it.composition != null) },
-            modifier = Modifier.fillMaxWidth().heightIn(min = 26.dp, max = fieldMaxHeight).onFocusChanged { focused = it.isFocused }.verticalScroll(rememberScrollState()),
-            textStyle = TextStyle(color = c.text, fontSize = 14.sp, lineHeight = 22.sp, letterSpacing = 0.sp), cursorBrush = SolidColor(c.text),
-            decorationBox = { inner -> Box { if (draft.isEmpty()) Text("Напишите задачу…", color = c.faint, fontSize = 14.sp, lineHeight = 22.sp); inner() } },
-        )
+        // @-mentions: project files listed once per folder, matched against the token under the cursor.
+        val files by produceState(emptyList<String>(), workspace) { value = workspace?.let { root -> withContext(Dispatchers.IO) { runCatching { listProjectFiles(java.nio.file.Path.of(root)) }.getOrDefault(emptyList()) } }.orEmpty() }
+        val mention = if (field.selection.collapsed && files.isNotEmpty()) mentionAt(field.text, field.selection.start) else null
+        var dismissedAt by remember { mutableStateOf(-1) }
+        val matches = mention?.takeIf { it.first != dismissedAt }?.let { rankFiles(files, it.second) }.orEmpty()
+        var highlight by remember(mention?.second) { mutableStateOf(0) }
+        fun insert(path: String) {
+            val (start, _) = mention ?: return
+            val end = field.selection.start
+            val text = field.text.replaceRange(start, end, "@$path ")
+            field = TextFieldValue(text, TextRange(start + path.length + 2)); onDraft(text)
+        }
+        ContextChips(workspace, onChooseWorkspace, enabled = !running, mentioned = mentionedFiles(field.text, files), onRemoveMention = { path ->
+            val text = field.text.replace(Regex("(?<=^|\\s)@" + Regex.escape(path) + "\\s?"), "")
+            field = TextFieldValue(text, TextRange(text.length)); onDraft(text)
+        })
+        Box {
+            BasicTextField(field, { field = it; onDraft(it.text); onComposition(it.composition != null); if (mentionAt(it.text, it.selection.start)?.first != dismissedAt) dismissedAt = -1 },
+                modifier = Modifier.fillMaxWidth().heightIn(min = 26.dp, max = fieldMaxHeight).onFocusChanged { focused = it.isFocused }
+                    .onPreviewKeyEvent { event ->
+                        if (matches.isEmpty() || event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                        when (event.key) {
+                            Key.DirectionDown -> { highlight = (highlight + 1) % matches.size; true }
+                            Key.DirectionUp -> { highlight = (highlight - 1 + matches.size) % matches.size; true }
+                            Key.Enter, Key.NumPadEnter, Key.Tab -> { insert(matches[highlight.coerceIn(0, matches.lastIndex)]); true }
+                            Key.Escape -> { dismissedAt = mention?.first ?: -1; true }
+                            else -> false
+                        }
+                    }.verticalScroll(rememberScrollState()),
+                textStyle = TextStyle(color = c.text, fontSize = 14.sp, lineHeight = 22.sp, letterSpacing = 0.sp), cursorBrush = SolidColor(c.text),
+                decorationBox = { inner -> Box { if (draft.isEmpty()) Text(if (workspace != null) "Напишите задачу… @ — упомянуть файл" else "Напишите задачу…", color = c.faint, fontSize = 14.sp, lineHeight = 22.sp); inner() } },
+            )
+            if (matches.isNotEmpty() && focused) MentionPopover(matches, highlight.coerceIn(0, matches.lastIndex), ::insert) { dismissedAt = mention?.first ?: -1 }
+        }
         Spacer(Modifier.height(6.dp))
         ComposerToolbar(mode, onMode, model, running, pending, draft.isNotBlank(), modelMenu, { if (System.currentTimeMillis() - modelClosedAt > 200) modelMenu = !modelMenu }, allowProcesses, onAllow, onSend, onStop,
             connectionDot, contextTokens, catalog.models.firstOrNull { it.id == model }?.contextWindow) {

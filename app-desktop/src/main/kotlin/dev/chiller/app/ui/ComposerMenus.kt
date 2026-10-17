@@ -18,6 +18,8 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Check
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.CreateNewFolder
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Close
@@ -63,12 +65,12 @@ private val PopoverShape = RoundedCornerShape(12.dp)
  * control that opened it. Must be called inside the anchor's own layout node.
  */
 @Composable
-internal fun ChillerPopover(onDismiss: () -> Unit, width: Dp, below: Boolean = false, alignEnd: Boolean = false, content: @Composable ColumnScope.() -> Unit) {
+internal fun ChillerPopover(onDismiss: () -> Unit, width: Dp, below: Boolean = false, alignEnd: Boolean = false, focusable: Boolean = true, content: @Composable ColumnScope.() -> Unit) {
     val c = LocalChillerPalette.current
     val (gap, margin) = with(LocalDensity.current) { 8.dp.roundToPx() to 12.dp.roundToPx() }
     val reduced = LocalChillerReducedMotion.current
     val appear = remember { MutableTransitionState(reduced).apply { targetState = true } }
-    Popup(popupPositionProvider = remember(gap, margin, below, alignEnd) { AnchoredAbovePositionProvider(gap, margin, below, alignEnd) }, onDismissRequest = onDismiss, properties = PopupProperties(focusable = true)) {
+    Popup(popupPositionProvider = remember(gap, margin, below, alignEnd) { AnchoredAbovePositionProvider(gap, margin, below, alignEnd) }, onDismissRequest = onDismiss, properties = PopupProperties(focusable = focusable)) {
         AnimatedVisibility(appear, enter = fadeIn(tween(120)) + scaleIn(tween(140), initialScale = .96f, transformOrigin = TransformOrigin(if (alignEnd) 1f else 0f, if (below) 0f else 1f))) {
             Column(
                 Modifier.padding(12.dp).width(width)
@@ -262,11 +264,11 @@ private fun formatTokens(value: Int): String = if (value >= 1_000) "${(value + 5
 
 /** The folder the next message works in. Clicking it opens the folder chooser. */
 @Composable
-internal fun ContextChips(workspace: String?, onChoose: () -> Unit, enabled: Boolean) {
+internal fun ContextChips(workspace: String?, onChoose: () -> Unit, enabled: Boolean, mentioned: List<String> = emptyList(), onRemoveMention: (String) -> Unit = {}) {
     val c = LocalChillerPalette.current
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
-    Row(Modifier.padding(bottom = 6.dp)) {
+    Row(Modifier.padding(bottom = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         Row(
             Modifier.clip(RoundedCornerShape(6.dp)).background(if (hovered && enabled) c.hover else c.sidebar)
                 .hoverable(interaction).pointerHoverIcon(PointerIcon.Hand)
@@ -278,6 +280,30 @@ internal fun ContextChips(workspace: String?, onChoose: () -> Unit, enabled: Boo
             Spacer(Modifier.width(5.dp))
             Text(workspace?.substringAfterLast('/') ?: "Папка не выбрана", color = if (workspace == null) c.faint else c.muted, fontSize = 11.sp, lineHeight = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 220.dp))
         }
+        mentioned.take(6).forEach { path ->
+            Row(Modifier.clip(RoundedCornerShape(6.dp)).background(c.accent.copy(alpha = .10f)).padding(start = 7.dp, end = 3.dp, top = 3.dp, bottom = 3.dp), verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Outlined.Description, null, Modifier.size(12.dp), tint = c.accent)
+                Spacer(Modifier.width(4.dp))
+                Text(path.substringAfterLast('/'), color = c.text, fontSize = 11.sp, lineHeight = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 160.dp))
+                Box(Modifier.padding(start = 2.dp).size(16.dp).clip(CircleShape).pointerHoverIcon(PointerIcon.Hand).clickable(role = Role.Button) { onRemoveMention(path) }.semantics { contentDescription = "Убрать $path" }, contentAlignment = Alignment.Center) {
+                    Icon(Icons.Outlined.Close, null, Modifier.size(11.dp), tint = c.muted)
+                }
+            }
+        }
+        if (mentioned.size > 6) Text("+${mentioned.size - 6}", color = c.faint, fontSize = 11.sp, modifier = Modifier.align(Alignment.CenterVertically))
+    }
+}
+
+/** Project files matching the @-mention being typed; does not take focus, so typing continues. */
+@Composable
+internal fun MentionPopover(matches: List<String>, highlighted: Int, onPick: (String) -> Unit, onDismiss: () -> Unit) {
+    val c = LocalChillerPalette.current
+    ChillerPopover(onDismiss, 380.dp, focusable = false) {
+        Text("Файлы проекта · ↑↓ выбрать · ↵ вставить", color = c.faint, fontSize = 11.sp, modifier = Modifier.padding(start = 16.dp, top = 8.dp, bottom = 4.dp))
+        matches.forEachIndexed { index, path ->
+            MenuRow(path.substringAfterLast('/'), { onPick(path) }, subtitle = path.substringBeforeLast('/', "").ifEmpty { null }, icon = Icons.Outlined.Description, highlighted = index == highlighted)
+        }
+        Spacer(Modifier.height(6.dp))
     }
 }
 

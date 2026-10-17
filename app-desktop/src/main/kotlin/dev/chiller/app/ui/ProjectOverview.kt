@@ -76,3 +76,43 @@ fun starters(project: ProjectOverview): List<Starter> {
         Starter("Объяснить модуль", "Как устроена выбранная часть", "Объясни, как устроен модуль "),
     )
 }
+
+/** Workspace-relative file paths for @-mentions, skipping build/VCS folders and symlinks. Bounded. */
+fun listProjectFiles(root: Path, limit: Int = 5_000): List<String> {
+    val result = mutableListOf<String>()
+    val stack = ArrayDeque(listOf(root))
+    while (stack.isNotEmpty() && result.size < limit) {
+        val dir = stack.removeLast()
+        val entries = runCatching { Files.newDirectoryStream(dir).use { it.toList() } }.getOrDefault(emptyList()).sortedBy { it.name }
+        for (entry in entries) {
+            if (Files.isSymbolicLink(entry)) continue
+            if (Files.isDirectory(entry)) { if (entry.name !in IGNORED && !entry.name.startsWith(".")) stack.addLast(entry) }
+            else if (result.size < limit) result += root.relativize(entry).toString().replace('\\', '/')
+        }
+    }
+    return result.sorted()
+}
+
+/** The @-mention being typed at [cursor]: start of the '@' and the query after it, or null. */
+fun mentionAt(text: String, cursor: Int): Pair<Int, String>? {
+    if (cursor < 1 || cursor > text.length) return null
+    val start = text.lastIndexOf('@', cursor - 1).takeIf { it >= 0 } ?: return null
+    if (start > 0 && !text[start - 1].isWhitespace()) return null
+    val query = text.substring(start + 1, cursor)
+    if (query.any { it.isWhitespace() } || query.length > 120) return null
+    return start to query
+}
+
+/** Best matches first: file name prefix, then name contains, then path contains; shorter paths win ties. */
+fun rankFiles(files: List<String>, query: String, limit: Int = 8): List<String> {
+    val q = query.lowercase()
+    return files.mapNotNull { path ->
+        val name = path.substringAfterLast('/').lowercase()
+        val score = when { q.isEmpty() -> 3; name.startsWith(q) -> 0; q in name -> 1; q in path.lowercase() -> 2; else -> return@mapNotNull null }
+        Triple(score, path.length, path)
+    }.sortedWith(compareBy({ it.first }, { it.second })).take(limit).map { it.third }
+}
+
+/** Paths mentioned as @path in [text] that exist in [files]. */
+fun mentionedFiles(text: String, files: Collection<String>): List<String> =
+    Regex("(?<=^|\\s)@([^\\s@]+)").findAll(text).map { it.groupValues[1].trimEnd('.', ',', ';', ':', ')') }.filter { it in files }.distinct().toList()
