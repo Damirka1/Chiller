@@ -173,6 +173,7 @@ fun ChillerApp(
                             canConfigure = !active, compact = compact, compactChanges = showCompactChanges,
                             onCompactChanges = { showCompactChanges = !showCompactChanges },
                         )
+                        RunProgressBar(active)
                         Row(Modifier.weight(1f).fillMaxWidth()) {
                             if (!(compact && layout == WorkspaceLayout.STUDIO && showCompactChanges)) {
                                 Column(Modifier.weight(1f).fillMaxHeight()) {
@@ -455,6 +456,7 @@ private fun Conversation(state: RunState, reduced: Boolean, onAnswer: (String) -
                     projection.unlinked.forEach { ToolRow(it, reduced, onUndo, canUndo) }
                 }
             }
+            if (state.status in setOf("completed", "failed", "cancelled") && state.modelRounds > 0) item(key = "run-summary") { RunSummaryLine(state) }
             if (state.status in setOf("preparing", "streaming", "executing", "cancelled")) item(key = "run-status") {
                 val running = state.activities.lastOrNull { it.status == "running" }
                 val label = when (state.status) {
@@ -463,7 +465,10 @@ private fun Conversation(state: RunState, reduced: Boolean, onAnswer: (String) -
                     "cancelled" -> "Задача остановлена"
                     else -> "Подготовка…"
                 }
-                Text(label, color = c.muted, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 8.dp))
+                Row(Modifier.padding(start = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    if (state.status != "cancelled") { Pulse(c.accent); Spacer(Modifier.width(10.dp)) }
+                    Text(label, color = c.muted, fontSize = 12.sp, lineHeight = 18.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
             }
             if (state.reasoning.isNotBlank()) item(key = "reasoning") {
                 var open by remember { mutableStateOf(false) }
@@ -538,66 +543,6 @@ private fun CodeBlock(code: String, language: String) {
         }
         Text(code, color = c.text, fontFamily = FontFamily.Monospace, fontSize = 12.sp, lineHeight = 20.sp,
             modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(12.dp))
-    }
-}
-
-@Composable
-private fun ToolGroup(activities: List<Activity>, reduced: Boolean, onUndo: (String) -> Unit, canUndo: Boolean) {
-    if (activities.isEmpty()) return
-    if (activities.size == 1) { ToolRow(activities.first(), reduced, onUndo, canUndo); return }
-    var open by remember(activities.first().id) { mutableStateOf(false) }
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        ChillerControl(activityGroupLabel(activities), { open = !open }, icon = if (open) Icons.Outlined.KeyboardArrowUp else Icons.Outlined.KeyboardArrowDown)
-        AnimatedVisibility(open, enter = if (reduced) EnterTransition.None else expandVertically(tween(180)), exit = if (reduced) ExitTransition.None else shrinkVertically(tween(160))) {
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) { activities.filter { it.status !in setOf("failed", "error", "conflict") }.forEach { ToolRow(it, reduced, onUndo, canUndo) } }
-        }
-        activities.filter { it.status in setOf("failed", "error", "conflict") }.forEach { ToolRow(it, reduced, onUndo, canUndo) }
-    }
-}
-
-@Composable
-private fun ToolRow(activity: Activity, reduced: Boolean, onUndo: (String) -> Unit, canUndo: Boolean) {
-    val c = LocalChillerPalette.current
-    var open by remember(activity.id) { mutableStateOf(activity.status in setOf("failed", "error", "conflict")) }
-    LaunchedEffect(activity.status) { if (activity.status in setOf("failed", "error", "conflict")) open = true }
-    val failed = activity.status in setOf("failed", "error", "conflict")
-    val running = activity.status in setOf("running", "executing", "preparing")
-    val success = activity.status in setOf("completed", "applied", "exited")
-    val color = when { failed -> c.negative; success -> c.positive; else -> c.muted }
-    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).border(1.dp, c.border.copy(alpha = .85f), RoundedCornerShape(8.dp))) {
-        Row(Modifier.fillMaxWidth().clickable { open = !open }.padding(horizontal = 12.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-            Icon(if (failed) Icons.Outlined.Close else if (running) Icons.Outlined.MoreHoriz else if (success) Icons.Outlined.Check else Icons.Outlined.HelpOutline, null, Modifier.size(14.dp), tint = color)
-            Spacer(Modifier.width(9.dp))
-            Text(toolLabel(activity.name), color = c.muted, fontSize = 12.sp)
-            if (activity.target.isNotBlank()) Text("  ${activity.target}", color = c.text, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f)) else Spacer(Modifier.weight(1f))
-            Icon(if (open) Icons.Outlined.KeyboardArrowUp else Icons.Outlined.KeyboardArrowDown, null, Modifier.size(15.dp), tint = c.faint)
-        }
-        AnimatedVisibility(open, enter = if (reduced) EnterTransition.None else expandVertically(tween(180)) + fadeIn(tween(120)), exit = if (reduced) ExitTransition.None else shrinkVertically(tween(160)) + fadeOut(tween(100))) {
-            Column {
-                if (activity.diff != null) Diff(activity.diff!!)
-                else if (activity.output.isNotBlank()) SelectionContainer { Text(prettyOutput(activity.output), color = c.muted, fontSize = 11.sp, lineHeight = 18.sp, fontFamily = FontFamily.Monospace, modifier = Modifier.fillMaxWidth().background(c.sidebar).padding(12.dp), maxLines = 24) }
-                val id = if (canUndo && success && activity.name in setOf("edit_file", "create_file", "move_file", "delete_file")) changeId(activity.output) else null
-                if (id != null) Box(Modifier.fillMaxWidth().padding(5.dp), contentAlignment = Alignment.CenterEnd) {
-                    ChillerControl("Отменить правку", { onUndo(id) }, icon = Icons.AutoMirrored.Outlined.Undo)
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun Diff(diff: String) {
-    val c = LocalChillerPalette.current
-    SelectionContainer {
-        Column(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).background(c.canvas).padding(vertical = 7.dp)) {
-            diff.lineSequence().take(500).forEach { line ->
-                val added = line.startsWith('+') && !line.startsWith("+++ ")
-                val removed = line.startsWith('-') && !line.startsWith("--- ")
-                Text(line, fontFamily = FontFamily.Monospace, fontSize = 11.sp, lineHeight = 19.sp, letterSpacing = 0.sp,
-                    color = when { added -> c.positive; removed -> c.negative; else -> c.muted },
-                    modifier = Modifier.fillMaxWidth().background(when { added -> c.added; removed -> c.removed; else -> c.canvas }).padding(horizontal = 12.dp))
-            }
-        }
     }
 }
 
@@ -794,12 +739,12 @@ internal fun connectionSummary(connection: ConnectionState, configured: Boolean)
 private fun friendlyModel(model: String) = modelLabel(model).ifBlank { "Выбрать модель" }
 
 private fun statusLabel(status: String) = when (status) { "preparing" -> "Подготовка…"; "streaming" -> "Работает…"; "executing" -> "Выполняет действие…"; else -> "" }
-private fun changeId(output: String): String? = runCatching { Json.parseToJsonElement(output).jsonObject["data"]?.jsonObject?.get("id")?.jsonPrimitive?.content }.getOrNull()
-private fun prettyOutput(output: String): String = runCatching {
+internal fun changeId(output: String): String? = runCatching { Json.parseToJsonElement(output).jsonObject["data"]?.jsonObject?.get("id")?.jsonPrimitive?.content }.getOrNull()
+internal fun prettyOutput(output: String): String = runCatching {
     val data = Json.parseToJsonElement(output).jsonObject["data"]
     (data as? JsonObject)?.get("output")?.jsonPrimitive?.content ?: Json { prettyPrint = true }.encodeToString(JsonElement.serializer(), data ?: JsonPrimitive(output))
 }.getOrDefault(output)
-private fun toolLabel(name: String) = when (name) {
+internal fun toolLabel(name: String) = when (name) {
     "read_file" -> "Чтение"; "list_files" -> "Файлы"; "search_text" -> "Поиск"; "edit_file" -> "Правка"; "create_file" -> "Создание"
     "move_file" -> "Перемещение"; "delete_file" -> "Удаление"; "run_process" -> "Команда"; "read_process" -> "Вывод"; "stop_process" -> "Остановка"
     "read_artifact" -> "Результат"; "ask_user" -> "Вопрос"; "undo" -> "Откат"; else -> name
