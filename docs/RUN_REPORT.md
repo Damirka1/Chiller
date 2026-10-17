@@ -226,3 +226,15 @@ User explicitly resumed after limits reset. Read-only audit began at14:43 Asia/A
 - Verification: `./gradlew check :evals:offlineSmoke :app-desktop:richResultsPreview :app-desktop:createDistributable` **passed**,253 tests,0 failures/errors/skipped. Offline smoke and 14 task oracles passed. Initial targeted compile caught a missing required target in a new fixture test; fixed before the successful gate.
 - Explicit `richResultsPreview` task renders a synthetic chart/table in light/dark and 1120/560px widths to app-desktop/build/reports/rich-results. All four PNGs rendered; light-wide/dark-narrow visually inspected. `-PrichResultsInteractive` starts an isolated fixture without providers/credentials/user sessions. Native fixture started without logged errors; CUA listed RichResultsPreviewKt but getApp failed with Invalid app, so click/gesture/Escape native acceptance is **unverified**. The fixture process was stopped afterward. No new API requests or remote publication.
 - Updated local application: app-desktop/build/compose/binaries/main/app/Chiller.app. Existing GitHub v1.1.0 assets are not rebuilt by this local command.
+
+## Harness features — profiles, comparison, rewind, auto-verify — 17 October (night)
+
+- Worked in an isolated worktree branch (feat/model-profiles) while another agent changed Markdown, previews and the run tab; master was merged in without conflicts.
+- Model profiles (full/compact/auto by model id), ProfiledTools, optional system prompt, provider requestExtras that cannot replace protocol fields; Settings → Agent profile card. liveEval takes CHILLER_EVAL_PROFILE and reads the key from the nearest .env.
+- Live deepseek-flash, compact profile, 13 tasks: 13/13 with ~146k prompt tokens versus ~235k for the full profile on the same tasks.
+- In-app model comparison on the shared runEvalSuite; live check full vs compact on two tasks: both 2/2, compact 19k vs 55k prompt tokens.
+- Turn rewind through per-change undo; fixed a pre-existing bug where undo of delete_file always threw NoSuchFileException (regression test added).
+- Auto-verify: per-project check command, argv without shell, only with process permission; live loop failed once (exit 1), the agent fixed the remaining case from the output, the second check passed.
+- Checks after merging master: 261 tests, 0 failures/errors/skipped; offline smoke with 14 task oracles passed.
+- Not verified: Gemma/vLLM (including structured-output extras), the new pages by hand in the running app (comparison page rendered offscreen; the banner and rewind button only through tests).
+
