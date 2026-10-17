@@ -48,3 +48,21 @@
 ## Build ownership
 
 All three workers completed their assigned source/test changes. Coordinator owns next build slot and Git. Do not run concurrent Gradle builds in this checkout. If a local run task is still resolving runtime dependencies, inspect/finish it before launching another Gradle build.
+
+## Checkpoint: context, export and desktop integration
+
+- Added ContextPlanner: preserves system policy and newest whole user turns, tool/result pairing and provider replay. Oversized current turn fails explicitly; earlier turns can be omitted. Character-based estimate with output/schema reserve, not exact provider token accounting or LLM summarization. Five new tests. Footer exposes estimate/rounds; three repeated identical tool errors stop the loop.
+- Added Markdown/JSON session export with preview and native save picker. Known credential fields/patterns redacted, replay excluded; arbitrary user text still needs review. Artifact references only, not a portable blob backup. Three new tests.
+- Added native File/Conversation/View menus and macOS folder picker. Actual native menu Send produced an offline reply; File → Markdown opened the correct session preview, Close returned to conversation. Latest keyboard checks via CUA Cmd+Enter and Escape still did not change the window; keyboard acceptance remains open. Do not claim it fixed solely because handlers compile.
+- Found offline history without workspace attempted to construct a workspace engine. Fixed view-only restoration without engine, and added a desktop controller regression test. Coordinator/controller command guards now cover engine setup and running jobs to avoid simultaneous send/session changes.
+- `./gradlew check :evals:offlineSmoke :app-desktop:createDistributable` passed after controller/context fixes. 45 tests passed before the new desktop regression test; its targeted result is recorded in the following checkpoint. Updated .app built successfully. GUI ran the immediately preceding build, so the latest controller restoration fix is covered by unit verification, not yet a new native window check.
+- Latest first implementation commit: 6961b00. These changes form the next local checkpoint on master. No live API calls, publishing or pushes.
+- Next: durable pending-question/unknown-operation restoration, native keyboard diagnosis and offline history GUI recheck. Alpha is still partial.
+
+### Verified recovery checkpoint
+
+- Full command `./gradlew check :evals:offlineSmoke :app-desktop:createDistributable` passed after recovery changes: **47 tests, 0 failures/errors/skipped**. Includes desktop offline-history regression, context/export tests and interrupted tool/question recovery. Real smoke and macOS packaging passed.
+- Recovery recognizes unresolved tool calls in order and unfinished runs. Saved question prompt/options restore as read-only in interrupted UI; there is no live deferred after restart. Guidance requires a new chat. This is durable inspection, **not automatic continuation**. Unknown side effects are never replayed.
+- Native GUI actually verified menu Send and Markdown preview/close. Settings closed by button; Escape still did not dismiss under CUA. The latest recovery/question UI has compilation/unit coverage but not a fresh visual check.
+- Next build slot is free; worker resume_hardening finished. Local .app may still be running an earlier build in settings/conversation. Relaunch the rebuilt bundle for latest source.
+- Startup: `./gradlew :app-desktop:run`; isolated offline: `CHILLER_DATA_DIR="$PWD/.chiller/local" DEEPSEEK_API_KEY= ./gradlew :app-desktop:run`.

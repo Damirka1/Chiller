@@ -24,6 +24,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.text.TextStyle
@@ -39,9 +41,12 @@ import androidx.compose.ui.window.PopupProperties
 import dev.chiller.contracts.*
 import dev.chiller.design.*
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.serialization.json.*
 
 enum class WorkspaceLayout { FOCUS, STUDIO }
+enum class DesktopAction { NEW_CHAT, SEND, SETTINGS, STOP, FOCUS, STUDIO, SIDEBAR }
 
 @Composable
 fun ChillerApp(
@@ -52,6 +57,9 @@ fun ChillerApp(
     onConfigureProvider: (baseUrl: String, model: String, thinking: Boolean, apiKey: String?) -> Unit,
     onAnswerQuestion: (String) -> Unit, onUndo: (String) -> Unit,
     onAllowProcessesChange: (Boolean) -> Unit, allowProcesses: Boolean,
+    actions: Flow<DesktopAction> = emptyFlow(),
+    exportPreview: String? = null, exportFormat: String = "markdown",
+    onDismissExport: () -> Unit = {}, onSaveExport: () -> Unit = {},
 ) {
     val systemDark = isSystemInDarkTheme()
     var dark by remember { mutableStateOf<Boolean?>(null) }
@@ -65,9 +73,23 @@ fun ChillerApp(
     val active = state.status in setOf("preparing", "streaming", "executing")
     val empty = state.messages.none { it.role in setOf("user", "assistant") } && state.activities.isEmpty() && state.error == null
     val send = { if (draft.isNotBlank() && !active) { onSend(draft.trim(), mode); draft = "" } }
+    val handleAction by rememberUpdatedState<(DesktopAction) -> Unit> { action ->
+        when (action) {
+            DesktopAction.NEW_CHAT -> if (!active) onNewSession()
+            DesktopAction.SEND -> if (!settings) send()
+            DesktopAction.SETTINGS -> if (!active) settings = true
+            DesktopAction.STOP -> if (active) onStop()
+            DesktopAction.FOCUS -> layout = WorkspaceLayout.FOCUS
+            DesktopAction.STUDIO -> layout = WorkspaceLayout.STUDIO
+            DesktopAction.SIDEBAR -> sidebar = !sidebar
+        }
+    }
+    LaunchedEffect(actions) { actions.collect { handleAction(it) } }
+    val rootFocus = remember { FocusRequester() }
+    LaunchedEffect(Unit) { rootFocus.requestFocus() }
     ChillerTheme(darkTheme = dark ?: systemDark) {
         val c = LocalChillerPalette.current
-        BoxWithConstraints(Modifier.fillMaxSize().background(c.canvas).onPreviewKeyEvent {
+        BoxWithConstraints(Modifier.fillMaxSize().background(c.canvas).focusRequester(rootFocus).focusable().onPreviewKeyEvent {
             if (it.type == KeyEventType.KeyDown && (it.isMetaPressed || it.isCtrlPressed)) {
                 when (it.key) {
                     Key.Enter -> { send(); true }
@@ -121,6 +143,9 @@ fun ChillerApp(
                                         Spacer(Modifier.width(6.dp))
                                         Text(if (isDemo) "Модель не подключена" else "${friendlyModel(providerModel)} · API", color = c.faint, fontSize = 10.sp, lineHeight = 14.sp)
                                         Spacer(Modifier.weight(1f))
+                                        state.contextEstimatedTokens?.let { tokens ->
+                                            Text("≈ $tokens токенов${if (state.droppedContextMessages > 0) " · история сокращена" else ""}", color = c.faint, fontSize = 10.sp, modifier = Modifier.padding(end = 16.dp))
+                                        }
                                         Text("⌘ ↵  Отправить", color = c.faint, fontSize = 10.sp, lineHeight = 14.sp)
                                     }
                                 }
@@ -140,6 +165,7 @@ fun ChillerApp(
         if (settings && !active) Settings(providerBaseUrl, providerModel, thinkingEnabled, apiKeyConfigured, allowProcesses, onAllowProcessesChange, reducedMotion, { reducedMotion = it }, { settings = false }) { url, model, thinking, key ->
             onConfigureProvider(url, model, thinking, key); settings = false
         }
+        if (exportPreview != null) ExportPreview(exportPreview, exportFormat, onDismissExport, onSaveExport)
     }
 }
 
@@ -276,7 +302,7 @@ private fun Conversation(state: RunState, reduced: Boolean, onAnswer: (String) -
                 }
             }
             if (state.streamingText.isNotBlank()) item(key = "stream") { Message("assistant", state.streamingText) }
-            state.question?.let { q -> item(key = "question-${q.id}") { Question(q, onAnswer) } }
+            state.question?.let { q -> item(key = "question-${q.id}") { Question(q, onAnswer, state.status != "interrupted") } }
             state.error?.let { error -> item(key = "error") { Row(Modifier.fillMaxWidth().padding(8.dp), horizontalArrangement = Arrangement.spacedBy(9.dp)) {
                 Icon(Icons.Outlined.ErrorOutline, null, Modifier.size(16.dp), tint = c.negative)
                 Text(error, color = c.negative, fontSize = 12.sp, lineHeight = 20.sp)
@@ -383,14 +409,16 @@ private fun Inspector(activities: List<Activity>, onUndo: (String) -> Unit, canU
 }
 
 @Composable
-private fun Question(question: UserQuestion, onAnswer: (String) -> Unit) {
+private fun Question(question: UserQuestion, onAnswer: (String) -> Unit, canAnswer: Boolean) {
     val c = LocalChillerPalette.current
     var answer by remember(question.id) { mutableStateOf("") }
     Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(9.dp)).border(1.dp, c.border, RoundedCornerShape(9.dp)).padding(15.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text(question.question, color = c.text, fontSize = 13.sp, lineHeight = 21.sp)
+        if (canAnswer) {
         question.options.forEach { ChillerControl(it, { onAnswer(it) }, icon = Icons.AutoMirrored.Outlined.ArrowForward, style = ControlStyle.OUTLINE) }
         ChillerField(answer, { answer = it }, "Ваш ответ")
         ChillerControl("Продолжить", { if (answer.isNotBlank()) onAnswer(answer) }, style = ControlStyle.PRIMARY, enabled = answer.isNotBlank())
+        } else Text("Вопрос сохранён после прерывания. Проверьте историю и начните новый диалог; прежняя операция не будет запущена повторно.", color = c.muted, fontSize = 12.sp)
     }
 }
 
@@ -402,8 +430,12 @@ private fun Settings(url: String, model: String, thinking: Boolean, configured: 
     var nextThinking by remember { mutableStateOf(thinking) }
     var key by remember { mutableStateOf("") }
     var clear by remember { mutableStateOf(false) }
+    val dialogFocus = remember { FocusRequester() }
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        Column(Modifier.width(440.dp).clip(RoundedCornerShape(13.dp)).background(c.surface).border(1.dp, c.border, RoundedCornerShape(13.dp)).padding(25.dp), verticalArrangement = Arrangement.spacedBy(19.dp)) {
+        LaunchedEffect(Unit) { dialogFocus.requestFocus() }
+        Column(Modifier.width(440.dp).focusRequester(dialogFocus).focusable().onPreviewKeyEvent {
+            if (it.type == KeyEventType.KeyDown && it.key == Key.Escape) { onDismiss(); true } else false
+        }.clip(RoundedCornerShape(13.dp)).background(c.surface).border(1.dp, c.border, RoundedCornerShape(13.dp)).padding(25.dp), verticalArrangement = Arrangement.spacedBy(19.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text("Подключение", color = c.text, fontSize = 19.sp, letterSpacing = (-.5).sp)
                 Spacer(Modifier.weight(1f)); ChillerIconButton(Icons.Outlined.Close, "Закрыть настройки", onDismiss)
@@ -423,6 +455,27 @@ private fun Settings(url: String, model: String, thinking: Boolean, configured: 
                 ChillerControl("Отмена", onDismiss)
                 Spacer(Modifier.width(8.dp))
                 ChillerControl("Сохранить", { onSave(nextUrl.trim(), nextModel.trim(), nextThinking, if (clear) "" else key.takeIf { it.isNotBlank() }); key = "" }, style = ControlStyle.PRIMARY, enabled = nextUrl.isNotBlank() && nextModel.isNotBlank())
+            }
+        }
+    }
+}
+
+@Composable
+private fun ExportPreview(content: String, format: String, onDismiss: () -> Unit, onSave: () -> Unit) {
+    val c = LocalChillerPalette.current
+    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Column(Modifier.width(680.dp).heightIn(max = 650.dp).clip(RoundedCornerShape(13.dp)).background(c.surface).border(1.dp, c.border, RoundedCornerShape(13.dp)).padding(23.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text("Экспорт ${if (format == "json") "JSON" else "Markdown"}", color = c.text, fontSize = 18.sp, letterSpacing = (-.4).sp)
+                Spacer(Modifier.weight(1f)); ChillerIconButton(Icons.Outlined.Close, "Закрыть экспорт", onDismiss)
+            }
+            Text("Проверьте содержимое перед сохранением. Известные поля ключей скрыты; произвольный текст может содержать личные данные.", color = c.muted, fontSize = 12.sp, lineHeight = 19.sp)
+            SelectionContainer {
+                Text(content, color = c.text, fontFamily = FontFamily.Monospace, fontSize = 11.sp, lineHeight = 18.sp,
+                    modifier = Modifier.fillMaxWidth().weight(1f, fill = false).heightIn(min = 150.dp, max = 430.dp).verticalScroll(rememberScrollState()).background(c.canvas).padding(13.dp))
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                ChillerControl("Отмена", onDismiss); Spacer(Modifier.width(8.dp)); ChillerControl("Сохранить файл…", onSave, style = ControlStyle.PRIMARY)
             }
         }
     }

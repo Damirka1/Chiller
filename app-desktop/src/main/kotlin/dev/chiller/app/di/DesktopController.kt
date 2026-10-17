@@ -12,6 +12,8 @@ import io.ktor.client.engine.cio.CIO
 import io.ktor.client.plugins.HttpTimeout
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.*
 import java.nio.file.Files
@@ -19,13 +21,15 @@ import java.nio.file.Path
 
 @Serializable
 data class DesktopSettings(val baseUrl: String = "https://api.deepseek.com", val model: String = "deepseek-flash", val thinking: Boolean = false, val workspace: String? = null)
-data class DesktopState(val run: RunState = RunState(), val sessions: List<SessionInfo> = emptyList(), val sessionId: String = newId(), val settings: DesktopSettings = DesktopSettings(), val apiKeyConfigured: Boolean = false, val allowProcesses: Boolean = false)
+data class DesktopState(val run: RunState = RunState(), val sessions: List<SessionInfo> = emptyList(), val sessionId: String = newId(), val settings: DesktopSettings = DesktopSettings(), val apiKeyConfigured: Boolean = false, val allowProcesses: Boolean = false, val exportContent: String? = null, val exportFormat: String = "markdown")
 
 class DesktopController(private val directory: Path) {
+    private val commands = Mutex()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
     private val events = JsonlEventStore(directory.resolve("sessions"))
     private val artifacts = LocalArtifactStore(directory.resolve("artifacts"))
+    private val exporter = SessionExporter(events)
     private var credential: String? = System.getenv("DEEPSEEK_API_KEY")?.takeIf { it.isNotBlank() }
     private val _state = MutableStateFlow(DesktopState(apiKeyConfigured = credential != null))
     val state: StateFlow<DesktopState> = _state.asStateFlow()
@@ -47,9 +51,17 @@ class DesktopController(private val directory: Path) {
         _state.update { it.copy(settings = settings, sessions = events.list()) }
     }
 
-    private fun busy() = _state.value.run.status in setOf("preparing", "streaming", "executing")
+    suspend fun configure(url: String, model: String, thinking: Boolean, key: String?) = commands.withLock { configureLocked(url, model, thinking, key) }
+    suspend fun chooseWorkspace(path: Path) = commands.withLock { chooseWorkspaceLocked(path) }
+    suspend fun newSession() = commands.withLock { newSessionLocked() }
+    suspend fun selectSession(id: String) = commands.withLock { selectSessionLocked(id) }
+    suspend fun send(text: String, mode: ExecutionMode) = commands.withLock { sendLocked(text, mode) }
+    suspend fun undo(id: String) = commands.withLock { undoLocked(id) }
+    suspend fun prepareExport(format: String) = commands.withLock { prepareExportLocked(format) }
 
-    suspend fun configure(url: String, model: String, thinking: Boolean, key: String?) {
+    private fun busy() = coordinator?.isRunning == true || listOf(_state.value.run.status, coordinator?.state?.value?.status).any { it in setOf("preparing", "streaming", "executing") }
+
+    private suspend fun configureLocked(url: String, model: String, thinking: Boolean, key: String?) {
         if (busy()) return
         val uri = runCatching { java.net.URI(url) }.getOrNull()
         if (uri == null || uri.host == null || uri.userInfo != null || uri.query != null || uri.fragment != null || uri.scheme !in setOf("https", "http") || model.isBlank()) {
@@ -65,7 +77,7 @@ class DesktopController(private val directory: Path) {
         resetEngine()
     }
 
-    suspend fun chooseWorkspace(path: Path) {
+    private suspend fun chooseWorkspaceLocked(path: Path) {
         if (busy()) return
         try {
             val canonical = withContext(Dispatchers.IO) { path.toRealPath() }
@@ -77,24 +89,27 @@ class DesktopController(private val directory: Path) {
         } catch (_: Exception) { showError("Не удалось открыть рабочую папку.") }
     }
 
-    suspend fun newSession() {
+    private suspend fun newSessionLocked() {
         if (busy()) return
         resetEngine()
         _state.update { it.copy(sessionId = newId(), run = RunState()) }
     }
 
-    suspend fun selectSession(id: String) {
+    private suspend fun selectSessionLocked(id: String) {
         if (busy()) return
         try {
             resetEngine()
             val history = events.read(id)
             val savedRoot = history.firstOrNull { it.type == "session.workspace" }?.payload?.get("root")?.jsonPrimitive?.contentOrNull
-            _state.update { it.copy(sessionId = id, settings = if (savedRoot != null) it.settings.copy(workspace = savedRoot) else it.settings, run = RunState()) }
-            buildEngine().restore()
+            _state.update { it.copy(sessionId = id, settings = it.settings.copy(workspace = savedRoot), run = RunState()) }
+            if (savedRoot == null) {
+                val messages = history.filter { it.type == "message" }.map { json.decodeFromJsonElement<AgentMessage>(it.payload) }
+                _state.update { it.copy(run = RunState(messages = messages)) }
+            } else buildEngine().restore()
         } catch (_: Exception) { showError("Сессию не удалось восстановить. Её данные сохранены для проверки.") }
     }
 
-    suspend fun send(text: String, mode: ExecutionMode) {
+    private suspend fun sendLocked(text: String, mode: ExecutionMode) {
         if (busy()) return
         if (credential == null) {
             // Explicit offline preview never performs user-requested filesystem changes.
@@ -114,9 +129,24 @@ class DesktopController(private val directory: Path) {
     }
 
     suspend fun stop() { coordinator?.stop(); questions.cancel() }
+    private suspend fun prepareExportLocked(format: String) {
+        if (busy()) return
+        try {
+            val text = if (format == "json") exporter.json(_state.value.sessionId) else exporter.markdown(_state.value.sessionId)
+            _state.update { it.copy(exportContent = text, exportFormat = format) }
+        } catch (_: Exception) { showError("Не удалось подготовить экспорт сессии.") }
+    }
+    fun dismissExport() { _state.update { it.copy(exportContent = null) } }
+    suspend fun saveExport(path: Path) {
+        val content = _state.value.exportContent ?: return
+        try {
+            withContext(Dispatchers.IO) { Files.writeString(path, content) }
+            dismissExport()
+        } catch (_: Exception) { showError("Не удалось сохранить экспорт. Выберите доступную папку.") }
+    }
     fun answer(text: String) { questions.answer(text) }
     fun allowProcesses(value: Boolean) { if (!busy()) _state.update { it.copy(allowProcesses = value) } }
-    suspend fun undo(id: String) {
+    private suspend fun undoLocked(id: String) {
         if (busy()) return
         try {
             val w = workspaceService ?: run { buildEngine(); workspaceService!! }
@@ -143,7 +173,7 @@ class DesktopController(private val directory: Path) {
         coordinator = engine
         if (events.read(s.sessionId).none { it.type == "session.workspace" })
             events.append(s.sessionId, "session.workspace", buildJsonObject { put("root", workspace.root) })
-        observer = scope.launch { combine(engine.state, questions.question) { run, question -> run.copy(question = question) }.collect { run -> _state.update { it.copy(run = run) } } }
+        observer = scope.launch { combine(engine.state, questions.question) { run, question -> run.copy(question = run.question ?: question) }.collect { run -> _state.update { it.copy(run = run) } } }
         return engine
     }
 

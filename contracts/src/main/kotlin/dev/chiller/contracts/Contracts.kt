@@ -141,4 +141,7 @@ data class RunState(
     val activities: List<Activity> = emptyList(),
     val error: String? = null,
     val question: UserQuestion? = null,
+    val contextEstimatedTokens: Int? = null,
+    val droppedContextMessages: Int = 0,
+    val modelRounds: Int = 0,
 )

@@ -74,9 +74,11 @@ class AgentCoordinatorTest {
 
         assertEquals(1, tools.executed.size)
         val transcript = requests[1].messages
-        assertEquals("assistant", transcript[2].role)
-        assertEquals("tool", transcript[3].role)
-        assertEquals("call-1", transcript[3].toolCallId)
+        val callIndex = transcript.indexOfFirst { it.toolCalls.any { call -> call.id == "call-1" } }
+        assertTrue(callIndex >= 0)
+        assertEquals("assistant", transcript[callIndex].role)
+        assertEquals("tool", transcript[callIndex + 1].role)
+        assertEquals("call-1", transcript[callIndex + 1].toolCallId)
         assertEquals("completed", fixture.coordinator.state.value.status)
     }
 
@@ -84,15 +86,45 @@ class AgentCoordinatorTest {
         val oldCall = ToolCall("call-interrupted", "write", "{}")
         val events = MemoryEvents().apply {
             append("session", "message", Json.encodeToJsonElement(AgentMessage("assistant", toolCalls = listOf(oldCall))).jsonObject)
+            append("session", "tool.prepared", buildJsonObject { put("callId", oldCall.id); put("name", oldCall.name); put("arguments", buildJsonObject { put("path", "src/main.kt") }) })
         }
         val provider = ScriptedProvider { error("provider must not receive an incomplete tool group") }
-        val fixture = fixture(provider, eventStore = events, dispatcher = StandardTestDispatcher(testScheduler))
+        val tools = RecordingTools()
+        val fixture = fixture(provider, tools, events, StandardTestDispatcher(testScheduler))
         fixture.coordinator.restore()
         assertEquals("interrupted", fixture.coordinator.state.value.status)
+        assertTrue(fixture.coordinator.state.value.error.orEmpty().contains("outcome is unknown"))
         fixture.coordinator.send("continue", ExecutionMode.WORKSPACE_EDIT)
         advanceUntilIdle()
         assertEquals(0, provider.calls)
+        assertTrue(tools.executed.isEmpty())
         assertEquals("failed", fixture.coordinator.state.value.status)
+    }
+
+    @Test fun restoreExposesInterruptedQuestionPromptWithoutResumingIt() = runTest {
+        val questionCall = ToolCall("question-call", "ask_user", "{\"question\":\"Which target should I use?\",\"options\":[\"A\",\"B\"]}")
+        val events = MemoryEvents().apply {
+            append("session", "run.started", buildJsonObject { put("runId", "run-old") })
+            append("session", "message", Json.encodeToJsonElement(AgentMessage("assistant", toolCalls = listOf(questionCall))).jsonObject)
+            append("session", "tool.prepared", buildJsonObject { put("callId", questionCall.id); put("name", questionCall.name); put("arguments", Json.parseToJsonElement(questionCall.arguments)) })
+        }
+        val provider = ScriptedProvider { error("restored question must not resume the provider") }
+        val tools = RecordingTools()
+        val fixture = fixture(provider, tools, events, StandardTestDispatcher(testScheduler))
+
+        fixture.coordinator.restore()
+
+        val restored = fixture.coordinator.state.value
+        assertEquals("interrupted", restored.status)
+        assertEquals(questionCall.id, restored.question?.id)
+        assertEquals("Which target should I use?", restored.question?.question)
+        assertEquals(listOf("A", "B"), restored.question?.options)
+        assertTrue(restored.error.orEmpty().contains("cannot resume automatically"))
+        assertTrue(restored.error.orEmpty().contains("start a new chat"))
+        fixture.coordinator.send("continue", ExecutionMode.WORKSPACE_EDIT)
+        advanceUntilIdle()
+        assertEquals(0, provider.calls)
+        assertTrue(tools.executed.isEmpty())
     }
 
     @Test fun stoppingDuringStreamCancelsRoundBeforeAnyToolExecution() = runTest {
