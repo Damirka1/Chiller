@@ -29,6 +29,7 @@ fun main() = application {
         namedKeys = if (java.lang.Boolean.getBoolean("chiller.offlinePreview")) emptyMap() else LocalCredentials.loadNamed(dev.chiller.app.di.ProviderPresets.keyVariables),
         credentialStore = if (java.lang.Boolean.getBoolean("chiller.offlinePreview")) dev.chiller.app.di.CredentialStore.None else dev.chiller.app.di.CredentialStore.system()) }
     val state by controller.state.collectAsState()
+    val comparisonState by controller.comparison.state.collectAsState()
     val actions = remember { MutableSharedFlow<DesktopAction>(extraBufferCapacity = 16) }
     val mac = remember { System.getProperty("os.name").startsWith("Mac") }
     val active = state.run.status in setOf("preparing", "streaming", "executing")
@@ -75,6 +76,9 @@ fun main() = application {
                 Item("Экспорт JSON…", enabled = !active && state.run.messages.isNotEmpty(), onClick = { scope.launch { controller.prepareExport("json") } })
                 Separator()
                 Item("Настройки…", enabled = !active, shortcut = KeyShortcut(Key.Comma, meta = mac, ctrl = !mac), onClick = { actions.tryEmit(DesktopAction.SETTINGS) })
+            }
+            Menu("Инструменты") {
+                Item("Сравнение моделей", enabled = !active, onClick = { actions.tryEmit(DesktopAction.COMPARE) })
             }
             Menu("Справка") {
                 Item("Демо: все инструменты", enabled = !active, onClick = { scope.launch { controller.startDemo() } })
@@ -124,6 +128,15 @@ fun main() = application {
                 agent = state.settings.agent, recent = state.settings.recentWorkspaces, dataDir = controller.dataDirectory().toString(), demoCount = demoCount,
                 version = dev.chiller.app.di.BuildInfo.version, build = BuildStamp.value, commit = dev.chiller.app.di.BuildInfo.commit,
                 runtime = dev.chiller.app.di.BuildInfo.runtime, os = dev.chiller.app.di.BuildInfo.os,
+            ),
+            comparison = dev.chiller.app.ui.ComparisonModel(
+                comparisonState, state.settings.baseUrl,
+                (listOf(state.settings.model) + state.catalog.models.map { it.id } + controller.configuredModels()).filter { it.isNotBlank() }.distinct(),
+                dev.chiller.evals.EVAL_TASK_INDEX,
+                dev.chiller.app.ui.ComparisonActions(
+                    start = { sides, tasks, repeats -> controller.startComparison(sides, tasks, repeats) },
+                    cancel = { controller.comparison.cancel() }, show = { controller.comparison.show(it) }, reset = { controller.comparison.reset() },
+                ),
             ),
             settingsActions = dev.chiller.app.ui.SettingsActions(
                 saveCredential = { scope.launch { controller.saveCredential() } },

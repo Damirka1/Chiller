@@ -11,6 +11,8 @@ dependencies {
     implementation(project(":runtime"))
     implementation(project(":tools"))
     implementation(project(":sessions"))
+    // Model comparison runs the same eval suite as :evals:liveEval inside the app.
+    implementation(project(":evals"))
     implementation(project(":design-system"))
     implementation(compose.desktop.currentOs)
     implementation(compose.material3)

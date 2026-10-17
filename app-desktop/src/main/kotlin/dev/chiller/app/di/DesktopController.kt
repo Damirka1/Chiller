@@ -732,6 +732,21 @@ class DesktopController(
         }
     }
 
+    /** Model comparison on the current endpoint; see ModelComparison. */
+    val comparison: ModelComparison by lazy { ModelComparison(directory, scope).also { it.loadHistory() } }
+
+    /** Runs the eval suite for each side with the current endpoint's own key and the user's request extras. */
+    fun startComparison(sides: List<ComparisonSide>, tasks: Set<String>, repeats: Int) {
+        val s = _state.value.settings
+        val origin = originOf(s.baseUrl)
+        val options = s.agent.sanitized()
+        val extras = kotlinx.serialization.json.buildJsonObject {
+            options.temperature?.let { put("temperature", it) }
+            parseRequestExtras(options.requestExtras)?.forEach { (k, v) -> put(k, v) }
+        }
+        comparison.start(s.baseUrl, { origin?.let { credentials[it] } }, sides, tasks, repeats.coerceIn(1, 3), extras)
+    }
+
     fun dataDirectory(): Path = directory
     fun demoProjectCount(): Int = runCatching { Files.list(directory.resolve("demo")).use { it.count().toInt() } }.getOrDefault(0)
 

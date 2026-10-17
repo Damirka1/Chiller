@@ -104,7 +104,13 @@ class TitleBarSpec(
     /** Renders an area that moves the window when dragged, e.g. Compose's WindowDraggableArea. */
     val dragArea: @Composable (Modifier) -> Unit,
 )
-enum class DesktopAction { NEW_CHAT, SEND, SETTINGS, STOP, FOCUS, STUDIO, SIDEBAR }
+/** Everything the comparison page needs from the app. */
+class ComparisonModel(
+    val state: dev.chiller.app.di.ComparisonState, val endpoint: String, val models: List<String>,
+    val tasks: List<Pair<String, String>>, val actions: ComparisonActions,
+)
+
+enum class DesktopAction { NEW_CHAT, SEND, SETTINGS, STOP, FOCUS, STUDIO, SIDEBAR, COMPARE }
 
 @Composable
 fun ChillerApp(
@@ -132,6 +138,9 @@ fun ChillerApp(
     /** Full settings page content and actions; null builds a basic page from the parameters above. */
     settingsData: SettingsData? = null, settingsActions: SettingsActions? = null,
     openSettingsOnStart: String? = null,
+    /** Model comparison page content; null hides the feature. */
+    comparison: ComparisonModel? = null,
+    openComparisonOnStart: Boolean = false,
     onOpenTrace: (() -> Unit)? = null,
     /** macOS full-window content: the native title bar is transparent and the traffic lights float over the app. */
     titleBar: TitleBarSpec? = null,
@@ -186,6 +195,7 @@ fun ChillerApp(
     }
     var sidebar by remember { mutableStateOf(true) }
     var settings by remember { mutableStateOf(openSettingsOnStart != null) }
+    var comparing by remember { mutableStateOf(openComparisonOnStart) }
     val drafts = remember { mutableStateMapOf<String, String>() }
     val attachmentsBySession = remember { mutableStateMapOf<String, List<ComposerAttachment>>() }
     val pendingImportsBySession = remember { mutableStateMapOf<String, Int>() }
@@ -248,7 +258,8 @@ fun ChillerApp(
         when (action) {
             DesktopAction.NEW_CHAT -> if (!active) onNewSession()
             DesktopAction.SEND -> if (!settings && renameTarget == null && exportPreview == null) send()
-            DesktopAction.SETTINGS -> if (!active) settings = true
+            DesktopAction.SETTINGS -> if (!active) { comparing = false; settings = true }
+            DesktopAction.COMPARE -> if (!active && comparison != null) { settings = false; comparing = true }
             DesktopAction.STOP -> if (active) onStop()
             DesktopAction.FOCUS -> updateView(view.copy(layout = "focus"))
             DesktopAction.STUDIO -> updateView(view.copy(layout = "studio"))
@@ -323,8 +334,13 @@ fun ChillerApp(
                                 removeRecent = base.removeRecent, openPath = base.openPath, openUrl = base.openUrl, deleteDemos = base.deleteDemos,
                                 saveCredential = base.saveCredential, deleteCredential = base.deleteCredential,
                                 refreshCaptureTargets = base.refreshCaptureTargets, selectCaptureTarget = base.selectCaptureTarget,
+                                openComparison = comparison?.let { { settings = false; comparing = true } },
                                 close = { settings = false },
                             ), Modifier.weight(1f).fillMaxWidth(), initial = openSettingsOnStart)
+                        } else if (comparing && comparison != null && !active) {
+                            ComparisonPage(comparison.state, comparison.endpoint, comparison.models, comparison.tasks,
+                                ComparisonActions(comparison.actions.start, comparison.actions.cancel, comparison.actions.show, comparison.actions.reset, close = { comparing = false }),
+                                Modifier.weight(1f).fillMaxWidth())
                         } else
                         Row(Modifier.weight(1f).fillMaxWidth()) {
                             if (!(compact && layout == WorkspaceLayout.STUDIO && showCompactChanges)) {

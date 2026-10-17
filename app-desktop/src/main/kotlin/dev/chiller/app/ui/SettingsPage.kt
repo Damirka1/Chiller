@@ -56,7 +56,8 @@ class SettingsActions(
     val checkConnection: () -> Unit = {}, val cancelCheck: () -> Unit = {}, val refreshModels: () -> Unit = {},
     val preferences: (UiPreferences) -> Unit = {}, val allowProcesses: (Boolean) -> Unit = {}, val agent: (AgentOptions) -> Unit = {},
     val removeRecent: (String) -> Unit = {}, val openPath: (String) -> Unit = {}, val openUrl: (String) -> Unit = {},
-    val deleteDemos: () -> Unit = {}, val close: () -> Unit = {},
+    val deleteDemos: () -> Unit = {},
+    val openComparison: (() -> Unit)? = null, val close: () -> Unit = {},
     val saveCredential: () -> Unit = {}, val deleteCredential: () -> Unit = {},
     val refreshCaptureTargets: () -> Unit = {}, val selectCaptureTarget: (String) -> Unit = {},
 )
@@ -316,6 +317,16 @@ private fun ProfileCard(data: SettingsData, actions: SettingsActions) {
         Text(problem ?: "Добавляются в каждый запрос к модели, например параметры structured output вашего vLLM. Поля model, messages, tools, stream и max_tokens изменить нельзя.",
             color = if (problem != null) c.negative else c.faint, fontSize = 11.sp, lineHeight = 16.sp)
         ChillerControl("Сохранить поля", { actions.agent(a.copy(requestExtras = extras.trim())) }, style = ControlStyle.OUTLINE, enabled = extras.trim() != a.requestExtras && (problem == null || problem.startsWith("Служебные")))
+        actions.openComparison?.let { open ->
+            Box(Modifier.fillMaxWidth().height(1.dp).background(c.border))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Какой профиль лучше для вашей модели?", color = c.text, fontSize = 13.sp)
+                    Text("Сравните профили и модели на eval-задачах с настоящей проверкой результата", color = c.faint, fontSize = 11.sp)
+                }
+                ChillerControl("Сравнение моделей", open, icon = Icons.Outlined.Insights, style = ControlStyle.OUTLINE)
+            }
+        }
     }
 }
 

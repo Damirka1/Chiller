@@ -93,56 +93,24 @@ fun main() = runBlocking {
     val maxOutput = (env["CHILLER_EVAL_MAX_OUTPUT"]?.toIntOrNull() ?: 2048).coerceIn(256, 4096)
     val thinking = env["CHILLER_EVAL_THINKING"] == "true"
 
-    val modelProfile = ModelProfiles.resolve(env["CHILLER_EVAL_PROFILE"]?.trim()?.ifEmpty { null } ?: "auto", model)
-    val extras = buildJsonObject {
-        modelProfile.temperature?.let { put("temperature", it) }
-        modelProfile.parallelToolCalls?.let { put("parallel_tool_calls", it) }
-    }
-    val profile = (if (host == "api.deepseek.com") ChatCompletionsProfile.deepSeekFlash(baseUrl, model)
-        else ChatCompletionsProfile("generic", baseUrl, model, requiresApiKey = !loopback)).withExtras(extras)
+    val profileId = env["CHILLER_EVAL_PROFILE"]?.trim()?.ifEmpty { null } ?: "auto"
+    val resolved = ModelProfiles.resolve(profileId, model)
     val stamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss"))
-    val outDir = Path.of("reports/local/evals/$stamp-${model.replace(Regex("[^A-Za-z0-9._-]"), "_")}-${modelProfile.id}").toAbsolutePath()
-    Files.createDirectories(outDir.resolve("traces"))
-    val http = HttpClient(CIO) {
-        followRedirects = false
-        install(HttpTimeout) { connectTimeoutMillis = 20_000; socketTimeoutMillis = 180_000; requestTimeoutMillis = 300_000 }
+    val outDir = Path.of("reports/local/evals/$stamp-${model.replace(Regex("[^A-Za-z0-9._-]"), "_")}-${resolved.id}").toAbsolutePath()
+    println("=== CHILLER LIVE EVAL · $model · profile ${resolved.id} · ${tasks.size} task(s) × $repeats · maxRounds=$maxRounds maxOutput=$maxOutput thinking=$thinking ===")
+    val report = runEvalSuite(SuiteSpec(baseUrl, model, { key }, profileId, tasks.map { it.id }.toSet(), repeats, maxRounds, maxOutput, thinking, outDir = outDir)) { result ->
+        println("%-20s #%d %s  rounds=%-2d tools=%-2d errors=%-2d %5.1fs  %s".format(result.task, result.attempt, if (result.passed) "PASS" else "FAIL",
+            result.rounds, result.toolCalls, result.failedToolCalls, result.durationMs / 1000.0, result.verdict.take(90)))
     }
-    val provider = ChatCompletionsProvider(http, profile) { key }
-    val json = Json { prettyPrint = true; encodeDefaults = true }
-    val results = mutableListOf<EvalResult>()
-    println("=== CHILLER LIVE EVAL · $model · profile ${modelProfile.id} · ${tasks.size} task(s) × $repeats · maxRounds=$maxRounds maxOutput=$maxOutput thinking=$thinking ===")
-    try {
-        for (task in tasks) for (attempt in 1..repeats) {
-            val result = runTask(task, attempt, provider, model, thinking, maxRounds, maxOutput, outDir, modelProfile)
-            results += result
-            println("%-20s #%d %s  rounds=%-2d tools=%-2d errors=%-2d %5.1fs  %s".format(task.id, attempt, if (result.passed) "PASS" else "FAIL",
-                result.rounds, result.toolCalls, result.failedToolCalls, result.durationMs / 1000.0, result.verdict.take(90)))
-        }
-    } finally { http.close() }
-    val summaries = results.groupBy { it.task }.map { (task, attempts) ->
-        EvalSummary(
-            task = task,
-            attempts = attempts.size,
-            passed = attempts.count { it.passed },
-            passRate = attempts.count { it.passed }.toDouble() / attempts.size,
-            durationMs = attempts.sumOf { it.durationMs },
-            promptTokens = attempts.takeIf { rows -> rows.all { it.promptTokens != null } }?.sumOf { it.promptTokens!! },
-            completionTokens = attempts.takeIf { rows -> rows.all { it.completionTokens != null } }?.sumOf { it.completionTokens!! },
-            cachedPromptTokens = attempts.takeIf { rows -> rows.all { it.cachedPromptTokens != null } }?.sumOf { it.cachedPromptTokens!! },
-        )
-    }
-    val report = EvalReport(model, baseUrl, stamp, maxRounds, maxOutput, repeats, results, summaries, profile = modelProfile.id)
-    Files.writeString(outDir.resolve("report.json"), json.encodeToString(EvalReport.serializer(), report))
-    Files.writeString(outDir.resolve("report.md"), renderMarkdown(report))
-    val passed = results.count { it.passed }
-    println("PASSED $passed/${results.size} (${if (results.isEmpty()) 0 else passed * 100 / results.size}%) · report: ${outDir.resolve("report.md")}")
+    val passed = report.results.count { it.passed }
+    println("PASSED $passed/${report.results.size} (${if (report.results.isEmpty()) 0 else passed * 100 / report.results.size}%) · report: ${outDir.resolve("report.md")}")
 }
 
 /**
  * The first named key from the nearest `.env` in the working directory or its parents (up to 6 levels),
  * so a run from a worktree or module folder finds the repository's file. Values are never printed.
  */
-internal fun dotenvKey(names: List<String>, start: Path = Path.of("").toAbsolutePath()): String? {
+fun dotenvKey(names: List<String>, start: Path = Path.of("").toAbsolutePath()): String? {
     val file = generateSequence(start) { it.parent }.take(7).map { it.resolve(".env") }.firstOrNull { Files.isRegularFile(it) && Files.size(it) < 65_536 } ?: return null
     val values = runCatching { Files.readAllLines(file) }.getOrDefault(emptyList()).mapNotNull { raw ->
         val line = raw.trim().removePrefix("export ").trim()
@@ -154,7 +122,7 @@ internal fun dotenvKey(names: List<String>, start: Path = Path.of("").toAbsolute
     return names.firstNotNullOfOrNull { values[it] }
 }
 
-private suspend fun runTask(task: EvalTask, attempt: Int, provider: ChatCompletionsProvider, model: String, thinking: Boolean, maxRounds: Int, maxOutput: Int, outDir: Path, modelProfile: ModelProfile = ModelProfiles.FULL): EvalResult {
+internal suspend fun runTask(task: EvalTask, attempt: Int, provider: ChatCompletionsProvider, model: String, thinking: Boolean, maxRounds: Int, maxOutput: Int, outDir: Path, modelProfile: ModelProfile = ModelProfiles.FULL): EvalResult {
     val root = Files.createTempDirectory("chiller-eval-${task.id}-")
     val project = root.resolve("project").also { Files.createDirectories(it) }
     task.materialize(project)
