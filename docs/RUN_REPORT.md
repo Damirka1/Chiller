@@ -137,3 +137,14 @@ User explicitly resumed after limits reset. Read-only audit began at14:43 Asia/A
 - The model menu now shows discovered API models, remembered/manual ids and the selected one with source tags and exact-ID tooltips, plus explicit refresh with loading/failed/stale states.
 - New `ModelCatalogClient` + `KtorModelCatalogClient`: one bounded `GET <base>/models` (no redirects, 20 s timeout, 1 MiB body, 500 models, sanitized errors). `DesktopController` owns a revision-guarded refresh, clears the cache on endpoint/credential change and keeps the last list marked stale on failure.
 - `./gradlew check :evals:offlineSmoke` passed with **121 tests, 0 failures, 0 skipped**; offline smoke passed. No live request was made for discovery; the provider fixtures are loopback-only.
+
+## Harness pass — instructions, tools, traces, evals — 17 October
+
+- New tools: `replace_text` (exact text, match count must equal `expected_count`, applied as whole-line edits through the existing snapshot/undo path) and `update_plan` (model checklist, no project effect, allowed in plan mode). `WorkspaceService.replaceText` added with a default `UNSUPPORTED`.
+- Project instructions (`AGENTS.md`, `CLAUDE.md`, `.chiller/instructions.md`) become a separate stable system message; sources are journaled as `context.instructions`. The system prompt now describes the read → replace/edit chain, planning and verification honesty.
+- Per-round traces via `RunTraceSink`; desktop writes bounded JSONL per session, the Studio run tab opens it. A key-value scan of the live traces found no credential.
+- `:evals:liveEval` with eight tasks and independent checks; offline smoke proves each check fails before and passes after a reference solution. Provider profiles may opt out of the key; the eval runner does so only for loopback.
+- `./gradlew check :evals:offlineSmoke` passed: **75 tests, 0 failures, 0 errors, 0 skipped**.
+- Live `deepseek-flash`, one attempt per task: **8/8 passed**, 32 rounds, 38 tool calls, 0 failed calls, 55.9 s, prompt 75 299 / completion 3 798 / cached 61 440 tokens. Tools used: read_file 7, list_files 6, search_text 5, run_process 4, replace_text 4, edit_file 1, create_file 1; `update_plan` was not used on these short tasks.
+- Not verified: Gemma/vLLM (no server), keyless endpoints in the desktop app, harder or longer tasks, repeat variance, UI click-through of the new run-tab items.
+
