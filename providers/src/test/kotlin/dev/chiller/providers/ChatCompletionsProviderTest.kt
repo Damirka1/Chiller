@@ -17,9 +17,11 @@ import io.ktor.client.HttpClient
 import io.ktor.client.engine.cio.CIO
 import java.net.InetSocketAddress
 import java.nio.charset.StandardCharsets
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class ChatCompletionsProviderTest {
@@ -133,6 +135,108 @@ class ChatCompletionsProviderTest {
         assertTrue("private-local-model-id" !in sentMessage)
     }
 
+    @Test fun usageIsEmittedOnceBeforeCompleted() = runBlocking {
+        val server = testServer { exchange ->
+            sendSse(exchange, sse(
+                """{"choices":[{"delta":{"content":"hi"},"finish_reason":null}]}""",
+                """{"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":11,"completion_tokens":7}}""",
+                "[DONE]",
+            ))
+        }
+        val events = invoke(server)
+        val usageIndex = events.indexOfFirst { it is ModelEvent.Usage }
+        assertTrue(usageIndex >= 0, "Stream events: $events")
+        assertEquals(usageIndex + 1, events.indexOfFirst { it is ModelEvent.Completed })
+        val usage = assertIs<ModelEvent.Usage>(events[usageIndex]).usage
+        assertEquals(11L, usage.promptTokens)
+        assertEquals(7L, usage.completionTokens)
+        assertNull(usage.cachedPromptTokens)
+        assertEquals(1, events.count { it is ModelEvent.Usage })
+    }
+
+    @Test fun deepSeekCacheHitTokensAreMapped() = runBlocking {
+        val server = testServer { exchange ->
+            sendSse(exchange, sse(
+                """{"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":20,"completion_tokens":5,"prompt_cache_hit_tokens":12}}""",
+                "[DONE]",
+            ))
+        }
+        val usage = assertIs<ModelEvent.Usage>(invoke(server).first { it is ModelEvent.Usage }, "Usage was not emitted").usage
+        assertEquals(20L, usage.promptTokens)
+        assertEquals(12L, usage.cachedPromptTokens)
+    }
+
+    @Test fun openAiCachedTokenDetailsAreMapped() = runBlocking {
+        val server = testServer { exchange ->
+            sendSse(exchange, sse(
+                """{"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":9,"completion_tokens":3,"prompt_tokens_details":{"cached_tokens":4}}}""",
+                "[DONE]",
+            ))
+        }
+        val usage = assertIs<ModelEvent.Usage>(invoke(server).first { it is ModelEvent.Usage }, "Usage was not emitted").usage
+        assertEquals(4L, usage.cachedPromptTokens)
+    }
+
+    @Test fun absentUsageEmitsNoUsageEvent() = runBlocking {
+        val server = testServer { exchange ->
+            sendSse(exchange, sse(
+                """{"choices":[{"delta":{"content":"hi"},"finish_reason":"stop"}]}""",
+                "[DONE]",
+            ))
+        }
+        val events = invoke(server)
+        assertIs<ModelEvent.Completed>(events.last())
+        assertTrue(events.none { it is ModelEvent.Usage })
+    }
+
+    @Test fun rateLimitIsRetriedWhileNothingWasStreamed() = runBlocking {
+        val (server, requests) = sequenceServer(listOf(429, 200)) { exchange, _ ->
+            sendSse(exchange, sse(
+                """{"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}""",
+                "[DONE]",
+            ))
+        }
+        val events = invoke(server, retryDelaysMs = emptyList())
+        assertIs<ModelEvent.Completed>(events.last(), "Stream events: $events")
+        assertEquals(listOf("ok"), events.filterIsInstance<ModelEvent.TextDelta>().map { it.text })
+        assertEquals(2, requests.get())
+    }
+
+    @Test fun serverErrorsRetryThreeTimesThenFail() = runBlocking {
+        val (server, requests) = sequenceServer(listOf(500, 500, 500)) { _, _ -> }
+        val events = invoke(server)
+        val failure = assertIs<ModelEvent.Failed>(events.last(), "Stream events: $events")
+        assertEquals("PROVIDER_HTTP_ERROR", failure.code)
+        assertEquals(3, requests.get())
+    }
+
+    @Test fun authenticationFailureIsNotRetried() = runBlocking {
+        val (server, requests) = sequenceServer(listOf(401)) { _, _ -> }
+        val events = invoke(server)
+        assertEquals("AUTHENTICATION_FAILED", assertIs<ModelEvent.Failed>(events.last()).code)
+        assertEquals(1, requests.get())
+    }
+
+    @Test fun failureAfterFirstDeltaIsNotRetried() = runBlocking {
+        val (server, requests) = sequenceServer(listOf(200)) { exchange, _ ->
+            sendSse(exchange, sse("""{"choices":[{"delta":{"content":"partial"},"finish_reason":null}]}"""))
+        }
+        val events = invoke(server)
+        assertEquals(listOf("partial"), events.filterIsInstance<ModelEvent.TextDelta>().map { it.text })
+        assertEquals("INCOMPLETE_STREAM", assertIs<ModelEvent.Failed>(events.last(), "Stream events: $events").code)
+        assertEquals(1, requests.get())
+    }
+
+    @Test fun emptyStreamIsRetriedWhileNothingWasStreamed() = runBlocking {
+        val (server, requests) = sequenceServer(listOf(200, 200)) { exchange, attempt ->
+            if (attempt == 0) { exchange.sendResponseHeaders(200, -1); exchange.close() }
+            else sendSse(exchange, sse("""{"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}""", "[DONE]"))
+        }
+        val events = invoke(server)
+        assertIs<ModelEvent.Completed>(events.last(), "Stream events: $events")
+        assertEquals(2, requests.get())
+    }
+
     private fun toolChunk(index: Int, id: String?, name: String?, arguments: String, finishReason: String? = null): String {
         val tool = buildJsonObject {
             put("index", index)
@@ -151,10 +255,20 @@ class ChatCompletionsProviderTest {
         return buildJsonObject { put("choices", kotlinx.serialization.json.buildJsonArray { add(choice) }) }.toString()
     }
 
-    private suspend fun invoke(server: HttpServer, messages: List<AgentMessage> = listOf(AgentMessage("user", "x")), thinking: Boolean = false, stopServer: Boolean = true): List<ModelEvent> {
+    private suspend fun invoke(
+        server: HttpServer,
+        messages: List<AgentMessage> = listOf(AgentMessage("user", "x")),
+        thinking: Boolean = false,
+        retryDelaysMs: List<Long> = emptyList(),
+        stopServer: Boolean = true,
+    ): List<ModelEvent> {
         val client = HttpClient(CIO)
         try {
-            val provider = ChatCompletionsProvider(client, ChatCompletionsProfile("test", "http://127.0.0.1:${server.address.port}", "test", reasoningField = "reasoning_content"), { "test-secret" })
+            val provider = ChatCompletionsProvider(
+                client,
+                ChatCompletionsProfile("test", "http://127.0.0.1:${server.address.port}", "test", reasoningField = "reasoning_content"),
+                retryDelaysMs,
+            ) { "test-secret" }
             return provider.stream(ModelRequest("test", messages, thinking = thinking)).toList()
         } finally { client.close(); if (stopServer) server.stop(0) }
     }
@@ -174,5 +288,25 @@ class ChatCompletionsProviderTest {
         exchange.sendResponseHeaders(200, body.toByteArray().size.toLong())
         exchange.responseBody.write(body.toByteArray())
         exchange.close()
+    }
+
+    private fun sse(vararg chunks: String): String =
+        chunks.joinToString("\n\ndata: ", prefix = "data: ", postfix = "\n\n")
+
+    /** Serves one status per request, repeating the last status, and counts requests. */
+    private fun sequenceServer(
+        statuses: List<Int>,
+        handler: (com.sun.net.httpserver.HttpExchange, Int) -> Unit,
+    ): Pair<HttpServer, AtomicInteger> {
+        val requests = AtomicInteger(0)
+        val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+        server.createContext("/chat/completions") { exchange ->
+            val attempt = requests.getAndIncrement()
+            val status = statuses.getOrElse(attempt) { statuses.last() }
+            if (status == 200) handler(exchange, attempt)
+            else { exchange.sendResponseHeaders(status, -1); exchange.close() }
+        }
+        server.start()
+        return server to requests
     }
 }
