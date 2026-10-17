@@ -29,9 +29,10 @@ class AttachmentRepository(directory: Path, private val artifacts: ArtifactStore
     }
 
     suspend fun importText(sessionId: String, text: String, name: String = "Вставленный текст.txt"): ComposerAttachment {
-        val bytes = encodeUtf8Strict(text)
-        require(bytes.size <= MAX_BYTES) { "Attachment exceeds 8 MiB" }
+        // Megabytes of text are encoded once, off the UI thread.
         return withContext(Dispatchers.IO) {
+            val bytes = encodeUtf8Strict(text)
+            require(bytes.size <= MAX_BYTES) { "Attachment exceeds 8 MiB" }
             val attachmentName = safeName(name)
             val mime = mimeForText(attachmentName, text)
             val ref = artifacts.put(validSession(sessionId), text)

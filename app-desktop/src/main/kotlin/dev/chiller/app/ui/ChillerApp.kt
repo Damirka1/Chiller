@@ -703,6 +703,8 @@ private fun Composer(
     val fieldMaxHeight = 144.dp
     val shape = RoundedCornerShape(16.dp)
     val scope = rememberCoroutineScope()
+    // Cards for pastes still being prepared: they appear on the key press, before any encoding or I/O.
+    var preparing by remember(attachmentOwnerKey) { mutableStateOf(listOf<PendingPaste>()) }
     val launchImport: (suspend () -> Unit) -> Unit = { operation ->
         if (pending || !onImportState(attachmentOwnerKey, true)) importError = "Сообщение уже отправляется. Добавьте вложение после завершения отправки."
         else {
@@ -741,24 +743,33 @@ private fun Composer(
             catch (_: Exception) { snapshotFailed = true; null }
             if (payload == null) {
                 importError = if (snapshotFailed) "Не удалось получить данные из буфера обмена. Повторите попытку." else "Этот формат буфера обмена не поддерживается."
-            } else launchImport {
-                when (payload) {
-                    is ComposerTransferPayload.Files -> appendImported(onImportFiles(attachmentOwnerKey, payload.paths))
-                    is ComposerTransferPayload.Image -> {
-                        val bytes = encodeClipboardImage(payload.value) ?: error("Clipboard image cannot be encoded within the size limit")
-                        appendImported(listOf(onImportImageAttachment(attachmentOwnerKey, bytes) ?: error("Image import failed")))
-                    }
-                    is ComposerTransferPayload.Text -> {
-                        val pasted = payload.value
-                        if (pasted.toByteArray(Charsets.UTF_8).size > 5_120) {
-                            appendImported(listOf(onImportTextAttachment(attachmentOwnerKey, pasted) ?: error("Text import failed")))
-                        } else {
-                            val start = field.selection.min.coerceIn(0, field.text.length)
-                            val end = field.selection.max.coerceIn(start, field.text.length)
-                            val text = field.text.replaceRange(start, end, pasted)
-                            field = TextFieldValue(text, TextRange(start + pasted.length)); onDraft(text); onComposition(false)
+            } else if (payload is ComposerTransferPayload.Text && textPasteTarget(payload.value) == TextPasteTarget.FIELD) {
+                // Short text goes straight into the field, synchronously, like any editor.
+                val pasted = payload.value
+                val start = field.selection.min.coerceIn(0, field.text.length)
+                val end = field.selection.max.coerceIn(start, field.text.length)
+                val text = field.text.replaceRange(start, end, pasted)
+                field = TextFieldValue(text, TextRange(start + pasted.length)); onDraft(text); onComposition(false)
+            } else {
+                val card = PendingPaste(newId(), when (payload) {
+                    is ComposerTransferPayload.Files -> if (payload.paths.size == 1) java.io.File(payload.paths.single()).name else "${payload.paths.size} ${plural(payload.paths.size, "файл", "файла", "файлов")}"
+                    is ComposerTransferPayload.Image -> pasteLabelForImage(payload.value)
+                    is ComposerTransferPayload.Text -> pasteLabelForText(payload.value)
+                })
+                preparing = preparing + card
+                launchImport {
+                    try {
+                        when (payload) {
+                            is ComposerTransferPayload.Files -> appendImported(onImportFiles(attachmentOwnerKey, payload.paths))
+                            is ComposerTransferPayload.Image -> {
+                                // PNG encoding (and scaling an oversized image) never runs on the UI thread.
+                                val encoded = withContext(Dispatchers.Default) { encodePastedImage(payload.value) } ?: error("Clipboard image cannot be encoded within the size limit")
+                                appendImported(listOf(onImportImageAttachment(attachmentOwnerKey, encoded.png) ?: error("Image import failed")))
+                                if (encoded.scaled) importError = "Изображение уменьшено до ${encoded.width}×${encoded.height}, чтобы уложиться в 4 МБ."
+                            }
+                            is ComposerTransferPayload.Text -> appendImported(listOf(onImportTextAttachment(attachmentOwnerKey, payload.value) ?: error("Text import failed")))
                         }
-                    }
+                    } finally { preparing = preparing - card }
                 }
             }
         }
@@ -817,8 +828,8 @@ private fun Composer(
             val text = field.text.replace(Regex("(?<=^|\\s)@" + Regex.escape(path) + "\\s?"), "")
             field = TextFieldValue(text, TextRange(text.length)); onDraft(text)
         }
-        if (attachments.isNotEmpty()) AttachmentChips(attachments, onRemove = { item -> onRemoveAttachment(attachmentOwnerKey, item.artifactId) })
-        if (importing) Row(Modifier.padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) { Pulse(c.accent); Spacer(Modifier.width(6.dp)); Text("Добавляю вложение…", color = c.faint, fontSize = 10.sp) }
+        if (attachments.isNotEmpty() || preparing.isNotEmpty()) AttachmentChips(attachments, onRemove = { item -> onRemoveAttachment(attachmentOwnerKey, item.artifactId) }, preparing = preparing)
+        if (importing && preparing.isEmpty()) Row(Modifier.padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) { Pulse(c.accent); Spacer(Modifier.width(6.dp)); Text("Добавляю вложение…", color = c.faint, fontSize = 10.sp) }
         importError?.let { Text(it, color = c.negative, fontSize = 11.sp, lineHeight = 15.sp, modifier = Modifier.padding(top = 4.dp)) }
         if (attachments.any { it.mimeType.startsWith("image/") }) Text("Изображения прикреплены как файлы; модель получит метаданные, но не распознаёт их содержимое.", color = c.faint, fontSize = 10.sp, lineHeight = 14.sp, modifier = Modifier.padding(top = 4.dp))
         Box {
@@ -838,9 +849,15 @@ private fun Composer(
 }
 
 @Composable
-private fun AttachmentChips(items: List<ComposerAttachment>, onRemove: (ComposerAttachment) -> Unit) {
+private fun AttachmentChips(items: List<ComposerAttachment>, onRemove: (ComposerAttachment) -> Unit, preparing: List<PendingPaste> = emptyList()) {
     val c = LocalChillerPalette.current
     Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(top = 5.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        preparing.forEach { card ->
+            Row(Modifier.height(30.dp).clip(RoundedCornerShape(7.dp)).background(c.accent.copy(alpha = .08f)).border(1.dp, c.accent.copy(alpha = .3f), RoundedCornerShape(7.dp)).padding(horizontal = 9.dp), verticalAlignment = Alignment.CenterVertically) {
+                Pulse(c.accent); Spacer(Modifier.width(7.dp))
+                Text("${card.label} · подготовка…", color = c.text, fontSize = 10.sp, maxLines = 1)
+            }
+        }
         items.forEach { item ->
             Row(Modifier.clip(RoundedCornerShape(7.dp)).background(c.sidebar).border(1.dp, c.border, RoundedCornerShape(7.dp)).padding(start = 8.dp, end = 3.dp, top = 3.dp, bottom = 3.dp), verticalAlignment = Alignment.CenterVertically) {
                 Icon(if (item.mimeType.startsWith("image/")) Icons.Outlined.Image else Icons.Outlined.InsertDriveFile, null, Modifier.size(13.dp), tint = c.accent)
@@ -851,18 +868,6 @@ private fun AttachmentChips(items: List<ComposerAttachment>, onRemove: (Composer
         }
     }
 }
-
-private fun encodeClipboardImage(image: AwtImage): ByteArray? = runCatching {
-    val width = image.getWidth(null); val height = image.getHeight(null)
-    require(width > 0 && height > 0 && width.toLong() * height <= 16_000_000L)
-    val buffered = BufferedImage(width, height, BufferedImage.TYPE_INT_RGB)
-    val graphics = buffered.createGraphics()
-    try { graphics.drawImage(image, 0, 0, null) } finally { graphics.dispose() }
-    ByteArrayOutputStream().use { output ->
-        check(ImageIO.write(buffered, "png", output))
-        output.toByteArray().also { require(it.size <= 4 * 1024 * 1024) }
-    }
-}.getOrNull()
 
 internal fun promptWithAttachments(text: String, attachments: List<ComposerAttachment>): String = buildString {
     append(text.trim())
