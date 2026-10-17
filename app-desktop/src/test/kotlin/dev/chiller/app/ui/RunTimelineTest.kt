@@ -53,4 +53,29 @@ class RunTimelineTest {
         assertTrue(prompt.contains("artifact_id=att-1"))
         assertTrue(prompt.contains("содержимое изображения не передано"))
     }
+
+    @Test fun `presented files are independent of group expansion and exclude failed operations`() {
+        fun file(id: String, path: String, status: String = "completed") = Activity(id = id, name = "show_file", target = path, status = status,
+            output = """{"data":{"file":{"path":"$path","name":"plot.png","mimeType":"image/png","sizeBytes":42}}}""")
+        val activities = listOf(file("1", "a.png"), file("2", "b.png", "failed"), file("3", "a.png"), file("4", "c.png"))
+        assertEquals(listOf("a.png", "c.png"), presentedFiles(activities).map { it.path })
+        assertEquals(listOf("2"), compactToolActivities(activities, false).map { it.id })
+    }
+
+    @Test fun `command failures count terminal processes once separately from tool errors`() {
+        val state = RunState(messages = listOf(
+            dev.chiller.contracts.AgentMessage("user", "old"),
+            dev.chiller.contracts.AgentMessage("assistant", toolCalls = listOf(dev.chiller.contracts.ToolCall("old", "run_process", "{}"))),
+            dev.chiller.contracts.AgentMessage("tool", """{"ok":true,"data":{"processId":"old","state":"exited","exitCode":1}}""", toolCallId = "old"),
+            dev.chiller.contracts.AgentMessage("user", "new"),
+            dev.chiller.contracts.AgentMessage("assistant", toolCalls = listOf(
+                dev.chiller.contracts.ToolCall("start", "run_process", "{}"), dev.chiller.contracts.ToolCall("read", "read_process", "{}"),
+                dev.chiller.contracts.ToolCall("again", "read_process", "{}"), dev.chiller.contracts.ToolCall("ok", "run_process", "{}"))),
+            dev.chiller.contracts.AgentMessage("tool", """{"ok":true,"data":{"processId":"p","state":"running","exitCode":null}}""", toolCallId = "start"),
+            dev.chiller.contracts.AgentMessage("tool", """{"ok":true,"data":{"processId":"p","state":"exited","exitCode":1}}""", toolCallId = "read"),
+            dev.chiller.contracts.AgentMessage("tool", """{"ok":true,"data":{"processId":"p","state":"exited","exitCode":1}}""", toolCallId = "again"),
+            dev.chiller.contracts.AgentMessage("tool", """{"ok":true,"data":{"processId":"q","state":"exited","exitCode":0}}""", toolCallId = "ok"),
+        ))
+        assertEquals(1, latestFailedCommands(state))
+    }
 }

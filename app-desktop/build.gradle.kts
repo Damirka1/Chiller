@@ -72,3 +72,14 @@ tasks.register<JavaExec>("keychainSmoke") {
     mainClass.set("dev.chiller.app.di.KeychainSmokeKt")
     jvmArgs("--enable-native-access=ALL-UNNAMED")
 }
+
+// Explicit UI acceptance fixture; excluded from default checks and all provider integrations.
+tasks.register<JavaExec>("richResultsPreview") {
+    group = "verification"
+    description = "Render synthetic tables/file results in both themes; -PrichResultsInteractive opens an isolated viewer fixture."
+    dependsOn(tasks.named("testClasses"))
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass.set("dev.chiller.app.ui.RichResultsPreviewKt")
+    jvmArgs("--enable-native-access=ALL-UNNAMED")
+    if (providers.gradleProperty("richResultsInteractive").isPresent) args("--interactive")
+}
