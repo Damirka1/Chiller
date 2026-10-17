@@ -145,6 +145,12 @@ interface WorkspaceService {
     suspend fun move(path: String, snapshotId: String, destination: String): FileChange
     suspend fun delete(path: String, snapshotId: String): FileChange
     suspend fun undo(changeId: String): FileChange
+    /**
+     * Replaces exact occurrences of [oldText] in the snapshot's file. The number of matches must equal
+     * [expectedCount]; nothing is applied otherwise. Matched lines must have been read in that snapshot.
+     */
+    suspend fun replaceText(path: String, snapshotId: String, oldText: String, newText: String, expectedCount: Int = 1): FileChange =
+        throw ToolException("UNSUPPORTED", "Text replacement is not supported by this workspace")
 }
 
 @Serializable

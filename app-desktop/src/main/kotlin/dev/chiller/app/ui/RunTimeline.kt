@@ -43,7 +43,7 @@ import dev.chiller.design.*
 private val FAILED = setOf("failed", "error", "conflict")
 private val RUNNING = setOf("running", "executing", "preparing")
 private val SUCCESS = setOf("completed", "applied", "exited")
-private val FILE_EFFECTS = setOf("edit_file", "create_file", "move_file", "delete_file")
+private val FILE_EFFECTS = setOf("edit_file", "replace_text", "create_file", "move_file", "delete_file")
 
 /** One card per assistant turn: a summary header, then compact rows. Failures stay visible when collapsed. */
 @Composable
@@ -210,6 +210,18 @@ internal fun RunProgressBar(active: Boolean) {
     }
 }
 
+/** The model's latest update_plan call in this session, read from its own tool-call arguments. */
+internal fun latestPlan(state: RunState): List<Pair<String, String>>? {
+    val call = state.messages.asReversed().asSequence().flatMap { it.toolCalls.asReversed().asSequence() }.firstOrNull { it.name == "update_plan" } ?: return null
+    return runCatching {
+        kotlinx.serialization.json.Json.parseToJsonElement(call.arguments).let { it as kotlinx.serialization.json.JsonObject }["steps"]!!
+            .let { it as kotlinx.serialization.json.JsonArray }.map { item ->
+                val o = item as kotlinx.serialization.json.JsonObject
+                (o["step"] as kotlinx.serialization.json.JsonPrimitive).content to (o["status"] as kotlinx.serialization.json.JsonPrimitive).content
+            }
+    }.getOrNull()?.takeIf { it.isNotEmpty() }
+}
+
 internal fun runSummaryParts(state: RunState): List<String> {
     if (state.modelRounds == 0) return emptyList()
     return buildList {
@@ -249,7 +261,8 @@ private fun toolIcon(name: String): ImageVector = when (name) {
     "read_file", "read_artifact" -> Icons.Outlined.Description
     "list_files" -> Icons.Outlined.FolderOpen
     "search_text" -> Icons.Outlined.Search
-    "edit_file" -> Icons.Outlined.Edit
+    "edit_file", "replace_text" -> Icons.Outlined.Edit
+    "update_plan" -> Icons.Outlined.Checklist
     "create_file" -> Icons.Outlined.NoteAdd
     "move_file" -> Icons.Outlined.DriveFileMove
     "delete_file" -> Icons.Outlined.DeleteOutline
@@ -287,6 +300,24 @@ internal fun RunPanel(state: RunState, modifier: Modifier) {
             "Контекст ≈" to (state.contextEstimatedTokens?.let { compactTokens(it.toLong()) } ?: "—"),
         ))
         Text("Токены — как их сообщил провайдер; «—» значит, что значение не пришло. Контекст — оценка по символам / 4.", color = c.faint, fontSize = 11.sp, lineHeight = 16.sp)
+        latestPlan(state)?.let { steps ->
+            Text("План модели · ${steps.count { it.second == "done" }}/${steps.size}", color = c.muted, fontSize = 12.sp)
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                steps.forEach { (step, status) ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(Modifier.size(16.dp), contentAlignment = Alignment.Center) {
+                            when (status) {
+                                "done" -> Icon(Icons.Outlined.CheckCircle, null, Modifier.size(15.dp), tint = c.positive)
+                                "in_progress" -> Pulse(c.accent)
+                                else -> Icon(Icons.Outlined.RadioButtonUnchecked, null, Modifier.size(15.dp), tint = c.faint)
+                            }
+                        }
+                        Spacer(Modifier.width(8.dp))
+                        Text(step, color = if (status == "done") c.muted else c.text, fontSize = 12.sp, lineHeight = 18.sp)
+                    }
+                }
+            }
+        }
         if (state.droppedContextMessages > 0) Text("Из контекста убрано старых сообщений: ${state.droppedContextMessages}", color = c.muted, fontSize = 12.sp, lineHeight = 18.sp)
         if (state.reasoning.isNotBlank()) {
             Text("Рассуждения последнего раунда", color = c.muted, fontSize = 12.sp)

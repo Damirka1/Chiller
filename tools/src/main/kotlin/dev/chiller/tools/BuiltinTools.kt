@@ -16,12 +16,14 @@ class BuiltinTools(
         spec("list_files", "List project files respecting ignore rules. Results are bounded.", ToolEffect.READ, mapOf("path" to string(), "glob" to string(), "limit" to integer())),
         spec("search_text", "Search text in project; literal by default. Optional context adds surrounding lines.", ToolEffect.READ, mapOf("query" to string(), "path" to string(), "glob" to string(), "regex" to boolean(), "limit" to integer(), "context" to integer()), "query"),
         spec("read_file", "Read numbered lines and obtain snapshot_id. Copy snapshot_id exactly for edits.", ToolEffect.READ, mapOf("path" to string(), "start_line" to integer(), "end_line" to integer()), "path"),
-        spec("edit_file", "Edit read lines of the exact snapshot. 1-based inclusive ranges. All edits use the original snapshot. The returned snapshotId can be used for further edits without re-reading.", ToolEffect.FILE_WRITE,
+        spec("edit_file", "Edit read lines of the exact snapshot by line number. 1-based inclusive ranges. For small changes replace_text is simpler. All edits use the original snapshot. The returned snapshotId can be used for further edits without re-reading.", ToolEffect.FILE_WRITE,
             mapOf("path" to string(), "snapshot_id" to string(), "edits" to buildJsonObject { put("type", "array"); put("maxItems", 32); put("items", buildJsonObject {
                 put("type", "object"); put("additionalProperties", false)
                 put("properties", buildJsonObject { put("op", buildJsonObject { put("type", "string"); put("enum", JsonArray(listOf("replace", "insert", "delete").map(::JsonPrimitive))) }); put("start_line", integer()); put("end_line", integer()); put("before_line", integer()); put("content", string()) })
                 put("required", JsonArray(listOf(JsonPrimitive("op"))))
             }) }), "path", "snapshot_id", "edits"),
+        spec("replace_text", "Replace exact text in a file you have read. Copy old_text from read_file output without the line-number prefix, including indentation. Must match exactly expected_count times (default 1); otherwise nothing changes. Prefer this for small changes. Returns snapshotId for further edits.", ToolEffect.FILE_WRITE,
+            mapOf("path" to string(), "snapshot_id" to string(), "old_text" to string(), "new_text" to string(), "expected_count" to integer()), "path", "snapshot_id", "old_text", "new_text"),
         spec("create_file", "Create a new UTF-8 file. Never overwrites existing files.", ToolEffect.FILE_WRITE, mapOf("path" to string(), "content" to string()), "path", "content"),
         spec("move_file", "Move one file without overwriting destination; snapshot required.", ToolEffect.FILE_WRITE, mapOf("path" to string(), "snapshot_id" to string(), "destination" to string()), "path", "snapshot_id", "destination"),
         spec("delete_file", "Delete one read file with a recoverable checkpoint; snapshot required.", ToolEffect.FILE_WRITE, mapOf("path" to string(), "snapshot_id" to string()), "path", "snapshot_id"),
@@ -29,6 +31,12 @@ class BuiltinTools(
         spec("read_process", "Read new process output using cursor; inspect exit code before claiming checks passed.", ToolEffect.READ, mapOf("process_id" to string(), "cursor" to integer()), "process_id"),
         spec("stop_process", "Stop a process by its opaque id.", ToolEffect.PROCESS, mapOf("process_id" to string()), "process_id"),
         spec("read_artifact", "Read part of a large saved result from this session.", ToolEffect.READ, mapOf("artifact_id" to string(), "offset" to integer(), "limit" to integer()), "artifact_id"),
+        spec("update_plan", "Keep a short checklist for a multi-step task. Send the whole list each time; at most one step in_progress. Does not change the project.", ToolEffect.READ,
+            mapOf("steps" to buildJsonObject { put("type", "array"); put("maxItems", 20); put("items", buildJsonObject {
+                put("type", "object"); put("additionalProperties", false)
+                put("properties", buildJsonObject { put("step", string()); put("status", buildJsonObject { put("type", "string"); put("enum", JsonArray(listOf("pending", "in_progress", "done").map(::JsonPrimitive))) }) })
+                put("required", JsonArray(listOf(JsonPrimitive("step"), JsonPrimitive("status"))))
+            }) }), "steps"),
         spec("ask_user", "Ask the user a necessary question, optionally with choices.", ToolEffect.USER_INTERACTION, mapOf("question" to string(), "options" to array(string())), "question"),
     )
 
@@ -58,6 +66,16 @@ class BuiltinTools(
                     } }
                     if (edits.isEmpty() || edits.size > 32) throw ToolException("INVALID_ARGUMENTS", "Provide 1–32 edits")
                     success(workspace.edit(EditFileRequest(args.str("path"), args.str("snapshot_id"), edits)))
+                }
+                "replace_text" -> success(workspace.replaceText(args.str("path"), args.str("snapshot_id"), args.str("old_text"), args.str("new_text"), args.int("expected_count", 1)))
+                "update_plan" -> {
+                    val steps = args.getValue("steps").jsonArray.map { it.jsonObject.str("step").trim().take(200) to it.jsonObject.str("status") }
+                    if (steps.isEmpty() || steps.any { it.first.isEmpty() }) throw ToolException("INVALID_ARGUMENTS", "Provide 1–20 non-empty steps")
+                    if (steps.count { it.second == "in_progress" } > 1) throw ToolException("INVALID_ARGUMENTS", "At most one step can be in_progress", "Mark finished steps done and keep one in_progress")
+                    ToolResult(true, buildJsonObject {
+                        put("done", steps.count { it.second == "done" }); put("total", steps.size)
+                        put("next", steps.firstOrNull { it.second != "done" }?.first ?: "all steps done")
+                    })
                 }
                 "create_file" -> success(workspace.create(args.str("path"), args.str("content")))
                 "move_file" -> success(workspace.move(args.str("path"), args.str("snapshot_id"), args.str("destination")))

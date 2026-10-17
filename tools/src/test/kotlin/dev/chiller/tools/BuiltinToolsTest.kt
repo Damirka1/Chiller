@@ -64,4 +64,33 @@ class BuiltinToolsTest {
             }
         } finally { processes.close(); root.toFile().deleteRecursively() }
     }
+
+    @Test fun replaceTextAndPlanAreModelFriendly() = runBlocking {
+        val root = Files.createTempDirectory("chiller-replace-tool")
+        val workspace = LocalWorkspace(root)
+        val processes = LocalProcessService(root)
+        val artifacts = object : ArtifactStore {
+            override suspend fun put(sessionId: String, content: String) = ArtifactRef("unused", sessionId, content.length.toLong())
+            override suspend fun read(sessionId: String, artifactId: String, offset: Int, limit: Int) = ""
+        }
+        val tools = BuiltinTools(workspace, processes, artifacts, object : InteractionBroker { override suspend fun ask(question: UserQuestion) = "a" })
+        try {
+            Files.writeString(root.resolve("a.py"), "x = 1\ny = 2\n")
+            val plan = ToolContext("s", "r", ExecutionMode.PLAN)
+            val edit = plan.copy(mode = ExecutionMode.WORKSPACE_EDIT)
+            val snapshot = tools.execute(ToolCall("1", "read_file", """{"path":"a.py"}"""), plan).data!!.jsonObject.getValue("snapshot_id").jsonPrimitive.content
+            assertEquals("PERMISSION_DENIED", tools.execute(ToolCall("2", "replace_text", """{"path":"a.py","snapshot_id":"$snapshot","old_text":"y = 2","new_text":"y = 3"}"""), plan).error?.code)
+            val missing = tools.execute(ToolCall("3", "replace_text", """{"path":"a.py","snapshot_id":"$snapshot","old_text":"z = 2","new_text":"z = 3"}"""), edit)
+            assertEquals("NO_MATCH", missing.error?.code)
+            assertTrue(tools.execute(ToolCall("4", "replace_text", """{"path":"a.py","snapshot_id":"$snapshot","old_text":"y = 2","new_text":"y = 3"}"""), edit).ok)
+            assertEquals("x = 1\ny = 3\n", Files.readString(root.resolve("a.py")))
+
+            val steps = """{"steps":[{"step":"read","status":"done"},{"step":"fix","status":"in_progress"},{"step":"test","status":"pending"}]}"""
+            val planned = tools.execute(ToolCall("5", "update_plan", steps), plan)
+            assertTrue(planned.ok)
+            assertEquals("fix", planned.data!!.jsonObject.getValue("next").jsonPrimitive.content)
+            val twoActive = tools.execute(ToolCall("6", "update_plan", """{"steps":[{"step":"a","status":"in_progress"},{"step":"b","status":"in_progress"}]}"""), plan)
+            assertEquals("INVALID_ARGUMENTS", twoActive.error?.code)
+        } finally { processes.close(); root.toFile().deleteRecursively() }
+    }
 }

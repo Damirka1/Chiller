@@ -814,7 +814,7 @@ internal fun prettyOutput(output: String): String = runCatching {
     (data as? JsonObject)?.get("output")?.jsonPrimitive?.content ?: Json { prettyPrint = true }.encodeToString(JsonElement.serializer(), data ?: JsonPrimitive(output))
 }.getOrDefault(output)
 internal fun toolLabel(name: String) = when (name) {
-    "read_file" -> "Чтение"; "list_files" -> "Файлы"; "search_text" -> "Поиск"; "edit_file" -> "Правка"; "create_file" -> "Создание"
+    "read_file" -> "Чтение"; "list_files" -> "Файлы"; "search_text" -> "Поиск"; "edit_file" -> "Правка"; "replace_text" -> "Замена"; "update_plan" -> "План"; "create_file" -> "Создание"
     "move_file" -> "Перемещение"; "delete_file" -> "Удаление"; "run_process" -> "Команда"; "read_process" -> "Вывод"; "stop_process" -> "Остановка"
     "read_artifact" -> "Результат"; "ask_user" -> "Вопрос"; "undo" -> "Откат"; else -> name
 }

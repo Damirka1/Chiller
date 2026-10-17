@@ -214,6 +214,18 @@ class LocalWorkspace(
         change.copy(snapshotId = next)
     } }
 
+    override suspend fun replaceText(path: String, snapshotId: String, oldText: String, newText: String, expectedCount: Int): FileChange {
+        val edits = withContext(Dispatchers.IO) {
+            val file = resolve(path, true)
+            val snap = lock.withLock { requireSnapshot(snapshotId, file) }
+            val bytes = readBytes(file)
+            if (sha(bytes) != snap.hash) fail("STALE_SNAPSHOT", "File changed after it was read; no edit was applied")
+            replacementEdits(decode(bytes).lines, oldText, newText, expectedCount)
+        }
+        // edit() re-checks the snapshot hash and observed lines under the lock, so a concurrent change still fails cleanly.
+        return edit(EditFileRequest(path, snapshotId, edits))
+    }
+
     override suspend fun create(path: String, content: String): FileChange = withContext(Dispatchers.IO) { lock.withLock {
         val file = resolve(path, false)
         if (Files.exists(file, LinkOption.NOFOLLOW_LINKS)) fail("ALREADY_EXISTS", "Destination already exists")
@@ -648,6 +660,35 @@ class LocalWorkspace(
         val bytes = file.body.toByteArray(StandardCharsets.UTF_8)
         return if (file.bom) byteArrayOf(0xef.toByte(), 0xbb.toByte(), 0xbf.toByte()) + bytes else bytes
     }
+    /** Exact, non-overlapping matches over the LF-joined lines, turned into whole-line replace/delete edits. */
+    private fun replacementEdits(lines: List<String>, oldText: String, newText: String, expectedCount: Int): List<FileEdit> {
+        if (oldText.isEmpty()) fail("INVALID_EDIT", "old_text must not be empty")
+        if ('\r' in oldText || '\r' in newText) fail("INVALID_EDIT", "Use LF line separators in old_text and new_text")
+        if (expectedCount !in 1..50) fail("INVALID_EDIT", "expected_count must be between 1 and 50")
+        val joined = lines.joinToString("\n")
+        val starts = mutableListOf<Int>()
+        var from = 0
+        while (true) { val at = joined.indexOf(oldText, from); if (at < 0) break; starts += at; from = at + oldText.length }
+        if (starts.isEmpty()) fail("NO_MATCH", "old_text was not found; copy it exactly from read_file output without line numbers, including whitespace")
+        if (starts.size != expectedCount) fail("MATCH_COUNT_MISMATCH", "old_text matches ${starts.size} times, expected $expectedCount; add surrounding lines to make it unique or set expected_count")
+        val lineStart = IntArray(lines.size + 1).also { for (i in lines.indices) it[i + 1] = it[i] + lines[i].length + 1 }
+        fun lineOf(offset: Int) = (lineStart.indexOfLast { it <= offset }).coerceIn(0, lines.size - 1)
+        // Group matches whose line ranges touch so each edit covers distinct lines of the original snapshot.
+        val groups = mutableListOf<MutableList<Int>>()
+        for (start in starts) {
+            val first = lineOf(start)
+            val last = groups.lastOrNull()
+            if (last != null && lineOf(last.last() + oldText.length) >= first) last += start else groups += mutableListOf(start)
+        }
+        return groups.map { group ->
+            val first = lineOf(group.first()); val last = lineOf(group.last() + oldText.length)
+            val blockStart = lineStart[first]
+            val block = StringBuilder(lines.subList(first, last + 1).joinToString("\n"))
+            group.reversed().forEach { at -> block.replace(at - blockStart, at - blockStart + oldText.length, newText) }
+            FileEdit("replace", startLine = first + 1, endLine = last + 1, content = block.toString())
+        }
+    }
+
     private fun contentLines(s: String): List<String> { if (s.isEmpty()) return listOf(""); if ('\r' in s) fail("INVALID_EDIT", "Edit content must use LF line separators"); return s.split('\n') }
     private fun sha(bytes: ByteArray) = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
     private fun snapshotId() = UUID.randomUUID().toString().replace("-", "").take(12)
