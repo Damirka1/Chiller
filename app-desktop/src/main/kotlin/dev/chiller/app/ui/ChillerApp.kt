@@ -49,11 +49,15 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntRect
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.window.PopupProperties
 import dev.chiller.app.di.UiPreferences
 import dev.chiller.app.di.SendReceipt
@@ -407,7 +411,8 @@ private fun ComposerToolbar(
                 }
             }
         }
-        if (modeMenu) Popup(alignment = Alignment.BottomStart, offset = IntOffset(0, -6), onDismissRequest = { modeMenu = false }, properties = PopupProperties(focusable = true)) {
+        val menuGap = with(LocalDensity.current) { 6.dp.roundToPx() }
+        if (modeMenu) Popup(popupPositionProvider = AboveToolbarPositionProvider(alignRight = false, gapPx = menuGap), onDismissRequest = { modeMenu = false }, properties = PopupProperties(focusable = true)) {
             Column(Modifier.width(modeMenuWidth).shadow(12.dp, menuShape).clip(menuShape).background(c.surface).border(1.dp, c.border, menuShape).padding(5.dp)) {
                 ChillerControl("План · только чтение", { onMode(ExecutionMode.PLAN); modeMenu = false }, Modifier.fillMaxWidth(), icon = Icons.Outlined.Lightbulb, style = if (mode == ExecutionMode.PLAN) ControlStyle.SELECTED else ControlStyle.QUIET)
                 ChillerControl("Изменения в проекте", { onMode(ExecutionMode.WORKSPACE_EDIT); modeMenu = false }, Modifier.fillMaxWidth(), icon = Icons.Outlined.Edit, style = if (mode == ExecutionMode.WORKSPACE_EDIT) ControlStyle.SELECTED else ControlStyle.QUIET)
@@ -420,7 +425,7 @@ private fun ComposerToolbar(
                 }
             }
         }
-        if (modelMenu) Popup(alignment = Alignment.BottomEnd, offset = IntOffset(0, -6), onDismissRequest = { modelMenu = false }, properties = PopupProperties(focusable = true)) {
+        if (modelMenu) Popup(popupPositionProvider = AboveToolbarPositionProvider(alignRight = true, gapPx = menuGap), onDismissRequest = { modelMenu = false }, properties = PopupProperties(focusable = true)) {
             Column(Modifier.width(modelMenuWidth).shadow(12.dp, menuShape).clip(menuShape).background(c.surface).border(1.dp, c.border, menuShape).padding(6.dp)) {
                 Row(Modifier.fillMaxWidth().padding(start = 8.dp, end = 2.dp, top = 2.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
@@ -458,6 +463,22 @@ private fun ComposerToolbar(
                 ChillerControl("Настройки моделей", { modelMenu = false; onSettings() }, Modifier.fillMaxWidth(), icon = Icons.Outlined.Tune)
             }
         }
+    }
+}
+
+/**
+ * Places a menu fully above the toolbar it belongs to, aligned to the left or right edge
+ * of the toolbar and clamped to the window. Compose's built-in alignment aligns popup and
+ * anchor bottoms, which made the menu cover the button that opened it.
+ */
+private class AboveToolbarPositionProvider(private val alignRight: Boolean, private val gapPx: Int) : PopupPositionProvider {
+    override fun calculatePosition(anchorBounds: IntRect, windowSize: IntSize, layoutDirection: LayoutDirection, popupContentSize: IntSize): IntOffset {
+        val x = if (alignRight) anchorBounds.right - popupContentSize.width else anchorBounds.left
+        val y = anchorBounds.top - popupContentSize.height - gapPx
+        return IntOffset(
+            x.coerceIn(0, (windowSize.width - popupContentSize.width).coerceAtLeast(0)),
+            y.coerceIn(0, (windowSize.height - popupContentSize.height).coerceAtLeast(0)),
+        )
     }
 }
 
