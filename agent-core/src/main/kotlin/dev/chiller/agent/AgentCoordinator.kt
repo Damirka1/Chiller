@@ -180,6 +180,18 @@ class AgentCoordinator(
         return pending
     }
 
+    /** A short human label for a call: its path, query, command, question or current plan step. */
+    private fun activityTarget(args: JsonObject): String {
+        fun str(key: String) = (args[key] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }
+        val argv = (args["argv"] as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }?.joinToString(" ")
+        val step = (args["steps"] as? JsonArray)?.mapNotNull { it as? JsonObject }?.let { steps ->
+            val done = steps.count { (it["status"] as? JsonPrimitive)?.contentOrNull == "done" }
+            val current = steps.firstOrNull { (it["status"] as? JsonPrimitive)?.contentOrNull == "in_progress" }?.get("step")?.let { (it as? JsonPrimitive)?.contentOrNull }
+            "$done/${steps.size}" + (current?.let { " · $it" } ?: "")
+        }
+        return (str("path")?.let { p -> str("destination")?.let { "$p → $it" } ?: p } ?: str("query")?.let { "«$it»" } ?: argv ?: str("question") ?: str("process_id") ?: step ?: "").take(160)
+    }
+
     private suspend fun trace(runId: String, round: Int, request: ModelRequest, response: AgentMessage?, finishReason: String?, usage: TokenUsage, startedNanos: Long, error: String?) {
         val sink = traces ?: return
         val entry = buildJsonObject {
@@ -286,7 +298,7 @@ class AgentCoordinator(
             // Journal and show every prepared call before any of them runs, in call order.
             val prepared = calls.map { call ->
                 val operationId = newId()
-                val target = runCatching { json.parseToJsonElement(call.arguments).jsonObject["path"]?.jsonPrimitive?.content }.getOrNull() ?: ""
+                val target = runCatching { activityTarget(json.parseToJsonElement(call.arguments).jsonObject) }.getOrNull() ?: ""
                 val arguments = runCatching { json.parseToJsonElement(call.arguments) }.getOrNull()
                 events.append(sessionId, "tool.prepared", buildJsonObject {
                     put("operationId", operationId); put("callId", call.id); put("name", call.name)

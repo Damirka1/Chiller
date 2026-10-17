@@ -352,7 +352,7 @@ class DesktopController(private val directory: Path, initialCredential: String? 
         if (busy()) return@withLock
         try {
             val stamp = java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss"))
-            val root = withContext(Dispatchers.IO) { directory.resolve("demo").resolve(stamp).also { DemoScenario.createProject(it) }.toRealPath() }
+            val root = withContext(Dispatchers.IO) { directory.resolve("demo").resolve(stamp).resolve("chiller-demo").also { DemoScenario.createProject(it) }.toRealPath() }
             resetEngine()
             _state.update { it.copy(settings = it.settings.copy(workspace = root.toString()), sessionId = newId(), run = RunState()) }
             val engine = buildEngine(DemoScenario.Provider(), DemoScenario.MODEL_ID)

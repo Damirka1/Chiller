@@ -26,6 +26,14 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.lazy.LazyItemScope
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.spring
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.composed
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.FocusRequester
@@ -542,52 +550,83 @@ private fun Conversation(state: RunState, reduced: Boolean, onAnswer: (String) -
     val c = LocalChillerPalette.current
     val scroll = rememberLazyListState()
     val scope = rememberCoroutineScope()
+    // Following is a user decision: only the user's own scroll turns it off (scrolling up) or on (reaching the end).
     var follow by remember { mutableStateOf(true) }
-    LaunchedEffect(scroll) { snapshotFlow { !scroll.canScrollForward || scroll.layoutInfo.visibleItemsInfo.lastOrNull()?.index == scroll.layoutInfo.totalItemsCount - 1 }.collect { follow = it } }
-    LaunchedEffect(state.messages.size, state.streamingText, state.activities, state.question, state.status) {
-        if (follow && scroll.layoutInfo.totalItemsCount > 0) { if (reduced) scroll.scrollToItem(scroll.layoutInfo.totalItemsCount - 1) else scroll.animateScrollToItem(scroll.layoutInfo.totalItemsCount - 1) }
+    var autoScrolling by remember { mutableStateOf(false) }
+    LaunchedEffect(scroll) {
+        snapshotFlow { scroll.isScrollInProgress }.collect { inProgress ->
+            if (autoScrolling) return@collect
+            if (inProgress) follow = false else follow = !scroll.canScrollForward
+        }
     }
+    // Any growth below the viewport (new item, streamed text, expanded card) pulls the view to the end while following.
+    LaunchedEffect(scroll) {
+        snapshotFlow { scroll.canScrollForward to scroll.layoutInfo.totalItemsCount }.collect { (canScroll, count) ->
+            if (follow && canScroll && count > 0 && !scroll.isScrollInProgress) {
+                autoScrolling = true
+                try { scroll.scrollToItem(count - 1) } finally { autoScrolling = false }
+            }
+        }
+    }
+    // Sending a message always returns to the end.
+    LaunchedEffect(state.messages.size) { if (state.messages.lastOrNull()?.role == "user") follow = true }
+    val projection = projectConversation(state.messages, state.activities)
     Box(modifier, contentAlignment = Alignment.TopCenter) {
-        LazyColumn(state = scroll, modifier = Modifier.widthIn(max = 816.dp).fillMaxSize(), contentPadding = PaddingValues(horizontal = 28.dp, vertical = 28.dp), verticalArrangement = Arrangement.spacedBy(if (LocalChillerCompact.current) 16.dp else 22.dp)) {
-            val projection = projectConversation(state.messages, state.activities)
-            projection.entries.forEach { entry ->
-                item(key = "message-${entry.index}") {
-                    Column(Modifier.widthIn(max = 760.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        if (!entry.message.content.isNullOrBlank()) Message(entry.message)
+        LazyColumn(state = scroll, modifier = Modifier.widthIn(max = 816.dp).fillMaxSize(), contentPadding = PaddingValues(horizontal = 28.dp, vertical = 28.dp), verticalArrangement = Arrangement.spacedBy(if (LocalChillerCompact.current) 14.dp else 18.dp)) {
+            // LazyColumn fades items in only when they are added after the first layout, and slides neighbours into place.
+            @Suppress("UNUSED_PARAMETER")
+            fun LazyItemScope.entryModifier(key: String): Modifier =
+                if (reduced) Modifier else Modifier.animateItem(fadeInSpec = tween(220), placementSpec = spring(stiffness = 500f, dampingRatio = .9f), fadeOutSpec = tween(120))
+            projection.entries.forEachIndexed { position, entry ->
+                val key = "message-${entry.index}"
+                item(key = key) {
+                    val previous = projection.entries.getOrNull(position - 1)?.message?.role
+                    Column(entryModifier(key).widthIn(max = 760.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        if (!entry.message.content.isNullOrBlank()) Message(entry.message, showHeader = !(entry.message.role == "assistant" && previous == "assistant"))
                         ToolGroup(entry.activities, reduced, onUndo, canUndo)
                     }
                 }
             }
+            // The streamed reply takes the key of the message it becomes, so completion does not flash.
+            if (state.streamingText.isNotBlank()) item(key = "message-${state.messages.size}") {
+                Box(entryModifier("message-${state.messages.size}")) {
+                    Message(AgentMessage("assistant", state.streamingText, origin = state.activeModelId?.let { MessageOrigin(MessageOriginKind.MODEL, it) }),
+                        showHeader = state.messages.lastOrNull()?.role != "assistant", streaming = true)
+                }
+            }
             if (projection.unlinked.isNotEmpty()) item(key = "unlinked-activities") {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Column(entryModifier("unlinked-activities"), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("Действия сессии", color = c.muted, fontSize = 12.sp)
                     projection.unlinked.forEach { ToolRow(it, reduced, onUndo, canUndo) }
                 }
             }
-            if (state.status in setOf("completed", "failed", "cancelled") && state.modelRounds > 0) item(key = "run-summary") { RunSummaryLine(state) }
-            if (state.status in setOf("preparing", "streaming", "executing", "cancelled")) item(key = "run-status") {
-                val running = state.activities.lastOrNull { it.status == "running" }
-                val label = when (state.status) {
-                    "streaming" -> "${state.activeModelId?.let(::modelLabel) ?: "Ассистент"} отвечает…"
-                    "executing" -> running?.let { "${toolLabel(it.name)} · ${it.target}" } ?: "Выполняет действие…"
-                    "cancelled" -> "Задача остановлена"
-                    else -> "Подготовка…"
-                }
-                Row(Modifier.padding(start = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                    if (state.status != "cancelled") { Pulse(c.accent); Spacer(Modifier.width(10.dp)) }
-                    Text(label, color = c.muted, fontSize = 12.sp, lineHeight = 18.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                }
-            }
             if (state.reasoning.isNotBlank()) item(key = "reasoning") {
                 var open by remember { mutableStateOf(false) }
-                Column {
-                    ChillerControl(if (open) "Скрыть рассуждения" else "Рассуждения модели", { open = !open }, icon = Icons.Outlined.MoreHoriz)
-                    if (open) Text(state.reasoning, color = c.muted, fontSize = 12.sp, lineHeight = 20.sp, modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp))
+                Column(entryModifier("reasoning")) {
+                    ChillerControl(if (open) "Скрыть рассуждения" else "Рассуждения модели", { open = !open }, icon = Icons.Outlined.Psychology)
+                    AnimatedVisibility(open, enter = if (reduced) EnterTransition.None else expandVertically(tween(180)) + fadeIn(tween(160)), exit = if (reduced) ExitTransition.None else shrinkVertically(tween(150)) + fadeOut(tween(100))) {
+                        Text(state.reasoning, color = c.muted, fontSize = 12.sp, lineHeight = 20.sp, modifier = Modifier.padding(start = 34.dp, top = 6.dp, end = 10.dp))
+                    }
                 }
             }
-            if (state.streamingText.isNotBlank()) item(key = "stream") { Message(AgentMessage("assistant", state.streamingText, origin = state.activeModelId?.let { MessageOrigin(MessageOriginKind.MODEL, it) })) }
-            state.question?.let { q -> item(key = "question-${q.id}") { Question(q, onAnswer, state.status != "interrupted") } }
-            state.error?.let { error -> item(key = "error") { Column { Row(Modifier.fillMaxWidth().padding(8.dp), horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+            if (state.status in setOf("preparing", "streaming", "executing")) item(key = "run-status") {
+                val running = state.activities.lastOrNull { it.status == "running" }
+                val label = when (state.status) {
+                    "streaming" -> if (state.streamingText.isBlank()) "${state.activeModelId?.let(::modelLabel) ?: "Ассистент"} думает…" else "${state.activeModelId?.let(::modelLabel) ?: "Ассистент"} пишет…"
+                    "executing" -> running?.let { "${toolLabel(it.name)}${if (it.target.isNotBlank()) " · ${it.target}" else ""}" } ?: "Выполняет действие…"
+                    else -> "Подготовка…"
+                }
+                Row(entryModifier("run-status").padding(start = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Pulse(c.accent); Spacer(Modifier.width(10.dp))
+                    ShimmerText(label, reduced)
+                }
+            }
+            if (state.status == "cancelled") item(key = "run-cancelled") {
+                Text("Задача остановлена", color = c.muted, fontSize = 12.sp, modifier = entryModifier("run-cancelled").padding(start = 6.dp))
+            }
+            if (state.status in setOf("completed", "failed", "cancelled") && state.modelRounds > 0) item(key = "run-summary") { Box(entryModifier("run-summary")) { RunSummaryLine(state) } }
+            state.question?.let { q -> item(key = "question-${q.id}") { Box(entryModifier("question-${q.id}")) { Question(q, onAnswer, state.status != "interrupted") } } }
+            state.error?.let { error -> item(key = "error") { Column(entryModifier("error")) { Row(Modifier.fillMaxWidth().padding(8.dp), horizontalArrangement = Arrangement.spacedBy(9.dp)) {
                 Icon(Icons.Outlined.ErrorOutline, null, Modifier.size(16.dp), tint = c.negative)
                 Text(error, color = c.negative, fontSize = 12.sp, lineHeight = 20.sp)
             }
@@ -595,8 +634,27 @@ private fun Conversation(state: RunState, reduced: Boolean, onAnswer: (String) -
             } } }
             item(key = "tail") { Spacer(Modifier.height(2.dp)) }
         }
-        if (!follow) ChillerControl("К последнему сообщению", { scope.launch { scroll.animateScrollToItem((scroll.layoutInfo.totalItemsCount - 1).coerceAtLeast(0)) } }, Modifier.align(Alignment.BottomCenter).padding(bottom = 8.dp), icon = Icons.Outlined.ArrowDownward, style = ControlStyle.OUTLINE)
+        AnimatedVisibility(!follow && scroll.canScrollForward, Modifier.align(Alignment.BottomCenter).padding(bottom = 10.dp),
+            enter = if (reduced) EnterTransition.None else fadeIn(tween(150)) + slideInVertically(tween(180)) { it / 2 },
+            exit = if (reduced) ExitTransition.None else fadeOut(tween(120)) + slideOutVertically(tween(150)) { it / 2 }) {
+            Box(Modifier.shadow(8.dp, CircleShape).clip(CircleShape).background(c.surface).border(1.dp, c.border, CircleShape)) {
+                ChillerIconButton(Icons.Outlined.ArrowDownward, "К последнему сообщению", {
+                    follow = true
+                    scope.launch { autoScrolling = true; try { scroll.animateScrollToItem((scroll.layoutInfo.totalItemsCount - 1).coerceAtLeast(0)) } finally { autoScrolling = false } }
+                })
+            }
+        }
     }
+}
+
+/** Status text with a soft light sweep, so a waiting run reads as alive. Static with reduced motion. */
+@Composable
+private fun ShimmerText(text: String, reduced: Boolean) {
+    val c = LocalChillerPalette.current
+    if (reduced) { Text(text, color = c.muted, fontSize = 12.sp, lineHeight = 18.sp, maxLines = 1, overflow = TextOverflow.Ellipsis); return }
+    val x by rememberInfiniteTransition(label = "shimmer").animateFloat(-200f, 600f, infiniteRepeatable(tween(1600, easing = androidx.compose.animation.core.LinearEasing)), label = "x")
+    val brush = androidx.compose.ui.graphics.Brush.linearGradient(listOf(c.muted, c.text, c.muted), start = androidx.compose.ui.geometry.Offset(x, 0f), end = androidx.compose.ui.geometry.Offset(x + 160f, 0f))
+    Text(text, style = TextStyle(brush = brush, fontSize = 12.sp, lineHeight = 18.sp), maxLines = 1, overflow = TextOverflow.Ellipsis)
 }
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -607,30 +665,50 @@ private fun Hint(text: String, content: @Composable () -> Unit) {
 }
 
 @Composable
-private fun Message(message: AgentMessage) {
-    val role = message.role
+private fun Message(message: AgentMessage, showHeader: Boolean = true, streaming: Boolean = false) {
     val content = message.content.orEmpty()
+    val c = LocalChillerPalette.current
+    if (message.role == "user") {
+        // The user's own messages sit on the right as quiet bubbles; the assistant writes on the page.
+        Row(Modifier.fillMaxWidth().padding(start = 64.dp), horizontalArrangement = Arrangement.End) {
+            SelectionContainer {
+                Text(content.trim(), color = c.text, fontSize = 14.sp, lineHeight = 22.sp, letterSpacing = 0.sp,
+                    modifier = Modifier.widthIn(max = 560.dp).clip(RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp, bottomStart = 18.dp, bottomEnd = 6.dp))
+                        .background(c.selected.copy(alpha = .75f)).padding(horizontal = 15.dp, vertical = 10.dp))
+            }
+        }
+        return
+    }
     val clipboard = LocalClipboardManager.current
     var copied by remember(content) { mutableStateOf(false) }
     LaunchedEffect(copied) { if (copied) { kotlinx.coroutines.delay(1600); copied = false } }
-    val c = LocalChillerPalette.current
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(13.dp)) {
-        if (role == "assistant") ChillerMark(Modifier.padding(top = 1.dp).size(21.dp), c.accent)
-        else Box(Modifier.size(21.dp).clip(CircleShape).background(c.selected), contentAlignment = Alignment.Center) { Text("В", color = c.muted, fontSize = 10.sp) }
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    Row(Modifier.fillMaxWidth().hoverable(interaction), horizontalArrangement = Arrangement.spacedBy(13.dp)) {
+        Box(Modifier.width(21.dp)) { if (showHeader) ChillerMark(Modifier.padding(top = 1.dp).size(21.dp), c.accent) }
         Column(Modifier.weight(1f)) {
-            Row(Modifier.fillMaxWidth().padding(bottom = 5.dp), verticalAlignment = Alignment.CenterVertically) {
+            if (showHeader) Row(Modifier.fillMaxWidth().height(24.dp).padding(bottom = 2.dp), verticalAlignment = Alignment.CenterVertically) {
                 Hint(message.origin?.modelId ?: authorLabel(message)) {
                     Text(authorLabel(message), color = c.muted, fontWeight = FontWeight.Medium, fontSize = 12.sp, lineHeight = 18.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 320.dp))
                 }
-                Spacer(Modifier.weight(1f))
-                if (role == "assistant") ChillerIconButton(if (copied) Icons.Outlined.Check else Icons.Outlined.ContentCopy, if (copied) "Скопировано" else "Копировать ответ", { clipboard.setText(AnnotatedString(content)); copied = true })
             }
-            SelectionContainer {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    val segments = content.split("```")
-                    segments.forEachIndexed { index, text ->
-                        if (index % 2 == 1) CodeBlock(text.substringAfter('\n', text).trimEnd(), text.substringBefore('\n', "").take(24))
-                        else if (text.isNotBlank()) Text(text.trim(), color = c.text, fontSize = 14.sp, lineHeight = 23.sp, letterSpacing = 0.sp)
+            Row {
+                SelectionContainer(Modifier.weight(1f)) {
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        val segments = content.split("```")
+                        segments.forEachIndexed { index, text ->
+                            val last = index == segments.lastIndex
+                            if (index % 2 == 1) CodeBlock(text.substringAfter('\n', text).trimEnd(), text.substringBefore('\n', "").take(24))
+                            else if (text.isNotBlank() || (streaming && last)) {
+                                if (streaming && last) StreamingText(text.trim()) else MarkdownText(text.trim())
+                            }
+                        }
+                    }
+                }
+                // Copy sits beside the text and shows on hover, so it adds no height to the message.
+                Box(Modifier.width(32.dp).padding(start = 8.dp), contentAlignment = Alignment.TopEnd) {
+                    if (!streaming) androidx.compose.animation.AnimatedVisibility(hovered || copied, enter = fadeIn(tween(120)), exit = fadeOut(tween(120))) {
+                        ChillerIconButton(if (copied) Icons.Outlined.Check else Icons.Outlined.ContentCopy, if (copied) "Скопировано" else "Копировать ответ", { clipboard.setText(AnnotatedString(content)); copied = true }, Modifier.size(24.dp))
                     }
                 }
             }
@@ -638,19 +716,35 @@ private fun Message(message: AgentMessage) {
     }
 }
 
+/** Streamed markdown with a soft blinking caret at the end. */
+@Composable
+private fun StreamingText(text: String) {
+    val c = LocalChillerPalette.current
+    val reduced = LocalChillerReducedMotion.current
+    val alpha = if (reduced) 1f else rememberInfiniteTransition(label = "caret").animateFloat(1f, .15f, infiniteRepeatable(tween(520), RepeatMode.Reverse), label = "a").value
+    MarkdownText(text, tail = androidx.compose.ui.text.buildAnnotatedString {
+        pushStyle(androidx.compose.ui.text.SpanStyle(color = c.accent.copy(alpha = alpha)))
+        append(" ▍")
+        pop()
+    })
+}
+
 @Composable
 private fun CodeBlock(code: String, language: String) {
     val c = LocalChillerPalette.current
     val clipboard = LocalClipboardManager.current
     var copied by remember(code) { mutableStateOf(false) }
-    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).border(1.dp, c.border, RoundedCornerShape(10.dp)).background(c.sidebar)) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(language.ifBlank { "Код" }, color = c.muted, fontSize = 11.sp)
+    LaunchedEffect(copied) { if (copied) { kotlinx.coroutines.delay(1600); copied = false } }
+    val shape = RoundedCornerShape(10.dp)
+    Column(Modifier.fillMaxWidth().clip(shape).border(1.dp, c.border, shape).background(c.sidebar)) {
+        Row(Modifier.fillMaxWidth().padding(start = 12.dp, end = 4.dp, top = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(language.ifBlank { "код" }, color = c.faint, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
             Spacer(Modifier.weight(1f))
-            ChillerControl(if (copied) "Скопировано" else "Копировать", { clipboard.setText(AnnotatedString(code)); copied = true }, icon = Icons.Outlined.ContentCopy)
+            if (copied) Text("Скопировано", color = c.muted, fontSize = 11.sp, modifier = Modifier.padding(end = 2.dp))
+            ChillerIconButton(if (copied) Icons.Outlined.Check else Icons.Outlined.ContentCopy, "Копировать код", { clipboard.setText(AnnotatedString(code)); copied = true }, Modifier.size(26.dp))
         }
-        Text(code, color = c.text, fontFamily = FontFamily.Monospace, fontSize = 12.sp, lineHeight = 20.sp,
-            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(12.dp))
+        Text(code, color = c.text, fontFamily = FontFamily.Monospace, fontSize = 12.5.sp, lineHeight = 20.sp,
+            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(start = 12.dp, end = 12.dp, bottom = 12.dp))
     }
 }
 
