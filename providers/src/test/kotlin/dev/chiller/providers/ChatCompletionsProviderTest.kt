@@ -49,6 +49,23 @@ class ChatCompletionsProviderTest {
         assertEquals("{\"path\":\"x\"}", completed.message.toolCalls.single().arguments)
     }
 
+    @Test fun keylessProfileSendsNoAuthorizationAndKeyedProfileStillRequiresKey() = runBlocking {
+        var authorization: String? = "unset"
+        val server = testServer { exchange ->
+            authorization = exchange.requestHeaders.getFirst("Authorization")
+            sendSse(exchange, sse("""{"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}""", "[DONE]"))
+        }
+        val client = HttpClient(CIO)
+        try {
+            val base = "http://127.0.0.1:${server.address.port}"
+            val keyless = ChatCompletionsProvider(client, ChatCompletionsProfile("local", base, "gemma", requiresApiKey = false), emptyList()) { null }
+            assertIs<ModelEvent.Completed>(keyless.stream(ModelRequest("gemma", listOf(AgentMessage("user", "x")))).toList().last())
+            assertNull(authorization)
+            val keyed = ChatCompletionsProvider(client, ChatCompletionsProfile("remote", base, "m"), emptyList()) { null }
+            assertEquals("MISSING_CREDENTIAL", (keyed.stream(ModelRequest("m", listOf(AgentMessage("user", "x")))).toList().last() as ModelEvent.Failed).code)
+        } finally { client.close(); server.stop(0) }
+    }
+
     @Test fun missingFinishAndDoneFailsInsteadOfCompleting() = runBlocking {
         val server = testServer { exchange ->
             sendSse(exchange, "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"},\"finish_reason\":null}]}\n\n")

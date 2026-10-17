@@ -63,7 +63,10 @@ fun main() = runBlocking {
         try { workspace.edit(EditFileRequest("greeting.py", stale.snapshotId, listOf(FileEdit("replace", 1, 1, content = "wrong")))); error("Stale edit executed") }
         catch (expected: ToolException) { check(expected.code == "STALE_SNAPSHOT") }
         check(Files.readString(project.resolve("greeting.py")) == "# external edit\n")
+        val badChecks = verifyEvalChecks(root)
+        check(badChecks.isEmpty()) { "Eval checks are not meaningful: ${badChecks.joinToString("; ")}" }
         println("OFFLINE SMOKE PASSED: search → read → snapshot edit → real Python checks → final → restart; stale snapshot rejected.")
+        println("Eval task checks: ${EVAL_TASKS.size} fail on the untouched task and pass on the reference solution.")
         println("Model was scripted. No live DeepSeek/Gemma request was made.")
     } finally {
         processes.close()

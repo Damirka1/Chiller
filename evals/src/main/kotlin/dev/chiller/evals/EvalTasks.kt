@@ -1,0 +1,201 @@
+package dev.chiller.evals
+
+import dev.chiller.contracts.ExecutionMode
+import java.nio.file.Files
+import java.nio.file.Path
+import java.util.concurrent.TimeUnit
+
+/** Independent verdict on a task; the model's own claim is never evidence. */
+data class Verdict(val passed: Boolean, val detail: String)
+
+/**
+ * One reproducible task: files written into a fresh folder, a prompt, the permissions the agent gets,
+ * an independent [check], and a [reference] solution used offline to prove the check can pass and fail.
+ */
+class EvalTask(
+    val id: String,
+    val title: String,
+    val prompt: String,
+    val files: Map<String, String>,
+    val mode: ExecutionMode = ExecutionMode.WORKSPACE_EDIT,
+    val allowProcesses: Boolean = true,
+    val check: (project: Path, finalAnswer: String) -> Verdict,
+    /** Applies a correct solution to the project and returns a correct final answer. */
+    val reference: (project: Path) -> String,
+) {
+    fun materialize(project: Path) {
+        files.forEach { (path, content) ->
+            val target = project.resolve(path)
+            Files.createDirectories(target.parent)
+            Files.writeString(target, content)
+        }
+    }
+}
+
+internal fun python(project: Path, vararg args: String): Verdict {
+    val process = ProcessBuilder(listOf("python3") + args).directory(project.toFile()).redirectErrorStream(true).start()
+    val finished = process.waitFor(30, TimeUnit.SECONDS)
+    if (!finished) { process.destroyForcibly(); return Verdict(false, "python3 ${args.joinToString(" ")} timed out") }
+    val output = process.inputStream.bufferedReader().readText().trim().take(400)
+    return Verdict(process.exitValue() == 0, "python3 ${args.joinToString(" ")} → exit ${process.exitValue()}${if (output.isNotEmpty()) ": $output" else ""}")
+}
+
+private fun replaceIn(project: Path, path: String, old: String, new: String) {
+    val file = project.resolve(path)
+    val text = Files.readString(file)
+    check(old in text) { "reference: '$old' not found in $path" }
+    Files.writeString(file, text.replace(old, new))
+}
+
+private fun mentionsAll(answer: String, vararg needles: String): Verdict {
+    val missing = needles.filterNot { answer.contains(it, ignoreCase = true) }
+    return Verdict(missing.isEmpty(), if (missing.isEmpty()) "answer names ${needles.joinToString()}" else "answer misses ${missing.joinToString()}")
+}
+
+private val largeConfig: String = buildString {
+    appendLine("\"\"\"Service settings. Generated; keep one constant per line.\"\"\"")
+    for (i in 1..400) {
+        if (i == 233) appendLine("TIMEOUT_SECONDS = 30")
+        else appendLine("SETTING_%03d = %d  # tuning value %d".format(i, i * 7, i))
+    }
+}
+
+val EVAL_TASKS: List<EvalTask> = listOf(
+    EvalTask(
+        id = "fix-bug",
+        title = "Найти и исправить баг по падающей проверке",
+        prompt = "The project has a failing check. Run `python3 checks.py`, find the bug in greeting.py, fix it, and run the checks again. Report the command output.",
+        files = mapOf(
+            "greeting.py" to "def greet(name):\n    if not name.strip():\n        return 'Hello, '\n    return f'Hello, {name}'\n",
+            "checks.py" to "from greeting import greet\nassert greet('') == 'Hello', repr(greet(''))\nassert greet('  ') == 'Hello', repr(greet('  '))\nassert greet('Ada') == 'Hello, Ada'\nprint('greeting checks passed')\n",
+        ),
+        check = { project, _ -> python(project, "checks.py") },
+        reference = { project -> replaceIn(project, "greeting.py", "return 'Hello, '", "return 'Hello'"); "Fixed greeting.py; python3 checks.py exit 0." },
+    ),
+    EvalTask(
+        id = "rename-across-files",
+        title = "Переименовать функцию во всех файлах",
+        prompt = "Rename the function `add_nums` to `add` everywhere in the project (definition and every usage). Then run `python3 test_calc.py` to confirm.",
+        files = mapOf(
+            "calc.py" to "def add_nums(a, b):\n    \"\"\"Sum two numbers.\"\"\"\n    return a + b\n\n\ndef double(x):\n    return add_nums(x, x)\n",
+            "report.py" to "from calc import add_nums\n\n\ndef total(values):\n    result = 0\n    for v in values:\n        result = add_nums(result, v)\n    return result\n",
+            "test_calc.py" to "from calc import add, double\nfrom report import total\nassert add(2, 3) == 5\nassert double(4) == 8\nassert total([1, 2, 3]) == 6\nprint('calc ok')\n",
+        ),
+        check = { project, _ ->
+            val leftovers = listOf("calc.py", "report.py").filter { "add_nums" in Files.readString(project.resolve(it)) }
+            if (leftovers.isNotEmpty()) Verdict(false, "add_nums still in ${leftovers.joinToString()}") else python(project, "test_calc.py")
+        },
+        reference = { project ->
+            listOf("calc.py", "report.py").forEach { replaceIn(project, it, "add_nums", "add") }
+            "Renamed add_nums to add in calc.py and report.py; test_calc.py passes."
+        },
+    ),
+    EvalTask(
+        id = "implement-spec",
+        title = "Реализовать функцию по спецификации",
+        prompt = "Implement `slugify` in text_utils.py so that `python3 checks.py` passes. Read checks.py for the exact rules. Run the checks.",
+        files = mapOf(
+            "text_utils.py" to "def slugify(text):\n    raise NotImplementedError\n",
+            "checks.py" to "from text_utils import slugify\ncases = {\n    'Hello World': 'hello-world',\n    '  Trim  me  ': 'trim-me',\n    'C++ & Kotlin!': 'c-kotlin',\n    'already-slug': 'already-slug',\n    'Multiple---dashes': 'multiple-dashes',\n    '': '',\n}\nfor source, expected in cases.items():\n    actual = slugify(source)\n    assert actual == expected, f'{source!r}: {actual!r} != {expected!r}'\nprint('slugify ok')\n",
+        ),
+        check = { project, _ -> python(project, "checks.py") },
+        reference = { project ->
+            Files.writeString(project.resolve("text_utils.py"), "import re\n\n\ndef slugify(text):\n    return re.sub(r'[^a-z0-9]+', '-', text.lower()).strip('-')\n")
+            "Implemented slugify; checks pass."
+        },
+    ),
+    EvalTask(
+        id = "edit-large-file",
+        title = "Точечная правка в большом файле",
+        prompt = "In settings.py change TIMEOUT_SECONDS from 30 to 45. Change nothing else in the file.",
+        files = mapOf("settings.py" to largeConfig),
+        allowProcesses = false,
+        check = { project, _ ->
+            val expected = largeConfig.replace("TIMEOUT_SECONDS = 30", "TIMEOUT_SECONDS = 45")
+            val actual = Files.readString(project.resolve("settings.py"))
+            if (actual == expected) Verdict(true, "only TIMEOUT_SECONDS changed")
+            else Verdict(false, "settings.py differs: ${actual.lines().zip(expected.lines()).count { (a, b) -> a != b } + kotlin.math.abs(actual.lines().size - expected.lines().size)} line(s) wrong")
+        },
+        reference = { project -> replaceIn(project, "settings.py", "TIMEOUT_SECONDS = 30", "TIMEOUT_SECONDS = 45"); "Set TIMEOUT_SECONDS = 45." },
+    ),
+    EvalTask(
+        id = "locate-code",
+        title = "Найти, где реализована логика (только чтение)",
+        prompt = "Which file and which function compute the delay between retries? Answer with the file path and the function name.",
+        files = mapOf(
+            "app/main.py" to "from app.net.client import fetch\n\n\nif __name__ == '__main__':\n    print(fetch('https://example.com'))\n",
+            "app/net/client.py" to "from app.net.policy import should_retry, next_wait\n\n\ndef fetch(url, attempts=3):\n    for attempt in range(attempts):\n        if not should_retry(attempt):\n            break\n        next_wait(attempt)\n    return url\n",
+            "app/net/policy.py" to "from app.util.timing import backoff_seconds\n\n\ndef should_retry(attempt):\n    return attempt < 5\n\n\ndef next_wait(attempt):\n    return backoff_seconds(attempt)\n",
+            "app/util/timing.py" to "def backoff_seconds(attempt, base=0.5, cap=8.0):\n    \"\"\"Exponential backoff with an upper bound.\"\"\"\n    return min(cap, base * (2 ** attempt))\n\n\ndef now_ms():\n    import time\n    return int(time.time() * 1000)\n",
+        ),
+        mode = ExecutionMode.PLAN,
+        allowProcesses = false,
+        check = { _, answer -> mentionsAll(answer, "timing.py", "backoff_seconds") },
+        reference = { "app/util/timing.py, function backoff_seconds (called via next_wait)." },
+    ),
+    EvalTask(
+        id = "count-todos",
+        title = "Посчитать по проекту (только чтение)",
+        prompt = "How many lines containing `TODO` are there in the src/ folder (all files)? Reply with the number on the first line.",
+        files = mapOf(
+            "src/a.py" to "# TODO: split module\nx = 1\n# TODO handle errors\n",
+            "src/b.py" to "def f():\n    pass  # TODO\n",
+            "src/deep/c.py" to "# todo lowercase does not count\ny = 2  # TODO: rename\n",
+            "src/deep/d.txt" to "TODO list:\n- nothing\n",
+            "notes.md" to "TODO outside src does not count\n",
+        ),
+        mode = ExecutionMode.PLAN,
+        allowProcesses = false,
+        check = { _, answer ->
+            val first = answer.trim().lineSequence().firstOrNull().orEmpty()
+            val numbers = Regex("\\d+").findAll(first).map { it.value }.toList()
+            Verdict(numbers == listOf("5"), "first line: '${first.take(80)}' (expected 5)")
+        },
+        reference = { "5\nsrc/a.py ×2, src/b.py, src/deep/c.py, src/deep/d.txt" },
+    ),
+    EvalTask(
+        id = "create-module",
+        title = "Создать модуль с нуля",
+        prompt = "Create a new file stats.py with functions mean(values) and median(values) so that `python3 checks.py` passes. Run the checks.",
+        files = mapOf(
+            "checks.py" to "from stats import mean, median\nassert mean([1, 2, 3, 4]) == 2.5\nassert median([3, 1, 2]) == 2\nassert median([4, 1, 3, 2]) == 2.5\ntry:\n    mean([])\n    raise SystemExit('mean([]) must raise ValueError')\nexcept ValueError:\n    pass\nprint('stats ok')\n",
+        ),
+        check = { project, _ -> if (!Files.exists(project.resolve("stats.py"))) Verdict(false, "stats.py missing") else python(project, "checks.py") },
+        reference = { project ->
+            Files.writeString(project.resolve("stats.py"), "def mean(values):\n    if not values:\n        raise ValueError('empty')\n    return sum(values) / len(values)\n\n\ndef median(values):\n    s = sorted(values)\n    n = len(s)\n    if n == 0:\n        raise ValueError('empty')\n    mid = n // 2\n    return s[mid] if n % 2 else (s[mid - 1] + s[mid]) / 2\n")
+            "Created stats.py; checks pass."
+        },
+    ),
+    EvalTask(
+        id = "fix-without-running",
+        title = "Исправить без запуска процессов",
+        prompt = "is_leap_year in dates.py is wrong for century years (1900 is not a leap year, 2000 is). Fix it. You cannot run commands in this task.",
+        files = mapOf(
+            "dates.py" to "def is_leap_year(year):\n    return year % 4 == 0\n",
+            "checks.py" to "from dates import is_leap_year\nassert is_leap_year(2024)\nassert not is_leap_year(2023)\nassert not is_leap_year(1900)\nassert is_leap_year(2000)\nprint('dates ok')\n",
+        ),
+        allowProcesses = false,
+        check = { project, _ -> python(project, "checks.py") },
+        reference = { project ->
+            replaceIn(project, "dates.py", "return year % 4 == 0", "return year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)")
+            "Fixed century rule in dates.py (not executed: commands disabled)."
+        },
+    ),
+)
+
+/**
+ * Proves every check is meaningful: it fails on the untouched task and passes after the reference
+ * solution. Runs offline (needs python3), so a live "pass" cannot come from a check that always passes.
+ */
+fun verifyEvalChecks(workDir: Path): List<String> = EVAL_TASKS.mapNotNull { task ->
+    val project = Files.createTempDirectory(workDir, task.id)
+    task.materialize(project)
+    val before = task.check(project, "")
+    val answer = task.reference(project)
+    val after = task.check(project, answer)
+    when {
+        before.passed -> "${task.id}: check passes before solving (${before.detail})"
+        !after.passed -> "${task.id}: reference fails (${after.detail})"
+        else -> null
+    }
+}

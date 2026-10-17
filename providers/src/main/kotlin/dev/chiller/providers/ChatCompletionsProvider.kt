@@ -34,6 +34,8 @@ data class ChatCompletionsProfile(
     val reasoningField: String? = null,
     val thinkingOptions: (Boolean) -> JsonObject = { JsonObject(emptyMap()) },
     val streamOptions: JsonObject = buildJsonObject { put("include_usage", true) },
+    /** False only for endpoints that accept unauthenticated requests, such as a loopback vLLM server. */
+    val requiresApiKey: Boolean = true,
 ) {
     companion object {
         fun deepSeekFlash(
@@ -74,7 +76,7 @@ class ChatCompletionsProvider private constructor(
 
     override fun stream(request: ModelRequest): Flow<ModelEvent> = flow {
         val key = apiKey()?.takeIf { it.isNotBlank() }
-        if (key == null) {
+        if (key == null && profile.requiresApiKey) {
             emit(ModelEvent.Failed("MISSING_CREDENTIAL", "Provider credentials are not configured"))
             return@flow
         }
@@ -126,7 +128,7 @@ class ChatCompletionsProvider private constructor(
 
     /** One stateless HTTP attempt. Deltas are emitted live; only failures before the first delta are retried. */
     private suspend fun attemptStream(
-        key: String,
+        key: String?,
         payload: String,
         emitEvent: suspend (ModelEvent) -> Unit,
     ): AttemptOutcome {
@@ -134,7 +136,7 @@ class ChatCompletionsProvider private constructor(
         try {
             client.preparePost(profile.baseUrl.trimEnd('/') + "/" + profile.chatPath.trimStart('/')) {
                 contentType(ContentType.Application.Json)
-                header(HttpHeaders.Authorization, "Bearer $key")
+                if (key != null) header(HttpHeaders.Authorization, "Bearer $key")
                 header(HttpHeaders.Accept, "text/event-stream")
                 setBody(payload)
             }.execute { response ->
