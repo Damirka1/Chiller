@@ -17,6 +17,7 @@ Desktop coding agent на Kotlin/JVM и Compose Desktop. Точные инстр
 5. [План запуска субагентов](docs/AGENT_RUNBOOK.md).
 6. [Профиль DeepSeek и будущая проверка Gemma](docs/PROVIDERS.md).
 7. [Спецификация интерфейса Focus / Studio](docs/DESIGN.md).
+8. [Пошаговый план завершения интерфейса для экономного исполнителя](docs/UI_FINISHING_RUNBOOK.md).
 
 MODULES и CONTRACTS уточняют первоначальную структуру. BACKLOG определяет объём конкретного этапа; документирование задачи не означает её выполнение.
 
