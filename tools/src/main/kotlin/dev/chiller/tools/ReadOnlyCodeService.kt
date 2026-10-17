@@ -23,6 +23,11 @@ interface ReadOnlyCodeService {
     suspend fun gitLog(limit: Int, revision: String?): ToolResult
     suspend fun gitShow(revision: String, path: String): ToolResult
     suspend fun findSymbols(query: String, path: String?, limit: Int): ToolResult
+    /**
+     * A compact text map of the project: files grouped by folder with their top-level declarations, cut to
+     * [maxChars]. Null when the project cannot be scanned. Lexical, like [findSymbols]; not a parser.
+     */
+    suspend fun projectMap(maxChars: Int = 3000): String? = null
 }
 
 class LocalReadOnlyCodeService(workspaceRoot: String) : ReadOnlyCodeService {
@@ -86,6 +91,38 @@ class LocalReadOnlyCodeService(workspaceRoot: String) : ReadOnlyCodeService {
             }
         }
         ToolResult(true, buildJsonObject { put("matches", matches); put("lexical", true) }, truncated = scanTruncated || matches.size >= limit)
+    }
+
+    override suspend fun projectMap(maxChars: Int): String? = withContext(Dispatchers.IO) {
+        val listing = try { runRgFileList(null) } catch (_: ToolException) { return@withContext null }
+        val names = listing.text.split('\u0000').filter(String::isNotEmpty).mapNotNull { runCatching { checkedPath(it) }.getOrNull() }.take(5000)
+        if (names.isEmpty()) return@withContext null
+        var scanned = 0L
+        // Top-level declarations only (no indentation), so a file's line stays short.
+        val outline = names.associateWith { name ->
+            val file = root.resolve(name)
+            if (!supported(file) || Files.isSymbolicLink(file) || !file.isRegularFile()) return@associateWith emptyList()
+            val size = Files.size(file)
+            if (size > MAX_FILE_BYTES || scanned + size > MAP_SCAN_BYTES) return@associateWith emptyList()
+            scanned += size
+            runCatching { Files.readAllLines(file) }.getOrDefault(emptyList()).withIndex()
+                .filter { (_, line) -> line.isNotEmpty() && !line[0].isWhitespace() && isDeclaration(line) }
+                .mapNotNull { (index, line) -> MAP_NAME.find(line)?.let { "${it.groupValues[1]} ${it.groupValues[2]}:${index + 1}" } }
+        }
+        val full = buildString {
+            names.groupBy { it.substringBeforeLast('/', "") }.toSortedMap().forEach { (folder, files) ->
+                appendLine(if (folder.isEmpty()) "./" else "$folder/")
+                files.forEach { name ->
+                    append("  "); append(name.substringAfterLast('/'))
+                    outline[name].orEmpty().takeIf { it.isNotEmpty() }?.let { append(" — "); append(it.take(12).joinToString(", ")); if (it.size > 12) append(", …") }
+                    appendLine()
+                }
+            }
+        }
+        if (full.length <= maxChars) return@withContext "${names.size} files; declarations as kind name:line\n" + full.trimEnd()
+        // Too large: folders with file counts first, then as many file lines as fit.
+        val folders = names.groupBy { it.substringBeforeLast('/', ".") }.toSortedMap().entries.joinToString("\n") { (folder, files) -> "$folder/ (${files.size})" }
+        "${names.size} files, map cut to fit; use list_files/find_symbols for the rest\n" + (folders + "\n\n" + full).take(maxChars).substringBeforeLast('\n')
     }
 
     private suspend fun git(args: List<String>): ToolResult = withContext(Dispatchers.IO) {
@@ -195,6 +232,8 @@ class LocalReadOnlyCodeService(workspaceRoot: String) : ReadOnlyCodeService {
         private const val MAX_FILE_BYTES = 512 * 1024L
         private const val MAX_TOTAL_SCAN_BYTES = 8 * 1024 * 1024L
         private const val TIMEOUT_SECONDS = 4L
+        private const val MAP_SCAN_BYTES = 2 * 1024 * 1024L
+        private val MAP_NAME = Regex("\\b(class|interface|object|enum|fun|def|fn|func|function|type|struct)\\s+([A-Za-z_$][A-Za-z0-9_$]*)")
         private val DECLARATION = Regex("^\\s*(?:(?:public|private|protected|internal|static|final|async|export|abstract|open|override|data|sealed|class|interface|enum|object|fun|def|fn|func|function|type|struct|actor)\\s+)+[A-Za-z_$][A-Za-z0-9_$]*")
         private val KOTLIN_FUNCTION = Regex("^\\s*(?:(?:public|private|protected|internal|tailrec|inline|suspend|operator|infix|external|override)\\s+)*fun\\s+(?:<[^>]+>\\s+)?(?:[A-Za-z_$][A-Za-z0-9_$.<>?, ]*\\.)?[A-Za-z_$][A-Za-z0-9_$]*(?:<[^>]+>)?\\s*\\(")
     }

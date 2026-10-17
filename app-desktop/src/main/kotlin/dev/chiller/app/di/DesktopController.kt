@@ -713,7 +713,8 @@ class DesktopController(
         workspaceService = workspace
         val processes = LocalProcessService(root); processService = processes
         questions = PendingQuestions()
-        val builtin = BuiltinTools(workspace, processes, artifacts, questions, code = LocalReadOnlyCodeService(workspace.root), web = BoundedWebService(), screens = captureController)
+        val code = LocalReadOnlyCodeService(workspace.root)
+        val builtin = BuiltinTools(workspace, processes, artifacts, questions, code = code, web = BoundedWebService(), screens = captureController)
         val baseProfile = if (java.net.URI(s.settings.baseUrl).host == "api.deepseek.com")
             ChatCompletionsProfile.deepSeekFlash(s.settings.baseUrl, s.settings.model)
         else ChatCompletionsProfile("generic", s.settings.baseUrl, s.settings.model, requiresApiKey = !keyless(s.settings.baseUrl))
@@ -735,8 +736,9 @@ class DesktopController(
         _state.update { it.copy(activeProfile = modelProfile.id) }
         // Read once per engine: an edit to AGENTS.md applies from the next dialog.
         val instructions = if (options.projectInstructions) withContext(Dispatchers.IO) { ProjectInstructions.load(root) } else null
+        val map = if (modelProfile.projectMap) runCatching { code.projectMap() }.getOrNull() else null
         val engine = AgentCoordinator(provider, tools, events, processes, s.sessionId, modelOverride ?: s.settings.model, s.settings.thinking, maxRounds = options.maxRounds, maxOutputTokens = maxOutput,
-            projectInstructions = instructions?.text, traces = traceSink(s.sessionId), subagents = supervisor.takeIf { helpers }, systemPrompt = modelProfile.systemPrompt, scope = scope)
+            projectInstructions = instructions?.text, traces = traceSink(s.sessionId), subagents = supervisor.takeIf { helpers }, systemPrompt = modelProfile.systemPrompt, projectMap = map, scope = scope)
         events.append(s.sessionId, "context.profile", buildJsonObject { put("profile", modelProfile.id); put("tools", tools.specs.size) })
         coordinator = engine
         if (instructions != null) events.append(s.sessionId, "context.instructions", buildJsonObject {

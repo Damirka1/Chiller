@@ -80,4 +80,24 @@ class ReadOnlyCodeServiceTest {
             assertFailsWith<ToolException> { LocalReadOnlyCodeService(nested.toString()).gitStatus() }
         } finally { parent.toFile().deleteRecursively() }
     }
+
+    @Test fun projectMapListsFilesWithTopLevelDeclarationsAndCutsToBudget() = runBlocking<Unit> {
+        val root = Files.createTempDirectory("chiller-map")
+        try {
+            Files.createDirectories(root.resolve("src"))
+            Files.writeString(root.resolve("src/cart.py"), "import math\n\nclass Cart:\n    def total(self):\n        pass\n\ndef apply_discount(cart):\n    pass\n")
+            Files.writeString(root.resolve("README.md"), "# demo\n")
+            Files.writeString(root.resolve(".gitignore"), "build/\n")
+            Files.createDirectories(root.resolve("build")); Files.writeString(root.resolve("build/out.py"), "class Generated:\n    pass\n")
+            val service = LocalReadOnlyCodeService(root.toString())
+            val map = service.projectMap()!!
+            assertTrue("src/\n  cart.py — class Cart:3, def apply_discount:7" in map, map)
+            assertTrue("README.md" in map, map)
+            assertFalse("total" in map, "nested methods stay out of the map")
+            assertFalse("Generated" in map, "ignored folders stay out of the map")
+            val cut = service.projectMap(maxChars = 60)!!
+            assertTrue(cut.startsWith("3 files, map cut to fit") || cut.startsWith("4 files, map cut to fit"), cut)
+            assertTrue(cut.length <= 60 + 80, cut)
+        } finally { root.toFile().deleteRecursively() }
+    }
 }

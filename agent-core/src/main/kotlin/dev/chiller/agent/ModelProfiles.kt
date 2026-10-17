@@ -19,12 +19,14 @@ data class ModelProfile(
     val temperature: Double? = null,
     /** False asks the provider for one tool call per round, which small models handle more reliably. */
     val parallelToolCalls: Boolean? = null,
+    /** Put a compact map of files and declarations into the context at the start, saving discovery rounds. */
+    val projectMap: Boolean = false,
 )
 
 object ModelProfiles {
     /** Enough to find, read, change, verify and plan; everything else is noise for a small model. */
     val CORE_TOOLS = setOf(
-        "list_files", "search_text", "read_file", "replace_text", "create_file",
+        "list_files", "search_text", "find_symbols", "read_file", "replace_text", "create_file",
         "run_process", "read_process", "update_plan", "ask_user", "git_diff",
     )
 
@@ -35,7 +37,7 @@ object ModelProfiles {
     val COMPACT = ModelProfile(
         "compact", "Компактный",
         "Для маленьких моделей (около 4–14B активных параметров, например Gemma 26B-A4B): ${CORE_TOOLS.size} базовых инструментов, короткий пошаговый промпт, без помощников, один вызов за шаг.",
-        tools = CORE_TOOLS, systemPrompt = COMPACT_PROMPT, maxOutputTokens = 2048, temperature = 0.2, parallelToolCalls = false,
+        tools = CORE_TOOLS, systemPrompt = COMPACT_PROMPT, maxOutputTokens = 2048, temperature = 0.2, parallelToolCalls = false, projectMap = true,
     )
 
     val all = listOf(FULL, COMPACT)
@@ -62,8 +64,8 @@ object ModelProfiles {
 private const val COMPACT_PROMPT = """You are Chiller, a coding assistant that works in the user's project through tools. Work in small, checked steps.
 
 How to work:
-1. Find: search_text (text in files) or list_files (file names).
-2. Read: read_file. It returns snapshot_id and numbered lines like "12 | code".
+1. Find: start from the project map in your instructions. find_symbols locates where a class or function is defined; search_text finds other text and usages; list_files lists file names.
+2. Read: read_file. It returns snapshot_id and numbered lines like "12 | code". For a big file read only the part you need: pass start_line and end_line around the line that find_symbols or search_text gave you. Do not read the same unchanged lines twice.
 3. Change: replace_text with path, snapshot_id, old_text and new_text. Copy old_text exactly from read_file WITHOUT the "12 | " prefix, keeping spaces. Use create_file for new files.
 4. Check: if process permission is on, run_process then read_process, and look at the exit code.
 5. Finish: a short answer with the files you changed and how you checked them.

@@ -74,7 +74,7 @@ data class EvalReport(val model: String, val endpoint: String, val startedAt: St
  * - CHILLER_EVAL_BASE_URL (default https://api.deepseek.com), CHILLER_EVAL_MODEL (default deepseek-flash)
  * - key: CHILLER_EVAL_API_KEY, DEEPSEEK_API_KEY or API_TOKEN; may be absent only for a loopback endpoint
  * - CHILLER_EVAL_TASKS (comma-separated ids), CHILLER_EVAL_REPEATS (1–5), CHILLER_EVAL_MAX_ROUNDS (≤ 20),
- *   CHILLER_EVAL_MAX_OUTPUT (≤ 4096), CHILLER_EVAL_THINKING (true/false)
+ *   CHILLER_EVAL_MAX_OUTPUT (≤ 4096), CHILLER_EVAL_THINKING (true/false), CHILLER_EVAL_PROJECT_MAP (true/false, A/B override)
  * Reports and per-task traces go to reports/local/evals/ (git-ignored).
  */
 fun main() = runBlocking {
@@ -102,7 +102,8 @@ fun main() = runBlocking {
     val stamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss"))
     val outDir = Path.of("reports/local/evals/$stamp-${model.replace(Regex("[^A-Za-z0-9._-]"), "_")}-${resolved.id}").toAbsolutePath()
     println("=== CHILLER LIVE EVAL · $model · profile ${resolved.id} · ${tasks.size} task(s) × $repeats · maxRounds=$maxRounds maxOutput=$maxOutput thinking=$thinking ===")
-    val report = runEvalSuite(SuiteSpec(baseUrl, model, { key }, profileId, tasks.map { it.id }.toSet(), repeats, maxRounds, maxOutput, thinking, outDir = outDir)) { result ->
+    val report = runEvalSuite(SuiteSpec(baseUrl, model, { key }, profileId, tasks.map { it.id }.toSet(), repeats, maxRounds, maxOutput, thinking, outDir = outDir,
+        projectMap = env["CHILLER_EVAL_PROJECT_MAP"]?.toBooleanStrictOrNull())) { result ->
         println("%-20s #%d %s  rounds=%-2d tools=%-2d errors=%-2d reread=%-2d badEdits=%-2d out=%4dk %5.1fs  %s".format(result.task, result.attempt, if (result.passed) "PASS" else "FAIL",
             result.rounds, result.toolCalls, result.failedToolCalls, result.loss.repeatedReads, result.loss.failedEdits, result.loss.toolOutputChars / 1000, result.durationMs / 1000.0, result.verdict.take(80)))
     }
@@ -134,9 +135,10 @@ internal suspend fun runTask(task: EvalTask, attempt: Int, provider: ChatComplet
     val store = JsonlEventStore(root.resolve("sessions"))
     val artifacts = LocalArtifactStore(root.resolve("artifacts"))
     val processes = LocalProcessService(project)
+    val code = LocalReadOnlyCodeService(project.toString())
     val builtin = BuiltinTools(LocalWorkspace(project, store, artifacts, session), processes, artifacts, object : InteractionBroker {
         override suspend fun ask(question: UserQuestion) = "No answer is available in an unattended evaluation. Make a reasonable assumption and state it."
-    }, code = LocalReadOnlyCodeService(project.toString()))
+    }, code = code)
     val budget = RunBudgetProvider(provider, maxRequests = 48, maxOutputTokens = 32768)
     val traceFile = TraceFile(outDir.resolve("traces/$session.jsonl"))
     val started = System.nanoTime()
@@ -150,7 +152,7 @@ internal suspend fun runTask(task: EvalTask, attempt: Int, provider: ChatComplet
         val output = modelProfile.maxOutputTokens?.let { minOf(it, maxOutput) } ?: maxOutput
         val engine = AgentCoordinator(budget, tools, store, processes, session, model, thinking, maxRounds = maxRounds, maxOutputTokens = output,
             projectInstructions = ProjectInstructions.load(project)?.text, traces = RunTraceSink { traceFile.append(it) }, subagents = supervisor.takeIf { helpersAllowed },
-            systemPrompt = modelProfile.systemPrompt, scope = this)
+            systemPrompt = modelProfile.systemPrompt, projectMap = if (modelProfile.projectMap) code.projectMap() else null, scope = this)
         try {
             withTimeout(5 * 60_000L) { engine.send(task.prompt, task.mode, task.allowProcesses).join() }
         } catch (_: kotlinx.coroutines.TimeoutCancellationException) { failure = "timeout after 5 min"; engine.stop() }

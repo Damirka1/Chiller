@@ -30,6 +30,8 @@ data class SuiteSpec(
     val thinking: Boolean = false,
     val requestExtras: JsonObject = JsonObject(emptyMap()),
     val outDir: Path,
+    /** Overrides the profile's project map, for A/B runs; null keeps the profile's choice. */
+    val projectMap: Boolean? = null,
 )
 
 /**
@@ -39,7 +41,7 @@ data class SuiteSpec(
 suspend fun runEvalSuite(spec: SuiteSpec, onResult: suspend (EvalResult) -> Unit = {}): EvalReport {
     val tasks = EVAL_TASKS.filter { spec.taskIds == null || it.id in spec.taskIds }
     require(tasks.isNotEmpty()) { "No tasks selected; known: ${EVAL_TASKS.joinToString { it.id }}" }
-    val modelProfile = ModelProfiles.resolve(spec.profileId, spec.model)
+    val modelProfile = ModelProfiles.resolve(spec.profileId, spec.model).let { p -> spec.projectMap?.let { p.copy(projectMap = it) } ?: p }
     val host = runCatching { URI(spec.baseUrl).host }.getOrNull().orEmpty()
     val loopback = host in setOf("localhost", "127.0.0.1", "::1")
     val extras = buildJsonObject {
