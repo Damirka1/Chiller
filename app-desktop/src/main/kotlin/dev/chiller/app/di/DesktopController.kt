@@ -9,6 +9,7 @@ import dev.chiller.tools.LocalReadOnlyCodeService
 import dev.chiller.tools.BoundedWebService
 import dev.chiller.tools.BuiltinTools
 import dev.chiller.tools.SubagentTools
+import dev.chiller.tools.ProfiledTools
 import dev.chiller.workspace.LocalWorkspace
 import dev.chiller.workspace.ProjectInstructions
 import io.ktor.client.HttpClient
@@ -41,8 +42,15 @@ data class AgentOptions(
     val totalOutputTokens: Int = 32768,
     val allowNetwork: Boolean = false,
     val allowScreenshots: Boolean = false,
+    /** "auto", "full" or "compact"; see ModelProfiles. */
+    val profile: String = "auto",
+    /** Overrides the profile's temperature; null keeps the profile/provider default. */
+    val temperature: Double? = null,
+    /** Extra top-level request fields as a JSON object, e.g. vLLM structured-output options. */
+    val requestExtras: String = "",
 ) {
-    fun sanitized() = copy(maxRounds = maxRounds.coerceIn(4, 60), maxOutputTokens = maxOutputTokens.coerceIn(1024, 16_384), maxRequests = maxRequests.coerceIn(1, 120), totalOutputTokens = totalOutputTokens.coerceIn(1024, 262144))
+    fun sanitized() = copy(maxRounds = maxRounds.coerceIn(4, 60), maxOutputTokens = maxOutputTokens.coerceIn(1024, 16_384), maxRequests = maxRequests.coerceIn(1, 120), totalOutputTokens = totalOutputTokens.coerceIn(1024, 262144),
+        profile = profile.takeIf { it in setOf("auto", "full", "compact") } ?: "auto", temperature = temperature?.coerceIn(0.0, 2.0), requestExtras = requestExtras.take(4000))
 }
 data class SendReceipt(val accepted: Boolean, val sessionId: String, val clientRequestId: String, val reason: String? = null)
 data class ConnectionState(val status: String = "unverified", val message: String = "", val checkedAt: String? = null)
@@ -53,7 +61,7 @@ data class ModelCatalogState(
     val fetchedAt: String? = null,
     val stale: Boolean = false,
 )
-data class DesktopState(val run: RunState = RunState(), val sessions: List<SessionInfo> = emptyList(), val sessionId: String = newId(), val settings: DesktopSettings = DesktopSettings(), val apiKeyConfigured: Boolean = false, val allowProcesses: Boolean = false, val exportContent: String? = null, val exportFormat: String = "markdown", val exportSessionId: String? = null, val uiPreferences: UiPreferences = UiPreferences(), val connection: ConnectionState = ConnectionState(), val catalog: ModelCatalogState = ModelCatalogState(), val sessionWorkspaces: Map<String, String> = emptyMap(), val subagents: List<SubagentSnapshot> = emptyList(), val captureTargets: List<CaptureTarget> = emptyList(), val selectedCaptureTarget: String? = null)
+data class DesktopState(val run: RunState = RunState(), val sessions: List<SessionInfo> = emptyList(), val sessionId: String = newId(), val settings: DesktopSettings = DesktopSettings(), val apiKeyConfigured: Boolean = false, val allowProcesses: Boolean = false, val exportContent: String? = null, val exportFormat: String = "markdown", val exportSessionId: String? = null, val uiPreferences: UiPreferences = UiPreferences(), val connection: ConnectionState = ConnectionState(), val catalog: ModelCatalogState = ModelCatalogState(), val sessionWorkspaces: Map<String, String> = emptyMap(), val subagents: List<SubagentSnapshot> = emptyList(), val captureTargets: List<CaptureTarget> = emptyList(), val selectedCaptureTarget: String? = null, val activeProfile: String? = null)
 
 class DesktopController(
     private val directory: Path, initialCredential: String? = LocalCredentials.load(), connectionChecker: ConnectionChecker? = null, catalogClient: ModelCatalogClient? = null,
@@ -609,20 +617,28 @@ class DesktopController(
         val processes = LocalProcessService(root); processService = processes
         questions = PendingQuestions()
         val builtin = BuiltinTools(workspace, processes, artifacts, questions, code = LocalReadOnlyCodeService(workspace.root), web = BoundedWebService(), screens = captureController)
-        val profile = if (java.net.URI(s.settings.baseUrl).host == "api.deepseek.com")
+        val baseProfile = if (java.net.URI(s.settings.baseUrl).host == "api.deepseek.com")
             ChatCompletionsProfile.deepSeekFlash(s.settings.baseUrl, s.settings.model)
         else ChatCompletionsProfile("generic", s.settings.baseUrl, s.settings.model, requiresApiKey = !keyless(s.settings.baseUrl))
+        val modelProfile = effectiveProfile(options, modelOverride ?: s.settings.model)
+        val profile = baseProfile.withExtras(requestExtrasFor(modelProfile, options))
         // The engine's provider is bound to its own endpoint's key, read at request time.
         val engineOrigin = originOf(s.settings.baseUrl)
         val provider = providerOverride ?: RunBudgetProvider(ChatCompletionsProvider(http, profile) { engineOrigin?.let { credentials[it] } }, options.maxRequests, options.totalOutputTokens)
         // Children use the same provider and model, read-only tools and the plain executor (no delegation).
         val supervisor = SubagentSupervisor(provider, builtin, events, s.sessionId, modelOverride ?: s.settings.model, scope)
         subagentService = supervisor
-        val tools: ToolExecutor = if (options.subagents) SubagentTools(builtin, supervisor) else builtin
+        // The model profile narrows the toolbox (helpers only if it keeps spawn_agent) and may cap output.
+        val helpers = options.subagents && (modelProfile.tools == null || "spawn_agent" in modelProfile.tools!!)
+        val delegating: ToolExecutor = if (helpers) SubagentTools(builtin, supervisor) else builtin
+        val tools: ToolExecutor = modelProfile.tools?.let { ProfiledTools(delegating, it) } ?: delegating
+        val maxOutput = modelProfile.maxOutputTokens?.let { minOf(it, options.maxOutputTokens) } ?: options.maxOutputTokens
+        _state.update { it.copy(activeProfile = modelProfile.id) }
         // Read once per engine: an edit to AGENTS.md applies from the next dialog.
         val instructions = if (options.projectInstructions) withContext(Dispatchers.IO) { ProjectInstructions.load(root) } else null
-        val engine = AgentCoordinator(provider, tools, events, processes, s.sessionId, modelOverride ?: s.settings.model, s.settings.thinking, maxRounds = options.maxRounds, maxOutputTokens = options.maxOutputTokens,
-            projectInstructions = instructions?.text, traces = traceSink(s.sessionId), subagents = supervisor.takeIf { options.subagents }, scope = scope)
+        val engine = AgentCoordinator(provider, tools, events, processes, s.sessionId, modelOverride ?: s.settings.model, s.settings.thinking, maxRounds = options.maxRounds, maxOutputTokens = maxOutput,
+            projectInstructions = instructions?.text, traces = traceSink(s.sessionId), subagents = supervisor.takeIf { helpers }, systemPrompt = modelProfile.systemPrompt, scope = scope)
+        events.append(s.sessionId, "context.profile", buildJsonObject { put("profile", modelProfile.id); put("tools", tools.specs.size) })
         coordinator = engine
         if (instructions != null) events.append(s.sessionId, "context.instructions", buildJsonObject {
             put("sources", JsonArray(instructions.sources.map(::JsonPrimitive))); put("truncated", instructions.truncated)

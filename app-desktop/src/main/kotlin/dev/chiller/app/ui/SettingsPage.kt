@@ -222,6 +222,7 @@ private fun ChipFlow(items: List<String>, selected: String, labels: Map<String, 
 private fun AgentSection(data: SettingsData, actions: SettingsActions) {
     val c = LocalChillerPalette.current
     val a = data.agent
+    ProfileCard(data, actions)
     Card {
         SectionTitle("Лимиты прогона", "Ограничивают одну задачу. Применяются со следующего диалога.")
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -276,6 +277,47 @@ private fun AgentSection(data: SettingsData, actions: SettingsActions) {
 }
 
 private fun formatK(v: Int) = if (v >= 1024) "${v / 1024}k" else "$v"
+
+/** Which harness profile the model gets: toolbox size, prompt style, temperature and raw request extras. */
+@Composable
+private fun ProfileCard(data: SettingsData, actions: SettingsActions) {
+    val c = LocalChillerPalette.current
+    val a = data.agent
+    val resolved = effectiveProfile(a, data.model)
+    Card {
+        SectionTitle("Профиль модели", "Маленьким моделям проще с коротким списком инструментов и пошаговым промптом. Применяется со следующего диалога.")
+        Row(Modifier.clip(RoundedCornerShape(8.dp)).background(c.sidebar).padding(2.dp), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+            listOf("auto" to "Авто", "full" to "Полный", "compact" to "Компактный").forEach { (id, label) ->
+                ChillerControl(label, { actions.agent(a.copy(profile = id)) }, style = if (a.profile == id) ControlStyle.SELECTED else ControlStyle.QUIET)
+            }
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(7.dp).clip(CircleShape).background(c.accent)); Spacer(Modifier.width(8.dp))
+            Text(buildString {
+                append("Для ${data.model.ifBlank { "модели" }}: ${resolved.name.lowercase()}")
+                if (a.profile == "auto") append(" (выбран автоматически по ID)")
+            }, color = c.text, fontSize = 12.sp)
+        }
+        Text(resolved.description, color = c.faint, fontSize = 11.sp, lineHeight = 16.sp)
+        resolved.tools?.let { tools ->
+            Text("Инструменты: " + tools.sorted().joinToString(", "), color = c.muted, fontSize = 11.sp, lineHeight = 16.sp, fontFamily = FontFamily.Monospace)
+        }
+        Text("Температура", color = c.text, fontSize = 13.sp)
+        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            val options = listOf<Double?>(null, 0.0, 0.2, 0.5, 0.8)
+            options.forEach { t ->
+                val label = t?.toString() ?: (resolved.temperature?.let { "профиль ($it)" } ?: "по умолчанию")
+                ChillerControl(label, { actions.agent(a.copy(temperature = t)) }, style = if (a.temperature == t) ControlStyle.SELECTED else ControlStyle.QUIET)
+            }
+        }
+        var extras by remember(a.requestExtras) { mutableStateOf(a.requestExtras) }
+        val problem = validateRequestExtras(extras)
+        ChillerField(extras, { extras = it }, "Дополнительные поля запроса (JSON)", "{\"top_p\": 0.9}")
+        Text(problem ?: "Добавляются в каждый запрос к модели, например параметры structured output вашего vLLM. Поля model, messages, tools, stream и max_tokens изменить нельзя.",
+            color = if (problem != null) c.negative else c.faint, fontSize = 11.sp, lineHeight = 16.sp)
+        ChillerControl("Сохранить поля", { actions.agent(a.copy(requestExtras = extras.trim())) }, style = ControlStyle.OUTLINE, enabled = extras.trim() != a.requestExtras && (problem == null || problem.startsWith("Служебные")))
+    }
+}
 
 @Composable
 private fun AppearanceSection(data: SettingsData, actions: SettingsActions) {

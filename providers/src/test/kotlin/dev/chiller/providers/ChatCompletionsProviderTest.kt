@@ -64,6 +64,26 @@ class ChatCompletionsProviderTest {
         assertTrue("image_url" !in request)
     }
 
+    @Test fun requestExtrasAreSentButCannotReplaceProtocolFields() = runBlocking {
+        var body = ""
+        val server = testServer { exchange ->
+            body = exchange.requestBody.readBytes().toString(StandardCharsets.UTF_8)
+            sendSse(exchange, sse("""{"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}""", "[DONE]"))
+        }
+        val client = HttpClient(CIO)
+        try {
+            val extras = buildJsonObject { put("temperature", 0.2); put("parallel_tool_calls", false); put("model", "hijack"); put("stream", false) }
+            val profile = ChatCompletionsProfile("local", "http://127.0.0.1:${server.address.port}", "gemma", requiresApiKey = false).withExtras(extras)
+            val provider = ChatCompletionsProvider(client, profile, emptyList()) { null }
+            assertIs<ModelEvent.Completed>(provider.stream(ModelRequest("gemma", listOf(AgentMessage("user", "x")))).toList().last())
+            val sent = Json.parseToJsonElement(body).jsonObject
+            assertEquals("0.2", sent.getValue("temperature").jsonPrimitive.content)
+            assertEquals("false", sent.getValue("parallel_tool_calls").jsonPrimitive.content)
+            assertEquals("gemma", sent.getValue("model").jsonPrimitive.content)
+            assertEquals("true", sent.getValue("stream").jsonPrimitive.content)
+        } finally { client.close(); server.stop(0) }
+    }
+
     @Test fun keylessProfileSendsNoAuthorizationAndKeyedProfileStillRequiresKey() = runBlocking {
         var authorization: String? = "unset"
         val server = testServer { exchange ->

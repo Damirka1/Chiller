@@ -36,7 +36,15 @@ data class ChatCompletionsProfile(
     val streamOptions: JsonObject = buildJsonObject { put("include_usage", true) },
     /** False only for endpoints that accept unauthenticated requests, such as a loopback vLLM server. */
     val requiresApiKey: Boolean = true,
+    /**
+     * Extra top-level request fields, e.g. temperature, parallel_tool_calls or a vLLM structured-output
+     * option. Protocol fields (model, messages, stream, tools, max_tokens, stream_options) cannot be replaced.
+     */
+    val requestExtras: JsonObject = JsonObject(emptyMap()),
 ) {
+    /** Same profile with extra request fields; later keys win, protocol fields stay protected. */
+    fun withExtras(extras: JsonObject): ChatCompletionsProfile = copy(requestExtras = JsonObject(requestExtras + extras))
+
     companion object {
         fun deepSeekFlash(
             baseUrl: String = "https://api.deepseek.com",
@@ -247,6 +255,8 @@ class ChatCompletionsProvider private constructor(
             if (request.tools.isNotEmpty()) put("tools", JsonArray(request.tools.map(::toolJson)))
             profile.thinkingOptions(request.thinking).forEach { (key, value) -> put(key, value) }
             put("stream_options", profile.streamOptions)
+            // Profile extras (temperature, parallel_tool_calls, server-specific decoding options) never replace protocol fields.
+            profile.requestExtras.forEach { (key, value) -> if (key !in RESERVED_REQUEST_FIELDS) put(key, value) }
         }
     }
 
@@ -261,6 +271,8 @@ class ChatCompletionsProvider private constructor(
 private const val MAX_SSE_FRAME_CHARS = 1_048_576
 private const val MAX_SSE_RESPONSE_CHARS = 8_388_608
 private const val MAX_ATTEMPTS = 3
+/** Fields a profile's requestExtras may never override. */
+val RESERVED_REQUEST_FIELDS = setOf("model", "messages", "stream", "tools", "max_tokens", "stream_options")
 private val RETRY_DELAYS_MS = listOf(500L, 1500L)
 
 private sealed interface AttemptOutcome {

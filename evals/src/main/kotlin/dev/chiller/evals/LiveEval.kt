@@ -4,7 +4,13 @@ import dev.chiller.agent.RunBudgetProvider
 import dev.chiller.agent.AgentCoordinator
 import dev.chiller.agent.RunTraceSink
 import dev.chiller.agent.SubagentSupervisor
+import dev.chiller.agent.ModelProfile
+import dev.chiller.agent.ModelProfiles
+import dev.chiller.contracts.ToolExecutor
+import dev.chiller.tools.ProfiledTools
 import dev.chiller.tools.SubagentTools
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import dev.chiller.contracts.InteractionBroker
 import dev.chiller.contracts.UserQuestion
 import dev.chiller.providers.ChatCompletionsProfile
@@ -55,7 +61,7 @@ data class EvalSummary(
 )
 
 @Serializable
-data class EvalReport(val model: String, val endpoint: String, val startedAt: String, val maxRounds: Int, val maxOutputTokens: Int, val repeats: Int, val results: List<EvalResult>, val summaries: List<EvalSummary>)
+data class EvalReport(val model: String, val endpoint: String, val startedAt: String, val maxRounds: Int, val maxOutputTokens: Int, val repeats: Int, val results: List<EvalResult>, val summaries: List<EvalSummary>, val profile: String = "full")
 
 /**
  * Opt-in live evaluation of the agent on [EVAL_TASKS]. Never part of `check`.
@@ -71,7 +77,8 @@ fun main() = runBlocking {
     val env = System.getenv()
     val baseUrl = env["CHILLER_EVAL_BASE_URL"]?.takeIf { it.isNotBlank() } ?: "https://api.deepseek.com"
     val model = env["CHILLER_EVAL_MODEL"]?.takeIf { it.isNotBlank() } ?: "deepseek-flash"
-    val key = listOf("CHILLER_EVAL_API_KEY", "DEEPSEEK_API_KEY", "API_TOKEN").firstNotNullOfOrNull { env[it]?.takeIf(String::isNotBlank) }
+    val keyNames = listOf("CHILLER_EVAL_API_KEY", "DEEPSEEK_API_KEY", "API_TOKEN")
+    val key = keyNames.firstNotNullOfOrNull { env[it]?.takeIf(String::isNotBlank) } ?: dotenvKey(keyNames)
     val host = runCatching { URI(baseUrl).host }.getOrNull().orEmpty()
     val loopback = host == "localhost" || host == "127.0.0.1" || host == "::1"
     if (key == null && !loopback) {
@@ -86,10 +93,15 @@ fun main() = runBlocking {
     val maxOutput = (env["CHILLER_EVAL_MAX_OUTPUT"]?.toIntOrNull() ?: 2048).coerceIn(256, 4096)
     val thinking = env["CHILLER_EVAL_THINKING"] == "true"
 
-    val profile = if (host == "api.deepseek.com") ChatCompletionsProfile.deepSeekFlash(baseUrl, model)
-        else ChatCompletionsProfile("generic", baseUrl, model, requiresApiKey = !loopback)
+    val modelProfile = ModelProfiles.resolve(env["CHILLER_EVAL_PROFILE"]?.trim()?.ifEmpty { null } ?: "auto", model)
+    val extras = buildJsonObject {
+        modelProfile.temperature?.let { put("temperature", it) }
+        modelProfile.parallelToolCalls?.let { put("parallel_tool_calls", it) }
+    }
+    val profile = (if (host == "api.deepseek.com") ChatCompletionsProfile.deepSeekFlash(baseUrl, model)
+        else ChatCompletionsProfile("generic", baseUrl, model, requiresApiKey = !loopback)).withExtras(extras)
     val stamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss"))
-    val outDir = Path.of("reports/local/evals/$stamp-${model.replace(Regex("[^A-Za-z0-9._-]"), "_")}").toAbsolutePath()
+    val outDir = Path.of("reports/local/evals/$stamp-${model.replace(Regex("[^A-Za-z0-9._-]"), "_")}-${modelProfile.id}").toAbsolutePath()
     Files.createDirectories(outDir.resolve("traces"))
     val http = HttpClient(CIO) {
         followRedirects = false
@@ -98,10 +110,10 @@ fun main() = runBlocking {
     val provider = ChatCompletionsProvider(http, profile) { key }
     val json = Json { prettyPrint = true; encodeDefaults = true }
     val results = mutableListOf<EvalResult>()
-    println("=== CHILLER LIVE EVAL · $model · ${tasks.size} task(s) × $repeats · maxRounds=$maxRounds maxOutput=$maxOutput thinking=$thinking ===")
+    println("=== CHILLER LIVE EVAL · $model · profile ${modelProfile.id} · ${tasks.size} task(s) × $repeats · maxRounds=$maxRounds maxOutput=$maxOutput thinking=$thinking ===")
     try {
         for (task in tasks) for (attempt in 1..repeats) {
-            val result = runTask(task, attempt, provider, model, thinking, maxRounds, maxOutput, outDir)
+            val result = runTask(task, attempt, provider, model, thinking, maxRounds, maxOutput, outDir, modelProfile)
             results += result
             println("%-20s #%d %s  rounds=%-2d tools=%-2d errors=%-2d %5.1fs  %s".format(task.id, attempt, if (result.passed) "PASS" else "FAIL",
                 result.rounds, result.toolCalls, result.failedToolCalls, result.durationMs / 1000.0, result.verdict.take(90)))
@@ -119,14 +131,30 @@ fun main() = runBlocking {
             cachedPromptTokens = attempts.takeIf { rows -> rows.all { it.cachedPromptTokens != null } }?.sumOf { it.cachedPromptTokens!! },
         )
     }
-    val report = EvalReport(model, baseUrl, stamp, maxRounds, maxOutput, repeats, results, summaries)
+    val report = EvalReport(model, baseUrl, stamp, maxRounds, maxOutput, repeats, results, summaries, profile = modelProfile.id)
     Files.writeString(outDir.resolve("report.json"), json.encodeToString(EvalReport.serializer(), report))
     Files.writeString(outDir.resolve("report.md"), renderMarkdown(report))
     val passed = results.count { it.passed }
     println("PASSED $passed/${results.size} (${if (results.isEmpty()) 0 else passed * 100 / results.size}%) · report: ${outDir.resolve("report.md")}")
 }
 
-private suspend fun runTask(task: EvalTask, attempt: Int, provider: ChatCompletionsProvider, model: String, thinking: Boolean, maxRounds: Int, maxOutput: Int, outDir: Path): EvalResult {
+/**
+ * The first named key from the nearest `.env` in the working directory or its parents (up to 6 levels),
+ * so a run from a worktree or module folder finds the repository's file. Values are never printed.
+ */
+internal fun dotenvKey(names: List<String>, start: Path = Path.of("").toAbsolutePath()): String? {
+    val file = generateSequence(start) { it.parent }.take(7).map { it.resolve(".env") }.firstOrNull { Files.isRegularFile(it) && Files.size(it) < 65_536 } ?: return null
+    val values = runCatching { Files.readAllLines(file) }.getOrDefault(emptyList()).mapNotNull { raw ->
+        val line = raw.trim().removePrefix("export ").trim()
+        if (line.startsWith("#") || '=' !in line) return@mapNotNull null
+        val name = line.substringBefore('=').trim()
+        val value = line.substringAfter('=').trim().substringBefore(" #").trim().removeSurrounding("\"").removeSurrounding("'")
+        (name to value).takeIf { name in names && value.isNotEmpty() }
+    }.toMap()
+    return names.firstNotNullOfOrNull { values[it] }
+}
+
+private suspend fun runTask(task: EvalTask, attempt: Int, provider: ChatCompletionsProvider, model: String, thinking: Boolean, maxRounds: Int, maxOutput: Int, outDir: Path, modelProfile: ModelProfile = ModelProfiles.FULL): EvalResult {
     val root = Files.createTempDirectory("chiller-eval-${task.id}-")
     val project = root.resolve("project").also { Files.createDirectories(it) }
     task.materialize(project)
@@ -143,8 +171,14 @@ private suspend fun runTask(task: EvalTask, attempt: Int, provider: ChatCompleti
     var failure: String? = null
     return kotlinx.coroutines.coroutineScope {
         val supervisor = SubagentSupervisor(budget, builtin, store, session, model, this)
-        val engine = AgentCoordinator(budget, SubagentTools(builtin, supervisor), store, processes, session, model, thinking, maxRounds = maxRounds, maxOutputTokens = maxOutput,
-            projectInstructions = ProjectInstructions.load(project)?.text, traces = RunTraceSink { traceFile.append(it) }, subagents = supervisor, scope = this)
+        // Same wiring as the desktop app: the profile narrows tools, may drop helpers, swaps the prompt and caps output.
+        val helpersAllowed = modelProfile.tools == null || "spawn_agent" in modelProfile.tools!!
+        val delegating: ToolExecutor = if (helpersAllowed) SubagentTools(builtin, supervisor) else builtin
+        val tools: ToolExecutor = modelProfile.tools?.let { ProfiledTools(delegating, it) } ?: delegating
+        val output = modelProfile.maxOutputTokens?.let { minOf(it, maxOutput) } ?: maxOutput
+        val engine = AgentCoordinator(budget, tools, store, processes, session, model, thinking, maxRounds = maxRounds, maxOutputTokens = output,
+            projectInstructions = ProjectInstructions.load(project)?.text, traces = RunTraceSink { traceFile.append(it) }, subagents = supervisor.takeIf { helpersAllowed },
+            systemPrompt = modelProfile.systemPrompt, scope = this)
         try {
             withTimeout(5 * 60_000L) { engine.send(task.prompt, task.mode, task.allowProcesses).join() }
         } catch (_: kotlinx.coroutines.TimeoutCancellationException) { failure = "timeout after 5 min"; engine.stop() }
