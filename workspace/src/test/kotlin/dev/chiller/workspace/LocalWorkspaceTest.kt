@@ -243,6 +243,10 @@ class LocalWorkspaceTest {
             val context = entry["context"]!!.jsonArray.map { it.jsonPrimitive.content }
             assertEquals(listOf("alpha", "trailing"), context)
             assertEquals("match-here", entry["text"]!!.jsonPrimitive.content)
+            Files.writeString(root.resolve("long.txt"), "needle" + "x".repeat(500) + "\n")
+            val longText = ws.search("needle", limit = 5).data!!.jsonObject["matches"]!!.jsonArray.single().jsonObject["text"]!!.jsonPrimitive.content
+            assertEquals(401, longText.length)
+            assertTrue(longText.endsWith("…"))
         } finally { root.toFile().deleteRecursively() }
     }
 
