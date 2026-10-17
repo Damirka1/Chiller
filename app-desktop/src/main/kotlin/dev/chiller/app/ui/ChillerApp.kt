@@ -360,6 +360,8 @@ private fun ComposerToolbar(
     val c = LocalChillerPalette.current
     var modeMenu by remember { mutableStateOf(false) }
     var modelMenu by remember { mutableStateOf(false) }
+    var modelFilter by remember { mutableStateOf("") }
+    LaunchedEffect(modelMenu) { if (!modelMenu) modelFilter = "" }
     // At larger type the model label needs proportionally more room before the toolbar is allowed to wrap.
     val fontScale = LocalDensity.current.fontScale
     val minModelWidth = (104f * fontScale.coerceIn(1f, 2f)).dp
@@ -431,12 +433,21 @@ private fun ComposerToolbar(
                 Box(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp).height(1.dp).background(c.border))
                 val discovered = catalog.models.map { it.id }
                 val known = (listOf(model) + discovered + models).distinct().take(20)
+                if (known.size > 8) {
+                    Box(Modifier.padding(horizontal = 4.dp, vertical = 2.dp)) {
+                        ChillerField(modelFilter, { modelFilter = it }, "Поиск модели", placeholder = "ID или название")
+                    }
+                }
+                val shown = if (modelFilter.isBlank()) known else known.filter { it.contains(modelFilter.trim(), true) || modelLabel(it).contains(modelFilter.trim(), true) }
                 Column(Modifier.heightIn(max = 288.dp).verticalScroll(rememberScrollState())) {
-                    known.forEach { id ->
+                    shown.forEach { id ->
                         val source = when { id == model -> null; id in discovered -> "API"; else -> "вручную" }
-                        Hint(id) {
+                        Hint(modelDetail(id, catalog)) {
                             ChillerControl(modelLabel(id), { modelMenu = false; if (id != model) onModel(id) }, Modifier.fillMaxWidth(), icon = if (id == model) Icons.Outlined.Check else null, trailing = source)
                         }
+                    }
+                    if (shown.isEmpty() && known.isNotEmpty()) {
+                        Text("Ничего не найдено по запросу «$modelFilter».", color = c.muted, fontSize = 11.sp, modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp))
                     }
                     if (catalog.status == "ready" && catalog.models.isEmpty()) {
                         Text("Провайдер не вернул ни одной модели. Задайте ID вручную в настройках.", color = c.muted, fontSize = 11.sp, lineHeight = 16.sp, modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp))
@@ -450,8 +461,7 @@ private fun ComposerToolbar(
     }
 }
 
-private fun catalogLine(catalog: ModelCatalogState, configured: Boolean): String = when (catalog.status) {
-    "loading" -> "Загружаю список…"
+private fun catalogLine(catalog: ModelCatalogState, configured: Boolean): String = when (catalog.status) {    "loading" -> "Загружаю список…"
     "failed" -> catalog.message.ifBlank { "Список моделей не получен" }
     "ready" -> {
         val base = if (catalog.models.isEmpty()) "Список пуст — задайте ID вручную" else "Моделей: ${catalog.models.size}"
@@ -461,6 +471,19 @@ private fun catalogLine(catalog: ModelCatalogState, configured: Boolean): String
     }
     else -> if (configured) "Список не загружен" else "Ключ не задан"
 }
+
+/** Tooltip text: exact model id plus server-declared metadata when the catalog returned it. */
+private fun modelDetail(id: String, catalog: ModelCatalogState): String {
+    val model = catalog.models.firstOrNull { it.id == id } ?: return id
+    val parts = buildList {
+        model.displayName?.takeIf { it != id }?.let(::add)
+        model.contextWindow?.let { add("контекст: ${formatTokens(it)}") }
+        model.maxOutputTokens?.let { add("вывод: ${formatTokens(it)}") }
+    }
+    return if (parts.isEmpty()) id else "$id\n${parts.joinToString(" · ")}"
+}
+
+private fun formatTokens(value: Int): String = if (value >= 1_000) "${(value + 500) / 1_000}k" else value.toString()
 
 @Composable
 private fun Conversation(state: RunState, reduced: Boolean, onAnswer: (String) -> Unit, onUndo: (String) -> Unit, canUndo: Boolean, onRestoreDraft: (String) -> Unit, modifier: Modifier) {
