@@ -333,6 +333,16 @@ private fun ProfileCard(data: SettingsData, actions: SettingsActions) {
         resolved.tools?.let { tools ->
             Text("Инструменты: " + tools.sorted().joinToString(", "), color = c.muted, fontSize = 11.sp, lineHeight = 16.sp, fontFamily = FontFamily.Monospace)
         }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Изображения", color = c.text, fontSize = 13.sp)
+                Text(if (visionEnabled(a, data.model)) "Вложенные картинки отправляются модели как изображения" else "Модель получает только имя и размер картинки",
+                    color = c.faint, fontSize = 11.sp, lineHeight = 15.sp)
+            }
+            listOf("auto" to "Авто", "on" to "Вкл", "off" to "Выкл").forEach { (id, label) ->
+                ChillerControl(label, { actions.agent(a.copy(vision = id)) }, style = if (a.vision == id) ControlStyle.SELECTED else ControlStyle.QUIET)
+            }
+        }
         Text("Температура", color = c.text, fontSize = 13.sp)
         Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             val options = listOf<Double?>(null, 0.0, 0.2, 0.5, 0.8)

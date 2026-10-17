@@ -17,7 +17,15 @@ import java.nio.file.StandardOpenOption.READ
 import java.nio.file.StandardOpenOption.WRITE
 import java.security.MessageDigest
 import java.util.Locale
+import dev.chiller.providers.ModelImage
+import java.awt.Color
+import java.awt.RenderingHints
+import java.awt.image.BufferedImage
+import java.io.ByteArrayOutputStream
+import java.util.Base64
+import javax.imageio.IIOImage
 import javax.imageio.ImageIO
+import javax.imageio.ImageWriteParam
 
 /** App-private input storage. Imported bytes never enter the selected project workspace. */
 class AttachmentRepository(directory: Path, private val artifacts: ArtifactStore) {
@@ -95,6 +103,35 @@ class AttachmentRepository(directory: Path, private val artifacts: ArtifactStore
         val dimensions = imageDimensions(bytes, mime) ?: return null
         if (dimensions.first.toLong() * dimensions.second > MAX_PIXELS) return null
         return bytes
+    }
+
+    /**
+     * Prepares a stored PNG/JPEG for a vision model: long edge at most [MODEL_IMAGE_EDGE], alpha flattened on white,
+     * re-encoded as JPEG. Returns null for anything [preview] would reject.
+     */
+    fun modelImage(sessionId: String, artifactId: String): ModelImage? {
+        val bytes = preview(sessionId, artifactId) ?: return null
+        val source = try { ImageIO.read(ByteArrayInputStream(bytes)) } catch (_: Exception) { null } ?: return null
+        val scale = minOf(1.0, MODEL_IMAGE_EDGE.toDouble() / maxOf(source.width, source.height))
+        val width = maxOf(1, Math.round(source.width * scale).toInt()); val height = maxOf(1, Math.round(source.height * scale).toInt())
+        val target = BufferedImage(width, height, BufferedImage.TYPE_INT_RGB)
+        val g = target.createGraphics()
+        try {
+            g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR)
+            g.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY)
+            g.color = Color.WHITE; g.fillRect(0, 0, width, height)
+            g.drawImage(source, 0, 0, width, height, null)
+        } finally { g.dispose() }
+        val out = ByteArrayOutputStream()
+        val writer = ImageIO.getImageWritersByFormatName("jpeg").asSequence().firstOrNull() ?: return null
+        try {
+            ImageIO.createImageOutputStream(out).use { stream ->
+                writer.output = stream
+                val params = writer.defaultWriteParam.apply { compressionMode = ImageWriteParam.MODE_EXPLICIT; compressionQuality = 0.85f }
+                writer.write(null, IIOImage(target, null, null), params)
+            }
+        } finally { writer.dispose() }
+        return ModelImage("image/jpeg", Base64.getEncoder().encodeToString(out.toByteArray()))
     }
 
     private fun persist(sessionId: String, artifactId: String, bytes: ByteArray) {
@@ -229,5 +266,7 @@ class AttachmentRepository(directory: Path, private val artifacts: ArtifactStore
         const val MAX_BYTES = 8 * 1024 * 1024
         const val MAX_IMAGE_BYTES = 4 * 1024 * 1024
         const val MAX_PIXELS = 16_000_000L
+        /** Long edge sent to vision models; larger images cost tokens without helping most models. */
+        const val MODEL_IMAGE_EDGE = 1568
     }
 }

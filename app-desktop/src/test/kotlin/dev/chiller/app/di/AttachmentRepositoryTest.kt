@@ -53,7 +53,7 @@ class AttachmentRepositoryTest {
         assertContentEquals(png, assertNotNull(repo.preview("session", attachment.artifactId)))
     }
 
-    @Test fun `pasted image validates PNG and pixel limit`() = runBlocking {
+    @Test fun `pasted image validates PNG and pixel limit`() = runBlocking<Unit> {
         val repo = AttachmentRepository(temp.resolve("attachments"), MemoryArtifacts())
         val png = java.util.Base64.getDecoder().decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/Z0cAAAAASUVORK5CYII=")
         val item = repo.importImage("s", png)
@@ -66,7 +66,7 @@ class AttachmentRepositoryTest {
         assertFailsWith<IllegalArgumentException> { repo.importImage("s", byteArrayOf(1, 2, 3)) }
     }
 
-    @Test fun `rejects oversized or malformed UTF8 imports and avoids symlink session folders`() = runBlocking {
+    @Test fun `rejects oversized or malformed UTF8 imports and avoids symlink session folders`() = runBlocking<Unit> {
         val repo = AttachmentRepository(temp.resolve("attachments"), MemoryArtifacts())
         assertFailsWith<IllegalArgumentException> { repo.importText("s", "x".repeat(AttachmentRepository.MAX_BYTES + 1)) }
         val invalid = temp.resolve("invalid.dat")
@@ -85,5 +85,27 @@ class AttachmentRepositoryTest {
         assertNull(repo.preview("s", "a".repeat(64)))
         val text = repo.importText("s", "hello")
         assertNull(repo.preview("s", text.artifactId))
+    }
+
+    @Test fun `model image is downscaled flattened JPEG and absent for text`() = runBlocking {
+        val repo = AttachmentRepository(temp.resolve("attachments"), MemoryArtifacts())
+        val source = java.awt.image.BufferedImage(3000, 1000, java.awt.image.BufferedImage.TYPE_INT_ARGB)
+        val png = java.io.ByteArrayOutputStream().also { javax.imageio.ImageIO.write(source, "png", it) }.toByteArray()
+        val item = repo.importImage("s", png)
+        val image = assertNotNull(repo.modelImage("s", item.artifactId))
+        assertEquals("image/jpeg", image.mimeType)
+        val decoded = javax.imageio.ImageIO.read(java.io.ByteArrayInputStream(java.util.Base64.getDecoder().decode(image.base64)))
+        assertEquals(AttachmentRepository.MODEL_IMAGE_EDGE, decoded.width)
+        assertEquals(523, decoded.height)
+        assertEquals(-1, decoded.getRGB(10, 10) or 0x030303, "transparent pixels become white, not black")
+        assertNull(repo.modelImage("s", repo.importText("s", "hello").artifactId))
+    }
+
+    @Test fun `vision setting forces or follows the model id`() {
+        assertTrue(visionEnabled(AgentOptions(), "gemma-4-26b-a4b"))
+        assertTrue(!visionEnabled(AgentOptions(), "deepseek-flash"))
+        assertTrue(visionEnabled(AgentOptions(vision = "on"), "deepseek-flash"))
+        assertTrue(!visionEnabled(AgentOptions(vision = "off"), "gpt-4o"))
+        assertEquals("auto", AgentOptions(vision = "maybe").sanitized().vision)
     }
 }

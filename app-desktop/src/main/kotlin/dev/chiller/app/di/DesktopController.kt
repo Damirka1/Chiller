@@ -53,9 +53,12 @@ data class AgentOptions(
     /** After an editing run, run the project's check command and send failures back to the agent. */
     val autoVerify: Boolean = false,
     val autoVerifyAttempts: Int = 2,
+    /** "auto" (by model id), "on" or "off": whether attached images are sent as pixels. */
+    val vision: String = "auto",
 ) {
     fun sanitized() = copy(autoVerifyAttempts = autoVerifyAttempts.coerceIn(1, 3), maxRounds = maxRounds.coerceIn(4, 60), maxOutputTokens = maxOutputTokens.coerceIn(1024, 16_384), maxRequests = maxRequests.coerceIn(1, 120), totalOutputTokens = totalOutputTokens.coerceIn(1024, 262144),
-        profile = profile.takeIf { it in setOf("auto", "full", "compact") } ?: "auto", temperature = temperature?.coerceIn(0.0, 2.0), requestExtras = requestExtras.take(4000))
+        profile = profile.takeIf { it in setOf("auto", "full", "compact") } ?: "auto", temperature = temperature?.coerceIn(0.0, 2.0), requestExtras = requestExtras.take(4000),
+        vision = vision.takeIf { it in setOf("auto", "on", "off") } ?: "auto")
 }
 data class SendReceipt(val accepted: Boolean, val sessionId: String, val clientRequestId: String, val reason: String? = null)
 data class ConnectionState(val status: String = "unverified", val message: String = "", val checkedAt: String? = null)
@@ -715,7 +718,9 @@ class DesktopController(
             ChatCompletionsProfile.deepSeekFlash(s.settings.baseUrl, s.settings.model)
         else ChatCompletionsProfile("generic", s.settings.baseUrl, s.settings.model, requiresApiKey = !keyless(s.settings.baseUrl))
         val modelProfile = effectiveProfile(options, modelOverride ?: s.settings.model)
-        val profile = baseProfile.withExtras(requestExtrasFor(modelProfile, options))
+        val engineSession = s.sessionId
+        val vision = if (visionEnabled(options, modelOverride ?: s.settings.model)) ImageInput { id -> inputAttachments.modelImage(engineSession, id) } else null
+        val profile = baseProfile.withExtras(requestExtrasFor(modelProfile, options)).copy(imageInput = vision)
         // The engine's provider is bound to its own endpoint's key, read at request time.
         val engineOrigin = originOf(s.settings.baseUrl)
         val provider = providerOverride ?: RunBudgetProvider(ChatCompletionsProvider(http, profile) { engineOrigin?.let { credentials[it] } }, options.maxRequests, options.totalOutputTokens)

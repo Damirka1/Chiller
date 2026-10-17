@@ -73,6 +73,8 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import dev.chiller.app.di.UiPreferences
+import dev.chiller.app.di.AgentOptions
+import dev.chiller.app.di.visionEnabled
 import dev.chiller.app.di.SendReceipt
 import dev.chiller.app.di.ConnectionState
 import dev.chiller.app.di.ModelCatalogState
@@ -397,7 +399,7 @@ fun ChillerApp(
                                                 scope.launch { onSelectModel(selected)?.let { id -> drafts.putIfAbsent(id, oldDraft) } }
                                             }, { composing = it }, pendingSend, contextNote, catalog, onRefreshModels, onCancelCatalogRefresh, allowProcesses, onAllowProcessesChange,
                                                 workspacePath, onChooseWorkspace, state.contextEstimatedTokens, connectionSummary(connection, apiKeyConfigured).second,
-                                                attachments = draftAttachments, attachmentOwnerKey = draftKey,
+                                                attachments = draftAttachments, attachmentOwnerKey = draftKey, vision = visionEnabled(settingsData?.agent ?: AgentOptions(), providerModel),
                                                 importing = (pendingImportsBySession[draftKey] ?: 0) > 0,
                                                 onAppendAttachments = appendAttachments,
                                                 onRemoveAttachment = removeAttachment,
@@ -690,6 +692,7 @@ private fun Composer(
     onImportState: (String, Boolean) -> Boolean,
     onImportTextAttachment: suspend (String, String) -> ComposerAttachment?, onImportFiles: suspend (String, List<String>) -> List<ComposerAttachment>,
     onImportImageAttachment: suspend (String, ByteArray) -> ComposerAttachment?,
+    vision: Boolean = false,
 ) {
     val c = LocalChillerPalette.current
     var focused by remember { mutableStateOf(false) }
@@ -831,7 +834,7 @@ private fun Composer(
         if (attachments.isNotEmpty() || preparing.isNotEmpty()) AttachmentChips(attachments, onRemove = { item -> onRemoveAttachment(attachmentOwnerKey, item.artifactId) }, preparing = preparing)
         if (importing && preparing.isEmpty()) Row(Modifier.padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) { Pulse(c.accent); Spacer(Modifier.width(6.dp)); Text("Добавляю вложение…", color = c.faint, fontSize = 10.sp) }
         importError?.let { Text(it, color = c.negative, fontSize = 11.sp, lineHeight = 15.sp, modifier = Modifier.padding(top = 4.dp)) }
-        if (attachments.any { it.mimeType.startsWith("image/") }) Text("Изображения прикреплены как файлы; модель получит метаданные, но не распознаёт их содержимое.", color = c.faint, fontSize = 10.sp, lineHeight = 14.sp, modifier = Modifier.padding(top = 4.dp))
+        if (attachments.any { it.mimeType.startsWith("image/") }) Text(if (vision) "Модель увидит изображения: они уменьшаются до 1568 px и отправляются с этим сообщением." else "Эта модель не принимает изображения: она получит только имя и размер файла. Включить можно в настройках профиля.", color = c.faint, fontSize = 10.sp, lineHeight = 14.sp, modifier = Modifier.padding(top = 4.dp))
         Box {
             if (matches.isNotEmpty() && focused) MentionPopover(matches, highlight.coerceIn(0, matches.lastIndex), ::insert) { dismissedAt = mention?.first ?: -1 }
         }

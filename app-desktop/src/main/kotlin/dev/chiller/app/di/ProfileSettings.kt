@@ -3,10 +3,18 @@ package dev.chiller.app.di
 import dev.chiller.agent.ModelProfile
 import dev.chiller.agent.ModelProfiles
 import dev.chiller.providers.RESERVED_REQUEST_FIELDS
+import dev.chiller.providers.VisionModels
 import kotlinx.serialization.json.*
 
 /** The profile in effect for a model, after "auto" is resolved. */
 fun effectiveProfile(options: AgentOptions, modelId: String): ModelProfile = ModelProfiles.resolve(options.profile, modelId)
+
+/** Whether attached images go to the model as pixels: forced by the setting, otherwise guessed from the model id. */
+fun visionEnabled(options: AgentOptions, modelId: String): Boolean = when (options.vision) {
+    "on" -> true
+    "off" -> false
+    else -> VisionModels.likely(modelId)
+}
 
 /**
  * Extra request fields for the provider: the profile's defaults, then the user's temperature, then the

@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.toList
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import io.ktor.client.HttpClient
@@ -47,6 +48,34 @@ class ChatCompletionsProviderTest {
         val completed = assertIs<ModelEvent.Completed>(events.last(), "Stream events: $events")
         assertEquals("tool_calls", completed.finishReason)
         assertEquals("{\"path\":\"x\"}", completed.message.toolCalls.single().arguments)
+    }
+
+    @Test fun visionSendsRecentImagesAsDataUrlsAndOnlyOnce() = runBlocking {
+        var body = ""
+        val server = testServer { exchange ->
+            body = exchange.requestBody.readBytes().toString(Charsets.UTF_8)
+            sendSse(exchange, sse("""{"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}""", "[DONE]"))
+        }
+        val client = HttpClient(CIO)
+        try {
+            val loaded = mutableListOf<String>()
+            val profile = ChatCompletionsProfile("local", "http://127.0.0.1:${server.address.port}", "gemma-4", requiresApiKey = false,
+                imageInput = ImageInput { id -> loaded += id; ModelImage("image/jpeg", "QUJD") })
+            val img = { id: String -> dev.chiller.contracts.ComposerAttachment(id, "$id.png", "image/png", 10) }
+            val history = listOf(
+                AgentMessage("user", "old", attachments = listOf(img("old"))), AgentMessage("assistant", "seen"),
+                AgentMessage("user", "middle"), AgentMessage("assistant", "ok"),
+                AgentMessage("user", "look at this", attachments = listOf(img("new"))),
+            )
+            ChatCompletionsProvider(client, profile, emptyList()) { null }.stream(ModelRequest("gemma-4", history)).toList()
+            val messages = Json.parseToJsonElement(body).jsonObject.getValue("messages").jsonArray
+            val last = messages.last().jsonObject.getValue("content").jsonArray
+            assertEquals("text", last[0].jsonObject.getValue("type").jsonPrimitive.content)
+            assertEquals("data:image/jpeg;base64,QUJD", last[1].jsonObject.getValue("image_url").jsonObject.getValue("url").jsonPrimitive.content)
+            assertTrue("not attached again" in messages.first().jsonObject.getValue("content").jsonPrimitive.content, "old images stay text references")
+            assertEquals(listOf("new"), loaded)
+            assertTrue(VisionModels.likely("gemma-4-26b-a4b") && !VisionModels.likely("deepseek-flash") && !VisionModels.likely("gemma-3-1b-it"))
+        } finally { client.close(); server.stop(0) }
     }
 
     @Test fun attachmentReferencesAreSentAsTextWithoutPretendingToBeVision() = runBlocking {
