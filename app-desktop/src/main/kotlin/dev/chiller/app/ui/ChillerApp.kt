@@ -1096,6 +1096,10 @@ private fun Conversation(state: RunState, reduced: Boolean, onAnswer: (String) -
                     }
                 }
             }
+            // The model's checklist for this turn, kept under the latest messages and updated live.
+            currentTurnPlan(state.messages)?.let { steps ->
+                item(key = "turn-plan") { PlanChecklist(steps, running = state.status in setOf("preparing", "streaming", "executing"), modifier = entryModifier("turn-plan")) }
+            }
             if (state.status in setOf("preparing", "streaming", "executing")) item(key = "run-status") {
                 val label = runProgressLabel(state).orEmpty()
                 Row(entryModifier("run-status").padding(start = 6.dp), verticalAlignment = Alignment.CenterVertically) {
