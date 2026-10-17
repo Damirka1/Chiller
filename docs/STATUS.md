@@ -1,0 +1,55 @@
+# Chiller — текущий статус
+
+Обновлено: 17 октября 2026, ветка `master`. Это карта состояния, а не маркетинговый отчёт:
+код и проверки важнее текста. Хронология прогонов — в [RUN_REPORT](RUN_REPORT.md);
+устаревшие планы (`EVENING_PLAN`, `IMPLEMENTATION_AUDIT_2026_10_17`, `UI_FINISHING_RUNBOOK`)
+описывают процесс и местами уже опережены кодом.
+
+## Проверено в этом проходе
+
+| Проверка | Команда | Результат |
+|---|---|---|
+| Юнит-тесты | `./gradlew check` | см. RUN_REPORT: все модули, 0 падений |
+| Offline smoke | `./gradlew :evals:offlineSmoke` | пройден: search → read → chained edit → реальные Python-проверки → final → restart → stale-отказ |
+| Live DeepSeek | `./gradlew :evals:liveDeepSeekSmoke` | пройден: 5 раундов, 6 tool-вызовов, 0 ошибок, 9.8 с; prompt 10 832 / completion 576 / cached 8 192 |
+| macOS-пакет | `./gradlew :app-desktop:createDistributable` | см. RUN_REPORT |
+
+Live-прогон — это **один** сценарий на `deepseek-flash`. Он подтверждает, что реальная модель
+ведёт многораундовый tool-loop, но не заменяет eval-корпус и не подтверждает Gemma.
+
+## Матрица
+
+| Область | Состояние | Что реально есть / предел |
+|---|---|---|
+| Контракты | реализовано | `contracts/Contracts.kt` — источник истины; String ID, `ToolEffect`, typed results |
+| Агентный цикл | реализовано | до 24 раундов (настраивается), параллельные READ-вызовы, эффекты строго по порядку, отмена, лимит повторяющихся ошибок |
+| Провайдер DeepSeek | live-подтверждён | SSE, thinking replay, usage, bounded retry 429/5xx до первого delta |
+| Каталог моделей | нет | discovery `GET /models` не реализован; список — выбранная + запомненные модели |
+| Файловые инструменты | реализовано | 12 tools; snapshot-lineage после edit (без повторного чтения), clamp чтения, компактный search с context |
+| Undo / recovery | реализовано | before-images, журнал, reconcile, отказ при расхождении; move только внутри каталога |
+| Процессы | реализовано | argv, cwd, timeout, caps, отмена; это не OS-sandbox и не process groups |
+| Сессии | реализовано | JSONL + fsync, torn-tail recovery, экспорт MD/JSON; retention и миграций нет |
+| Контекст | реализовано | оценка по символам/4, целые ходы, pruning старых tool-результатов; точного tokenizer нет |
+| Метрики прогона | реализовано | `run.summary` в журнале: раунды, tool-вызовы, ошибки, время, usage |
+| UI Focus/Studio | частично | компактный composer, обе темы, настройки, история; keyboard/IME/VoiceOver и платформы не проверены |
+| Субагенты | нет | контракты/супервизор/mailbox не реализованы |
+| Gemma / vLLM | нет | профиль без авторизации и live-проверка отсутствуют |
+| Windows/Linux | не проверено | упаковка и поведение не проверялись |
+
+## Известные ограничения
+
+- `deepseek-flash` подтверждён как модель разработки; версии, лимиты и стоимость конкретного
+  аккаунта не измерялись.
+- Проверка cwd/путей — не OS sandbox.
+- Локальный vLLM без ключа сейчас недоступен: отсутствие credential трактуется как offline.
+- Keychain не реализован; ключ из UI живёт только в памяти процесса, `.env` читается при старте.
+- Поиск/листинг требуют `rg` на PATH; offline smoke дополнительно требует `python3`.
+- Экспорт скрывает известные секреты, но произвольный текст нужно проверять вручную.
+
+## Как запускать
+
+```sh
+./gradlew check :evals:offlineSmoke
+./gradlew :evals:liveDeepSeekSmoke   # opt-in: ключ в env или .env, малый бюджет
+./gradlew :app-desktop:run
+```

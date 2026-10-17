@@ -1,5 +1,10 @@
 # Chiller — общие контракты v0.1
 
+> **Источник истины — код:** `contracts/src/main/kotlin/dev/chiller/contracts/Contracts.kt`.
+> Этот документ описывает целевую форму контрактов и местами опережает реализацию
+> (например, `RunId`/`ToolCallId`, `ProbeRequest`, `ToolCallDelta` ещё не введены).
+> При расхождении выигрывает код; не создавай второй набор типов по этому файлу.
+
 Этот документ задаёт форму будущего API. Приведённые Kotlin-сигнатуры — проект, а не уже существующий исходный код. Координатор материализует их в `:contracts` в задаче FND-02 и после компиляции объявляет контракт замороженным для первой волны.
 
 ## 1. Идентификаторы и время
@@ -37,16 +42,16 @@ Agent transcript и видимый UI transcript — разные проекци
 
 ```kotlin
 interface LlmProvider {
-    suspend fun probe(request: ProbeRequest): CapabilityReport
+    suspend fun probe(): CapabilityReport
     fun stream(request: ModelRequest): Flow<ModelEvent>
 }
 ```
 
-ProbeRequest различает passive inspection и billed generation probe. ModelRequest: run/round IDs, model/profile, ordered messages, enabled tools, output reserve, validated sampling/options. Credentials разрешаются adapter-side через CredentialStore reference.
+ModelRequest: model, ordered messages, enabled tools, thinking flag, max output tokens. Credentials разрешаются adapter-side через lambda и не попадают в toString/DTO.
 
-ModelEvent: Started, TextDelta, ReasoningDelta, ToolCallDelta, UsageUpdated, Completed, Failed. ToolCallDelta не исполним. Completed содержит финальную согласованную assistant message и finish reason. Только успешно собранные и проверенные вызовы из complete message передаются ToolExecutor. Truncated/length completion с неполным вызовом → failure, не action.
+ModelEvent (реализовано): TextDelta, ReasoningDelta, Usage, Completed, Failed. Usage приходит не более одного раза за запрос и несёт nullable `promptTokens`/`completionTokens`/`cachedPromptTokens`; неизвестные значения остаются null, а не нулём. Completed содержит финальную согласованную assistant message и finish reason. Только успешно собранные и проверенные вызовы из complete message передаются ToolExecutor. Truncated/length completion с неполным вызовом → failure, не action.
 
-Поток имеет ровно одно terminal event либо coroutine cancellation. Consumer не предполагает последний текстовый delta обязательным. Usage nullable, unknown tokens не обнуляются. Raw transport bytes не попадают в доменные события.
+Поток имеет ровно одно terminal event либо coroutine cancellation. Consumer не предполагает последний текстовый delta обязательным. Raw transport bytes не попадают в доменные события. Повтор stateless model-запроса при 429/5xx допустим только до первого delta; повтор tool-эффекта — никогда.
 
 ## 4. Tools и результаты
 
@@ -87,6 +92,8 @@ interface WorkspaceService {
 ```
 
 Create/move/delete используют отдельные typed requests и тот же EffectReceipt. Путь — WorkspacePath, а не произвольная java.nio.Path из UI.
+
+**Реализовано сейчас** (`Contracts.kt`): `read`, `list(path, glob, limit)`, `search(query, path, glob, regex, limit, context)`, `edit`, `create`, `move`, `delete`, `undo`; отдельного `plan/apply` нет. `list` возвращает `entries: [string]` (относительные пути), `search` — `matches: [{path,line,text,context?}]` с обрезкой строки до 400 символов, успешный `edit` возвращает `snapshotId` новой версии файла: следующая правка того же файла может использовать его без повторного чтения. `observed`-строки переносятся через применённые диапазоны, а расхождение хеша по-прежнему даёт `STALE_SNAPSHOT`.
 
 FileSnapshot: workspace/path binding, revision hash, size, encoding, EOL, lineCount, observedRanges, createdAt. Snapshot ID не переиспользуется для других байтов. Новое чтение другой части того же snapshot может расширить observedRanges только после проверки текущих байтов.
 
