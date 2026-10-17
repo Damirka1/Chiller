@@ -93,6 +93,7 @@ fun main() = application {
             recentWorkspaces = state.settings.recentWorkspaces, sessionWorkspaces = state.sessionWorkspaces,
             onStartDemo = { scope.launch { controller.startDemo() } },
             onCloseWorkspace = { scope.launch { controller.closeWorkspace() } },
+            subagents = state.subagents, onCancelSubagent = { id -> scope.launch { controller.cancelSubagent(id) } },
             titleBar = titleBar, buildStamp = BuildStamp.value,
             onOpenTrace = {
                 val trace = controller.tracePath(state.sessionId).toFile()

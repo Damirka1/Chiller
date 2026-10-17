@@ -37,6 +37,7 @@ object DemoScenario {
         override suspend fun probe() = CapabilityReport("demo-script", tools = true, reasoning = true)
 
         override fun stream(request: ModelRequest): Flow<ModelEvent> = flow {
+            if (request.messages.firstOrNull()?.content?.startsWith("You are a Chiller subagent") == true) { child(request); return@flow }
             val lastUser = request.messages.indexOfLast { it.role == "user" }
             val turn = request.messages.drop(lastUser + 1)
             val step = turn.count { it.role == "assistant" }
@@ -69,7 +70,16 @@ object DemoScenario {
                 pairs.forEach { (k, v) -> when (v) { is String -> put(k, v); is Int -> put(k, v); is Boolean -> put(k, v); is List<*> -> put(k, buildJsonArray { v.forEach { add(it.toString()) } }); else -> put(k, v.toString()) } }
             }
 
-            when (step) {
+            // Script order: overview, delegate to two helpers, own work, collect helpers, tidy up, question, finish.
+            val SPAWN = 100; val WAIT = 101; val RESULTS = 102
+            val scripted = when { step <= 2 -> step; step == 3 -> SPAWN; step in 4..8 -> step - 1; step == 9 -> WAIT; step == 10 -> RESULTS; else -> step - 3 }
+            fun agentId(task: String) = results.firstNotNullOfOrNull { r -> (r["data"] as? JsonObject)?.takeIf { it["taskId"]?.jsonPrimitive?.contentOrNull == task }?.get("id")?.jsonPrimitive?.contentOrNull } ?: "missing"
+            when (scripted) {
+                SPAWN -> calls("Пока я чиню код, отдам два независимых вопроса помощникам — они только читают и работают параллельно (их прогресс виден в Studio → Агенты).",
+                    "spawn_agent" to args("task_id" to "review-greeting", "goal" to "Проверь greeting.py: какие крайние случаи имени не обработаны? Дай список с номерами строк.", "paths" to listOf("greeting.py"), "max_rounds" to 3),
+                    "spawn_agent" to args("task_id" to "config-usage", "goal" to "Найди, где в проекте используются настройки из config.py, и опиши риски изменения таймаута.", "max_rounds" to 3))
+                WAIT -> calls("Свою часть сделал — собираю результаты помощников.", "wait_agents" to args("after_cursor" to 0, "timeout_ms" to 20_000))
+                RESULTS -> calls("Читаю их отчёты.", "agent_result" to args("agent_id" to agentId("review-greeting")), "agent_result" to args("agent_id" to agentId("config-usage")))
                 0 -> {
                     emit(ModelEvent.ReasoningDelta("Это демо-сценарий. Сначала план, потом обзор проекта: файлы и определения функций читаются параллельно."))
                     calls("Начну с плана, чтобы шаги были видны.", plan("Осмотреть проект" to "in_progress", "Починить приветствие" to "pending", "Добавить модуль stats" to "pending", "Проверить и прибраться" to "pending"))
@@ -112,6 +122,23 @@ object DemoScenario {
             }
         }
 
+        /** A helper: one look at the code, then a short report. Paced so its progress is visible in Studio. */
+        private suspend fun kotlinx.coroutines.flow.FlowCollector<ModelEvent>.child(request: ModelRequest) {
+            val goal = request.messages.first { it.role == "user" }.content.orEmpty()
+            val tools = request.messages.count { it.role == "tool" }
+            val greeting = "greeting" in goal
+            if (pacing) delay(900)
+            if (tools == 0 && request.tools.isNotEmpty()) {
+                val call = if (greeting) ToolCall("child-read", "read_file", buildJsonObject { put("path", "greeting.py") }.toString())
+                    else ToolCall("child-search", "search_text", buildJsonObject { put("query", "config"); put("context", 1) }.toString())
+                emit(ModelEvent.Completed(AgentMessage("assistant", null, listOf(call)), "tool_calls")); return
+            }
+            val report = if (greeting) "Крайние случаи в `greeting.py`:\n\n- строка 2: имя из одних пробелов уже даёт `Hello` после правки;\n- `None` вызовет `AttributeError` на `.strip()` — не обработан;\n- имя не обрезается по краям: `greet(' Ada ')` → `Hello,  Ada `.\n\nПроверено чтением файла, без запуска."
+                else "`config.py` нигде не импортируется: поиск `config` нашёл только сам файл и README.\n\n- Изменение `TIMEOUT_SECONDS` сейчас ни на что не влияет.\n- Риск: появится код, который будет ждать 45 с вместо 30.\n\nПроверено поиском по проекту."
+            if (pacing) report.chunked(24).forEach { delay(10) }
+            emit(ModelEvent.Completed(AgentMessage("assistant", report), "stop"))
+        }
+
         private suspend fun kotlinx.coroutines.flow.FlowCollector<ModelEvent>.finish(answer: String?, exitCode: Int?) {
             val text = buildString {
                 appendLine("Готово. Что было сделано в демо-проекте:")
@@ -120,6 +147,7 @@ object DemoScenario {
                 appendLine("- `config.py`: `TIMEOUT_SECONDS = 45` (через `edit_file` по номеру строки).")
                 appendLine("- `stats.py`: новый модуль с `mean`.")
                 appendLine("- `helpers_old.py` → `helpers.py`, `scratch.txt` удалён.")
+                appendLine("- Два помощника параллельно проверили крайние случаи приветствия и использование настроек; их отчёты — в Studio → Агенты.")
                 if (answer?.startsWith("Да") == true) appendLine("- `README.md`: добавлен раздел о проверках.")
                 appendLine()
                 appendLine(when (exitCode) { 0 -> "Проверка запускалась процессом и завершилась с кодом 0:"; null -> "Проверка запускалась, но код завершения не получен:"; else -> "Проверка запускалась и завершилась с кодом $exitCode:" })

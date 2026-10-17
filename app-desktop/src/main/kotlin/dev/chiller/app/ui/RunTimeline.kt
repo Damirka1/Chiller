@@ -263,6 +263,10 @@ private fun toolIcon(name: String): ImageVector = when (name) {
     "search_text" -> Icons.Outlined.Search
     "edit_file", "replace_text" -> Icons.Outlined.Edit
     "update_plan" -> Icons.Outlined.Checklist
+    "spawn_agent", "list_agents", "agent_result" -> Icons.Outlined.SmartToy
+    "wait_agents" -> Icons.Outlined.HourglassEmpty
+    "message_agent" -> Icons.Outlined.Send
+    "cancel_agent" -> Icons.Outlined.Stop
     "create_file" -> Icons.Outlined.NoteAdd
     "move_file" -> Icons.Outlined.DriveFileMove
     "delete_file" -> Icons.Outlined.DeleteOutline

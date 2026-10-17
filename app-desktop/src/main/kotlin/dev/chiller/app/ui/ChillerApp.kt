@@ -109,6 +109,7 @@ fun ChillerApp(
     sessionWorkspaces: Map<String, String> = emptyMap(),
     onStartDemo: (() -> Unit)? = null,
     onCloseWorkspace: () -> Unit = {},
+    subagents: List<SubagentSnapshot> = emptyList(), onCancelSubagent: (String) -> Unit = {},
     onOpenTrace: (() -> Unit)? = null,
     /** macOS full-window content: the native title bar is transparent and the traffic lights float over the app. */
     titleBar: TitleBarSpec? = null,
@@ -246,7 +247,7 @@ fun ChillerApp(
                             ) {
                                 Row(if (compact) Modifier.fillMaxSize() else Modifier.width(inspectorWidth).fillMaxHeight()) {
                                     if (!compact) Box(Modifier.width(10.dp).fillMaxHeight().background(c.sidebar).pointerHoverIcon(PointerIcon(java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.E_RESIZE_CURSOR))).semantics { contentDescription = "Ширина панели изменений" }.draggable(inspectorResize, Orientation.Horizontal, onDragStopped = { onPreferences(view) }))
-                                    Inspector(state, onOpenTrace, onUndo, !active, reducedMotion, Modifier.weight(1f).fillMaxHeight(), selectedActivityId, { selectedActivityId = it }, { delta -> updateView(view.copy(inspectorWidth = (view.inspectorWidth + delta).coerceIn(280f, 480f))) })
+                                    StudioPanel(state, subagents, onUndo, !active, reducedMotion, onCancelSubagent, onOpenTrace, Modifier.weight(1f).fillMaxHeight())
                                 }
                             }
                         }
@@ -756,50 +757,6 @@ private fun CodeBlock(code: String, language: String) {
 }
 
 @Composable
-private fun Inspector(run: RunState, onOpenTrace: (() -> Unit)?, onUndo: (String) -> Unit, canUndo: Boolean, reduced: Boolean, modifier: Modifier, selectedId: String?, onSelected: (String) -> Unit, onWidth: (Float) -> Unit) {
-    val c = LocalChillerPalette.current
-    val activities = run.activities
-    var tab by remember { mutableStateOf("changes") }
-    val all = tab == "activity"
-    val changes = activities.filter { it.diff != null }
-    val shown = if (all) activities else changes
-    Row(modifier) {
-        Box(Modifier.width(1.dp).fillMaxHeight().background(c.border))
-        Column(Modifier.weight(1f).fillMaxHeight().background(c.canvas)) {
-            Row(Modifier.fillMaxWidth().height(49.dp).padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                ChillerControl("Изменения", { tab = "changes" }, style = if (tab == "changes") ControlStyle.SELECTED else ControlStyle.QUIET)
-                ChillerControl("Активность", { tab = "activity" }, style = if (tab == "activity") ControlStyle.SELECTED else ControlStyle.QUIET)
-                ChillerControl("Прогон", { tab = "run" }, style = if (tab == "run") ControlStyle.SELECTED else ControlStyle.QUIET)
-                Spacer(Modifier.weight(1f))
-                if (tab != "run") Text("${shown.size}", color = c.faint, fontSize = 11.sp)
-                ChillerIconButton(Icons.Outlined.KeyboardArrowLeft, "Расширить панель", { onWidth(24f) })
-                ChillerIconButton(Icons.Outlined.KeyboardArrowRight, "Сузить панель", { onWidth(-24f) })
-            }
-            if (tab == "run") RunPanel(run, Modifier.weight(1f).fillMaxWidth(), onOpenTrace)
-            else if (shown.isEmpty()) Box(Modifier.weight(1f).fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Icon(Icons.Outlined.Difference, null, Modifier.size(23.dp), tint = c.faint)
-                    Spacer(Modifier.height(13.dp))
-                    Text(if (all) "Пока без действий" else "Пока без изменений", color = c.muted, fontSize = 12.sp)
-                    Spacer(Modifier.height(5.dp))
-                    Text("Результаты работы появятся здесь", color = c.faint, fontSize = 11.sp)
-                }
-            } else LazyColumn(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
-                items(shown, key = { it.id }) { activity ->
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Hint(activity.target.ifBlank { toolLabel(activity.name) }) {
-                            ChillerControl(activity.target.ifBlank { toolLabel(activity.name) }, { onSelected(activity.id) }, Modifier.fillMaxWidth(), icon = Icons.Outlined.Description, style = if (selectedId == activity.id) ControlStyle.SELECTED else ControlStyle.QUIET)
-                        }
-                        activity.diff?.let { diff -> Box(Modifier.padding(start = 10.dp)) { val (a, r) = diffStats(diff); DiffStat(a, r) } }
-                        if (selectedId == activity.id) ToolRow(activity, reduced, onUndo, canUndo)
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
 private fun Question(question: UserQuestion, onAnswer: (String) -> Unit, canAnswer: Boolean) {
     val c = LocalChillerPalette.current
     var answer by remember(question.id) { mutableStateOf("") }
@@ -952,11 +909,19 @@ private fun friendlyModel(model: String) = modelLabel(model).ifBlank { "Выбр
 private fun statusLabel(status: String) = when (status) { "preparing" -> "Подготовка…"; "streaming" -> "Работает…"; "executing" -> "Выполняет действие…"; else -> "" }
 internal fun changeId(output: String): String? = runCatching { Json.parseToJsonElement(output).jsonObject["data"]?.jsonObject?.get("id")?.jsonPrimitive?.content }.getOrNull()
 internal fun prettyOutput(output: String): String = runCatching {
-    val data = Json.parseToJsonElement(output).jsonObject["data"]
+    val root = Json.parseToJsonElement(output).jsonObject
+    // A failed tool has no data: show the error code, message and recovery hint instead of "null".
+    (root["error"] as? JsonObject)?.let { error ->
+        val code = error["code"]?.jsonPrimitive?.contentOrNull.orEmpty()
+        val message = error["message"]?.jsonPrimitive?.contentOrNull.orEmpty()
+        val recovery = error["recovery"]?.jsonPrimitive?.contentOrNull
+        return@runCatching listOfNotNull("$code · $message", recovery?.let { "Подсказка: $it" }).joinToString("\n")
+    }
+    val data = root["data"]
     (data as? JsonObject)?.get("output")?.jsonPrimitive?.content ?: Json { prettyPrint = true }.encodeToString(JsonElement.serializer(), data ?: JsonPrimitive(output))
 }.getOrDefault(output)
 internal fun toolLabel(name: String) = when (name) {
-    "read_file" -> "Чтение"; "list_files" -> "Файлы"; "search_text" -> "Поиск"; "edit_file" -> "Правка"; "replace_text" -> "Замена"; "update_plan" -> "План"; "create_file" -> "Создание"
+    "read_file" -> "Чтение"; "list_files" -> "Файлы"; "search_text" -> "Поиск"; "edit_file" -> "Правка"; "replace_text" -> "Замена"; "update_plan" -> "План"; "spawn_agent" -> "Помощник"; "list_agents" -> "Помощники"; "wait_agents" -> "Ожидание"; "agent_result" -> "Отчёт"; "message_agent" -> "Сообщение"; "cancel_agent" -> "Стоп"; "create_file" -> "Создание"
     "move_file" -> "Перемещение"; "delete_file" -> "Удаление"; "run_process" -> "Команда"; "read_process" -> "Вывод"; "stop_process" -> "Остановка"
     "read_artifact" -> "Результат"; "ask_user" -> "Вопрос"; "undo" -> "Откат"; else -> name
 }

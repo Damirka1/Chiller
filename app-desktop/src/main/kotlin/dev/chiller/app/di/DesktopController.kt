@@ -6,6 +6,7 @@ import dev.chiller.providers.*
 import dev.chiller.runtime.LocalProcessService
 import dev.chiller.sessions.*
 import dev.chiller.tools.BuiltinTools
+import dev.chiller.tools.SubagentTools
 import dev.chiller.workspace.LocalWorkspace
 import dev.chiller.workspace.ProjectInstructions
 import io.ktor.client.HttpClient
@@ -35,7 +36,7 @@ data class ModelCatalogState(
     val fetchedAt: String? = null,
     val stale: Boolean = false,
 )
-data class DesktopState(val run: RunState = RunState(), val sessions: List<SessionInfo> = emptyList(), val sessionId: String = newId(), val settings: DesktopSettings = DesktopSettings(), val apiKeyConfigured: Boolean = false, val allowProcesses: Boolean = false, val exportContent: String? = null, val exportFormat: String = "markdown", val exportSessionId: String? = null, val uiPreferences: UiPreferences = UiPreferences(), val connection: ConnectionState = ConnectionState(), val catalog: ModelCatalogState = ModelCatalogState(), val sessionWorkspaces: Map<String, String> = emptyMap())
+data class DesktopState(val run: RunState = RunState(), val sessions: List<SessionInfo> = emptyList(), val sessionId: String = newId(), val settings: DesktopSettings = DesktopSettings(), val apiKeyConfigured: Boolean = false, val allowProcesses: Boolean = false, val exportContent: String? = null, val exportFormat: String = "markdown", val exportSessionId: String? = null, val uiPreferences: UiPreferences = UiPreferences(), val connection: ConnectionState = ConnectionState(), val catalog: ModelCatalogState = ModelCatalogState(), val sessionWorkspaces: Map<String, String> = emptyMap(), val subagents: List<SubagentSnapshot> = emptyList())
 
 class DesktopController(private val directory: Path, initialCredential: String? = LocalCredentials.load(), connectionChecker: ConnectionChecker? = null, catalogClient: ModelCatalogClient? = null) {
     private val commands = Mutex()
@@ -44,6 +45,12 @@ class DesktopController(private val directory: Path, initialCredential: String? 
     private val events = JsonlEventStore(directory.resolve("sessions"))
     private val artifacts = LocalArtifactStore(directory.resolve("artifacts"))
     private val exporter = SessionExporter(events)
+    private var subagentService: SubagentService? = null
+    private var subagentObserver: Job? = null
+
+    /** The user's stop button on a helper agent. */
+    suspend fun cancelSubagent(id: String) { subagentService?.cancelByUser(id) }
+
     /** The project the user chose (persisted), as opposed to a folder shown for a selected or demo dialog. */
     private var savedWorkspace: String? = null
     private var credential: String? = initialCredential?.takeIf { it.isNotBlank() }
@@ -398,14 +405,18 @@ class DesktopController(private val directory: Path, initialCredential: String? 
         workspaceService = workspace
         val processes = LocalProcessService(root); processService = processes
         questions = PendingQuestions()
-        val tools = BuiltinTools(workspace, processes, artifacts, questions)
+        val builtin = BuiltinTools(workspace, processes, artifacts, questions)
         val profile = if (java.net.URI(s.settings.baseUrl).host == "api.deepseek.com")
             ChatCompletionsProfile.deepSeekFlash(s.settings.baseUrl, s.settings.model)
         else ChatCompletionsProfile("generic", s.settings.baseUrl, s.settings.model)
         val provider = providerOverride ?: ChatCompletionsProvider(http, profile) { credential }
+        // Children use the same provider and model, read-only tools and the plain executor (no delegation).
+        val supervisor = SubagentSupervisor(provider, builtin, events, s.sessionId, modelOverride ?: s.settings.model, scope)
+        subagentService = supervisor
+        val tools = SubagentTools(builtin, supervisor)
         // Read once per engine: an edit to AGENTS.md applies from the next dialog.
         val instructions = withContext(Dispatchers.IO) { ProjectInstructions.load(root) }
-        val engine = AgentCoordinator(provider, tools, events, processes, s.sessionId, modelOverride ?: s.settings.model, s.settings.thinking, projectInstructions = instructions?.text, traces = traceSink(s.sessionId), scope = scope)
+        val engine = AgentCoordinator(provider, tools, events, processes, s.sessionId, modelOverride ?: s.settings.model, s.settings.thinking, projectInstructions = instructions?.text, traces = traceSink(s.sessionId), subagents = supervisor, scope = scope)
         coordinator = engine
         if (instructions != null) events.append(s.sessionId, "context.instructions", buildJsonObject {
             put("sources", JsonArray(instructions.sources.map(::JsonPrimitive))); put("truncated", instructions.truncated)
@@ -414,11 +425,14 @@ class DesktopController(private val directory: Path, initialCredential: String? 
             events.append(s.sessionId, "session.workspace", buildJsonObject { put("root", workspace.root) })
         _state.update { it.copy(sessionWorkspaces = it.sessionWorkspaces + (s.sessionId to workspace.root)) }
         observer = scope.launch { combine(engine.state, questions.question) { run, question -> run.copy(question = run.question ?: question) }.collect { run -> _state.update { it.copy(run = run) } } }
+        subagentObserver = scope.launch { supervisor.state.collect { list -> _state.update { it.copy(subagents = list) } } }
         return engine
     }
 
     private suspend fun resetEngine() {
         observer?.cancelAndJoin(); observer = null
+        subagentObserver?.cancelAndJoin(); subagentObserver = null; subagentService = null
+        _state.update { it.copy(subagents = emptyList()) }
         coordinator?.stop(); coordinator = null
         processService?.close(); processService = null; workspaceService = null
     }
