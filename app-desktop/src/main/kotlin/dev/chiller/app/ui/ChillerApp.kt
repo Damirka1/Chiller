@@ -210,7 +210,7 @@ fun ChillerApp(
                             ) {
                                 Row(if (compact) Modifier.fillMaxSize() else Modifier.width(inspectorWidth).fillMaxHeight()) {
                                     if (!compact) Box(Modifier.width(10.dp).fillMaxHeight().background(c.sidebar).pointerHoverIcon(PointerIcon(java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.E_RESIZE_CURSOR))).semantics { contentDescription = "Ширина панели изменений" }.draggable(inspectorResize, Orientation.Horizontal, onDragStopped = { onPreferences(view) }))
-                                    Inspector(state.activities, onUndo, !active, reducedMotion, Modifier.weight(1f).fillMaxHeight(), selectedActivityId, { selectedActivityId = it }, { delta -> updateView(view.copy(inspectorWidth = (view.inspectorWidth + delta).coerceIn(280f, 480f))) })
+                                    Inspector(state, onUndo, !active, reducedMotion, Modifier.weight(1f).fillMaxHeight(), selectedActivityId, { selectedActivityId = it }, { delta -> updateView(view.copy(inspectorWidth = (view.inspectorWidth + delta).coerceIn(280f, 480f))) })
                                 }
                             }
                         }
@@ -615,23 +615,27 @@ private fun CodeBlock(code: String, language: String) {
 }
 
 @Composable
-private fun Inspector(activities: List<Activity>, onUndo: (String) -> Unit, canUndo: Boolean, reduced: Boolean, modifier: Modifier, selectedId: String?, onSelected: (String) -> Unit, onWidth: (Float) -> Unit) {
+private fun Inspector(run: RunState, onUndo: (String) -> Unit, canUndo: Boolean, reduced: Boolean, modifier: Modifier, selectedId: String?, onSelected: (String) -> Unit, onWidth: (Float) -> Unit) {
     val c = LocalChillerPalette.current
-    var all by remember { mutableStateOf(false) }
+    val activities = run.activities
+    var tab by remember { mutableStateOf("changes") }
+    val all = tab == "activity"
     val changes = activities.filter { it.diff != null }
     val shown = if (all) activities else changes
     Row(modifier) {
         Box(Modifier.width(1.dp).fillMaxHeight().background(c.border))
         Column(Modifier.weight(1f).fillMaxHeight().background(c.canvas)) {
             Row(Modifier.fillMaxWidth().height(49.dp).padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                ChillerControl("Изменения", { all = false }, style = if (!all) ControlStyle.SELECTED else ControlStyle.QUIET)
-                ChillerControl("Активность", { all = true }, style = if (all) ControlStyle.SELECTED else ControlStyle.QUIET)
+                ChillerControl("Изменения", { tab = "changes" }, style = if (tab == "changes") ControlStyle.SELECTED else ControlStyle.QUIET)
+                ChillerControl("Активность", { tab = "activity" }, style = if (tab == "activity") ControlStyle.SELECTED else ControlStyle.QUIET)
+                ChillerControl("Прогон", { tab = "run" }, style = if (tab == "run") ControlStyle.SELECTED else ControlStyle.QUIET)
                 Spacer(Modifier.weight(1f))
-                Text("${shown.size}", color = c.faint, fontSize = 11.sp)
+                if (tab != "run") Text("${shown.size}", color = c.faint, fontSize = 11.sp)
                 ChillerIconButton(Icons.Outlined.KeyboardArrowLeft, "Расширить панель", { onWidth(24f) })
                 ChillerIconButton(Icons.Outlined.KeyboardArrowRight, "Сузить панель", { onWidth(-24f) })
             }
-            if (shown.isEmpty()) Box(Modifier.weight(1f).fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
+            if (tab == "run") RunPanel(run, Modifier.weight(1f).fillMaxWidth())
+            else if (shown.isEmpty()) Box(Modifier.weight(1f).fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Icon(Icons.Outlined.Difference, null, Modifier.size(23.dp), tint = c.faint)
                     Spacer(Modifier.height(13.dp))
@@ -645,10 +649,7 @@ private fun Inspector(activities: List<Activity>, onUndo: (String) -> Unit, canU
                         Hint(activity.target.ifBlank { toolLabel(activity.name) }) {
                             ChillerControl(activity.target.ifBlank { toolLabel(activity.name) }, { onSelected(activity.id) }, Modifier.fillMaxWidth(), icon = Icons.Outlined.Description, style = if (selectedId == activity.id) ControlStyle.SELECTED else ControlStyle.QUIET)
                         }
-                        activity.diff?.let { diff ->
-                            val lines = diff.lines()
-                            Text("+${lines.count { it.startsWith('+') && !it.startsWith("+++ ") }}  −${lines.count { it.startsWith('-') && !it.startsWith("--- ") }}", color = c.muted, fontSize = 11.sp, modifier = Modifier.padding(start = 10.dp))
-                        }
+                        activity.diff?.let { diff -> Box(Modifier.padding(start = 10.dp)) { val (a, r) = diffStats(diff); DiffStat(a, r) } }
                         if (selectedId == activity.id) ToolRow(activity, reduced, onUndo, canUndo)
                     }
                 }

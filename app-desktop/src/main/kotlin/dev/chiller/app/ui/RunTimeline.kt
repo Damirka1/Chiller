@@ -11,6 +11,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -256,4 +257,64 @@ private fun toolIcon(name: String): ImageVector = when (name) {
     "ask_user" -> Icons.Outlined.HelpOutline
     "undo" -> Icons.Outlined.History
     else -> Icons.Outlined.Build
+}
+
+/** Studio's run tab: the counters the engine reports for the latest run, and its last visible reasoning. */
+@Composable
+internal fun RunPanel(state: RunState, modifier: Modifier) {
+    val c = LocalChillerPalette.current
+    Column(modifier.verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        if (state.modelRounds == 0 && state.status == "idle") {
+            Text("Метрики появятся после первого запуска в этом диалоге.", color = c.muted, fontSize = 12.sp, lineHeight = 18.sp)
+            return@Column
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (state.status in RUNNING || state.status == "streaming") { Pulse(c.accent); Spacer(Modifier.width(8.dp)) }
+            Text(runStatusLabel(state.status), color = c.text, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+            Spacer(Modifier.weight(1f))
+            (state.activeModelId)?.let { Text(modelLabel(it), color = c.faint, fontSize = 11.sp) }
+        }
+        val usage = state.usage
+        val cacheShare = usage.promptTokens?.takeIf { it > 0 }?.let { p -> usage.cachedPromptTokens?.let { "${it * 100 / p}%" } }
+        MetricGrid(listOf(
+            "Раунды" to state.modelRounds.toString(),
+            "Действия" to state.toolCalls.toString(),
+            "Ошибки" to state.failedToolCalls.toString(),
+            "Время" to (state.runDurationMs?.let(::formatDuration) ?: "—"),
+            "Запрос, ток." to compactTokens(usage.promptTokens).replace("?", "—"),
+            "Ответ, ток." to compactTokens(usage.completionTokens).replace("?", "—"),
+            "Из кэша" to (cacheShare ?: "—"),
+            "Контекст ≈" to (state.contextEstimatedTokens?.let { compactTokens(it.toLong()) } ?: "—"),
+        ))
+        Text("Токены — как их сообщил провайдер; «—» значит, что значение не пришло. Контекст — оценка по символам / 4.", color = c.faint, fontSize = 11.sp, lineHeight = 16.sp)
+        if (state.droppedContextMessages > 0) Text("Из контекста убрано старых сообщений: ${state.droppedContextMessages}", color = c.muted, fontSize = 12.sp, lineHeight = 18.sp)
+        if (state.reasoning.isNotBlank()) {
+            Text("Рассуждения последнего раунда", color = c.muted, fontSize = 12.sp)
+            SelectionContainer {
+                Text(state.reasoning, color = c.muted, fontSize = 12.sp, lineHeight = 19.sp, modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(c.sidebar).padding(12.dp))
+            }
+        }
+    }
+}
+
+@Composable
+private fun MetricGrid(items: List<Pair<String, String>>) {
+    val c = LocalChillerPalette.current
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        items.chunked(2).forEach { row ->
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                row.forEach { (label, value) ->
+                    Column(Modifier.weight(1f).clip(RoundedCornerShape(8.dp)).border(1.dp, c.border, RoundedCornerShape(8.dp)).padding(horizontal = 12.dp, vertical = 9.dp)) {
+                        Text(label, color = c.faint, fontSize = 11.sp, lineHeight = 15.sp)
+                        Text(value, color = c.text, fontSize = 16.sp, lineHeight = 22.sp, fontWeight = FontWeight.Medium)
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun runStatusLabel(status: String) = when (status) {
+    "preparing" -> "Подготовка"; "streaming" -> "Модель отвечает"; "executing" -> "Выполняются действия"
+    "completed" -> "Завершён"; "failed" -> "Ошибка"; "cancelled" -> "Остановлен"; "interrupted" -> "Прерван"; else -> "Последний прогон"
 }
