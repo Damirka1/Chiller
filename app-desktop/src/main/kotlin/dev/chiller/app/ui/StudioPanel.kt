@@ -86,7 +86,7 @@ internal fun StudioPanel(
                 when (current) {
                     "changes" -> ChangesTab(files, onUndo, canUndo, Modifier.fillMaxSize())
                     "agents" -> AgentsTab(agents, onCancelAgent, Modifier.fillMaxSize())
-                    else -> RunPanel(run, Modifier.fillMaxSize(), onOpenTrace)
+                    else -> RunPanel(run, Modifier.fillMaxSize(), onOpenTrace, agents)
                 }
             }
         }
@@ -229,7 +229,8 @@ private fun AgentCard(agent: SubagentSnapshot, onCancel: (String) -> Unit) {
         }
         Text(listOfNotNull("раунд ${agent.rounds}/${agent.maxRounds}", "${agent.toolCalls} ${plural(agent.toolCalls, "действие", "действия", "действий")}",
             agent.failedToolCalls.takeIf { it > 0 }?.let { "ошибок $it" }, agent.readPaths.size.takeIf { it > 0 }?.let { "прочитано файлов $it" },
-            agent.acceptedMessages.takeIf { it > 0 }?.let { "сообщений ${agent.processedMessages}/$it" }).joinToString(" · "), color = c.faint, fontSize = 11.sp)
+            agent.acceptedMessages.takeIf { it > 0 }?.let { "сообщений ${agent.processedMessages}/$it" },
+            agent.usage.promptTokens?.let { "${compactTokens(it)} → ${compactTokens(agent.usage.completionTokens)} ток." }).joinToString(" · "), color = c.faint, fontSize = 11.sp)
         if (agent.status == SubagentStatus.RUNNING && agent.activity.isNotBlank()) Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(Icons.Outlined.Bolt, null, Modifier.size(12.dp), tint = c.muted)
             Spacer(Modifier.width(5.dp))

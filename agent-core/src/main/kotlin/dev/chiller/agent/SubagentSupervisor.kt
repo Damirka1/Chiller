@@ -185,7 +185,9 @@ class SubagentSupervisor(
             val last = round == request.maxRounds - 1
             settle(child) { it.copy(rounds = round + 1, processedMessages = it.processedMessages + inbox.size, activity = if (last) "пишет итог" else "думает") }
             if (last) messages += AgentMessage("user", "This is your last round. Answer now with your findings; tools are no longer available.")
-            val response = complete(ModelRequest(model, messages, if (last) emptyList() else tools, thinking = false, maxOutputTokens = maxOutputTokens))
+            val response = complete(ModelRequest(model, messages, if (last) emptyList() else tools, thinking = false, maxOutputTokens = maxOutputTokens)) { usage ->
+                settle(child) { it.copy(usage = it.usage + usage) }
+            }
             if (response.toolCalls.isEmpty()) {
                 val text = response.content?.trim().orEmpty().ifEmpty { "(пустой ответ)" }
                 settle(child) { it.copy(status = SubagentStatus.COMPLETED, result = text.take(8000), activity = "", finishedAt = now()) }
@@ -210,10 +212,11 @@ class SubagentSupervisor(
         }
     }
 
-    private suspend fun complete(request: ModelRequest): AgentMessage {
+    private suspend fun complete(request: ModelRequest, onUsage: suspend (TokenUsage) -> Unit): AgentMessage {
         var completion: AgentMessage? = null
         provider.stream(request).collect { event ->
             when (event) {
+                is ModelEvent.Usage -> onUsage(event.usage)
                 is ModelEvent.Completed -> {
                     require(event.finishReason in setOf("stop", "tool_calls")) { "Incomplete completion; no action executed" }
                     completion = event.message
@@ -247,7 +250,7 @@ class SubagentSupervisor(
         val before = child.snapshot
         child.snapshot = update(before).copy(revision = ++revision)
         publish()
-        val important = before.status != child.snapshot.status || before.rounds != child.snapshot.rounds || before.toolCalls != child.snapshot.toolCalls || before.acceptedMessages != child.snapshot.acceptedMessages
+        val important = before.status != child.snapshot.status || before.rounds != child.snapshot.rounds || before.toolCalls != child.snapshot.toolCalls || before.acceptedMessages != child.snapshot.acceptedMessages || before.usage != child.snapshot.usage
         if (important) runCatching {
             events.append(sessionId, "subagent.state", json.encodeToJsonElement(SubagentSnapshot.serializer(), child.snapshot.copy(result = child.snapshot.result?.take(2000))).jsonObject)
         }

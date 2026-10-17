@@ -167,6 +167,15 @@ class AgentCoordinator(
             put("completionTokens", usage.completionTokens)
             put("cachedPromptTokens", usage.cachedPromptTokens)
             put("usageEstimated", usage.isEmpty)
+            // Helpers' own requests, reported separately so the parent's numbers stay comparable across runs.
+            val helpers = subagents?.state?.value?.filter { it.parentRunId == id }.orEmpty()
+            if (helpers.isNotEmpty()) {
+                val total = helpers.fold(TokenUsage()) { acc, h -> acc + h.usage }
+                put("helpers", helpers.size)
+                put("helperPromptTokens", total.promptTokens)
+                put("helperCompletionTokens", total.completionTokens)
+                put("helperCachedPromptTokens", total.cachedPromptTokens)
+            }
         })
     }
 

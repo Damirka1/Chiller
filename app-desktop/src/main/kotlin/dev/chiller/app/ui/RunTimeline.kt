@@ -38,6 +38,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.chiller.contracts.Activity
 import dev.chiller.contracts.RunState
+import dev.chiller.contracts.plus
 import dev.chiller.design.*
 
 private val FAILED = setOf("failed", "error", "conflict")
@@ -278,7 +279,7 @@ private fun toolIcon(name: String): ImageVector = when (name) {
 
 /** Studio's run tab: the counters the engine reports for the latest run, and its last visible reasoning. */
 @Composable
-internal fun RunPanel(state: RunState, modifier: Modifier, onOpenTrace: (() -> Unit)? = null) {
+internal fun RunPanel(state: RunState, modifier: Modifier, onOpenTrace: (() -> Unit)? = null, agents: List<dev.chiller.contracts.SubagentSnapshot> = emptyList()) {
     val c = LocalChillerPalette.current
     Column(modifier.verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         if (state.modelRounds == 0 && state.status == "idle") {
@@ -303,6 +304,13 @@ internal fun RunPanel(state: RunState, modifier: Modifier, onOpenTrace: (() -> U
             "Из кэша" to (cacheShare ?: "—"),
             "Контекст ≈" to (state.contextEstimatedTokens?.let { compactTokens(it.toLong()) } ?: "—"),
         ))
+        if (agents.isNotEmpty()) {
+            val total = agents.fold(dev.chiller.contracts.TokenUsage()) { acc, a -> acc + a.usage }
+            MetricGrid(listOf(
+                "Помощники" to "${agents.count { it.status == dev.chiller.contracts.SubagentStatus.COMPLETED }}/${agents.size}",
+                "Их токены" to "${compactTokens(total.promptTokens).replace("?", "—")} → ${compactTokens(total.completionTokens).replace("?", "—")}",
+            ))
+        }
         Text("Токены — как их сообщил провайдер; «—» значит, что значение не пришло. Контекст — оценка по символам / 4.", color = c.faint, fontSize = 11.sp, lineHeight = 16.sp)
         onOpenTrace?.let { ChillerControl("Трассировка запросов", it, icon = Icons.Outlined.ReceiptLong, style = ControlStyle.OUTLINE) }
         latestPlan(state)?.let { steps ->

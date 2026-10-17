@@ -38,7 +38,7 @@ class SubagentSupervisorTest {
                 "write" in goal && tools == 0 -> emit(call("edit_file", """{"path":"src/a.kt"}"""))
                 "slow" in goal && inbox.isEmpty() -> { delay(200); emit(call("search_text", """{"query":"x","path":"src"}""")) }
                 tools == 0 -> emit(call("read_file", """{"path":"src/App.kt"}"""))
-                else -> emit(ModelEvent.Completed(AgentMessage("assistant", "Report for: ${goal.lineSequence().first()} · inbox=${inbox.size}"), "stop"))
+                else -> { emit(ModelEvent.Usage(TokenUsage(promptTokens = 100, completionTokens = 10))); emit(ModelEvent.Completed(AgentMessage("assistant", "Report for: ${goal.lineSequence().first()} · inbox=${inbox.size}"), "stop")) }
             }
         }
         private var n = 0
@@ -61,6 +61,7 @@ class SubagentSupervisorTest {
         assertTrue(sup.result(ctx, a.id).result!!.startsWith("Report for: Task: Explain src"))
         assertEquals(listOf("src/App.kt"), sup.result(ctx, b.id).readPaths)
         assertEquals(2, files.calls.size)
+        assertEquals(100L, sup.result(ctx, a.id).usage.promptTokens, "a child's provider usage is recorded on its snapshot")
         sup.finish("run-1")
     }
 

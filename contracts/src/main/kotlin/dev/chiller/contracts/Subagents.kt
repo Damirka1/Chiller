@@ -48,6 +48,8 @@ data class SubagentSnapshot(
     val error: String? = null,
     val startedAt: String? = null,
     val finishedAt: String? = null,
+    /** Provider-reported tokens of this child's own requests; null when the provider did not report them. */
+    val usage: TokenUsage = TokenUsage(),
 )
 
 @Serializable
