@@ -14,6 +14,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowForward
+import androidx.compose.material.icons.automirrored.outlined.Chat
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -49,8 +50,9 @@ import java.nio.file.Path
  */
 @Composable
 internal fun StartScreen(
-    workspacePath: String?, recent: List<String>, modelName: String, connectionLine: String, connectionColor: Color,
+    workspacePath: String?, recent: List<RecentProject>, modelName: String, connectionLine: String, connectionColor: Color,
     onOpenFolder: () -> Unit, onOpenPath: (String) -> Unit, onStarter: (Starter) -> Unit, modifier: Modifier = Modifier,
+    resume: ResumeItem? = null, onResume: (String) -> Unit = {}, connection: ConnectionPrompt? = null,
 ) {
     val c = LocalChillerPalette.current
     var dropping by remember { mutableStateOf(false) }
@@ -60,25 +62,47 @@ internal fun StartScreen(
             .then(if (dropping) Modifier.padding(12.dp).clip(RoundedCornerShape(16.dp)).border(2.dp, c.accent.copy(alpha = .6f), RoundedCornerShape(16.dp)).background(c.accent.copy(alpha = .04f)) else Modifier),
         contentAlignment = Alignment.Center,
     ) {
+        BoxWithConstraints(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        // Low windows drop decoration first so the actionable blocks stay above the composer.
+        val tight = maxHeight < 560.dp
+        val hasHistory = workspacePath == null && (resume != null || recent.isNotEmpty())
         Column(
             Modifier.widthIn(max = 640.dp).fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 32.dp, vertical = 16.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            ChillerMark(Modifier.size(if (workspacePath == null) 34.dp else 28.dp), c.accent)
-            Spacer(Modifier.height(if (workspacePath == null) 20.dp else 14.dp))
+            if (!(tight && hasHistory)) {
+                ChillerMark(Modifier.size(if (workspacePath == null) 32.dp else 28.dp), c.accent)
+                Spacer(Modifier.height(if (workspacePath == null) 18.dp else 14.dp))
+            }
             if (workspacePath == null) {
-                Text("Что будем создавать?", fontSize = 26.sp, lineHeight = 34.sp, letterSpacing = (-.6).sp, fontWeight = FontWeight.Medium, color = c.text, textAlign = TextAlign.Center)
-                Spacer(Modifier.height(8.dp))
-                Text("Откройте папку проекта — или перетащите её в окно", color = c.muted, fontSize = 13.sp, lineHeight = 20.sp, textAlign = TextAlign.Center)
-                Spacer(Modifier.height(22.dp))
-                ChillerControl("Открыть проект…", onOpenFolder, icon = Icons.Outlined.FolderOpen, style = ControlStyle.OUTLINE, trailing = "⌘ O")
-                if (recent.isNotEmpty()) {
-                    Spacer(Modifier.height(30.dp))
-                    SectionLabel("Недавние проекты")
-                    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).border(1.dp, c.border, RoundedCornerShape(12.dp)).padding(vertical = 4.dp)) {
-                        recent.forEach { path -> RecentProjectRow(path) { onOpenPath(path) } }
-                    }
+                Text("Что будем создавать?", fontSize = if (tight) 22.sp else 26.sp, lineHeight = if (tight) 30.sp else 34.sp, letterSpacing = (-.6).sp, fontWeight = FontWeight.Medium, color = c.text, textAlign = TextAlign.Center)
+                if (!hasHistory) {
+                    Spacer(Modifier.height(8.dp))
+                    Text("Откройте папку проекта — или перетащите её в окно", color = c.muted, fontSize = 13.sp, lineHeight = 20.sp, textAlign = TextAlign.Center)
+                    Spacer(Modifier.height(20.dp))
+                    ChillerControl("Открыть проект…", onOpenFolder, icon = Icons.Outlined.FolderOpen, style = ControlStyle.OUTLINE, trailing = "⌘ O", inlineTrailing = true)
                 }
+                Spacer(Modifier.height(if (tight) 18.dp else 26.dp))
+                resume?.let { item ->
+                    SectionLabel("Продолжить")
+                    ResumeCard(item) { onResume(item.sessionId) }
+                    Spacer(Modifier.height(16.dp))
+                }
+                if (recent.isNotEmpty()) {
+                    Row(Modifier.fillMaxWidth().padding(bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text("Недавние проекты", color = c.muted, fontSize = 12.sp, lineHeight = 18.sp, modifier = Modifier.weight(1f).padding(start = 4.dp))
+                        ChillerControl("Открыть другой…", onOpenFolder, icon = Icons.Outlined.FolderOpen, trailing = "⌘ O", inlineTrailing = true)
+                    }
+                    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(c.surface).border(1.dp, c.border, RoundedCornerShape(12.dp)).padding(4.dp)) {
+                        recent.take(if (tight) 3 else 5).forEach { project -> RecentProjectRow(project) { onOpenPath(project.path) } }
+                    }
+                    Spacer(Modifier.height(16.dp))
+                } else if (hasHistory) {
+                    ChillerControl("Открыть проект…", onOpenFolder, icon = Icons.Outlined.FolderOpen, style = ControlStyle.OUTLINE, trailing = "⌘ O", inlineTrailing = true)
+                    Spacer(Modifier.height(16.dp))
+                }
+                connection?.let { ConnectionRow(modelName, connectionLine, connectionColor, it); Spacer(Modifier.height(16.dp)) }
+                if (!tight) ShortcutHints()
             } else {
                 val name = Path.of(workspacePath).fileName?.toString() ?: workspacePath
                 Text("Что сделаем в $name?", fontSize = 24.sp, lineHeight = 32.sp, letterSpacing = (-.6).sp, fontWeight = FontWeight.Medium, color = c.text, textAlign = TextAlign.Center, maxLines = 2, overflow = TextOverflow.Ellipsis)
@@ -95,6 +119,7 @@ internal fun StartScreen(
                     }
                 }
             }
+        }
         }
     }
 }
@@ -123,17 +148,84 @@ private fun SectionLabel(text: String) {
 }
 
 @Composable
-private fun RecentProjectRow(path: String, onClick: () -> Unit) {
+private fun RecentProjectRow(project: RecentProject, onClick: () -> Unit) {
     val c = LocalChillerPalette.current
-    val exists = remember(path) { Files.isDirectory(Path.of(path)) }
-    HoverRow(onClick, enabled = exists, modifier = Modifier.padding(horizontal = 4.dp)) {
-        Icon(Icons.Outlined.Folder, null, Modifier.size(16.dp), tint = if (exists) c.muted else c.faint)
-        Spacer(Modifier.width(11.dp))
-        Column(Modifier.weight(1f)) {
-            Text(Path.of(path).fileName?.toString() ?: path, color = if (exists) c.text else c.faint, fontSize = 13.sp, lineHeight = 18.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(if (exists) homeRelative(path) else "Папка не найдена · ${homeRelative(path)}", color = c.faint, fontSize = 11.sp, lineHeight = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    val exists = remember(project.path) { Files.isDirectory(Path.of(project.path)) }
+    HoverRow(onClick, enabled = exists) {
+        Box(Modifier.size(30.dp).clip(RoundedCornerShape(8.dp)).background(if (exists) c.accent.copy(alpha = .10f) else c.hover), contentAlignment = Alignment.Center) {
+            Icon(Icons.Outlined.Folder, null, Modifier.size(15.dp), tint = if (exists) c.accent else c.faint)
         }
-        if (exists) Icon(Icons.AutoMirrored.Outlined.ArrowForward, null, Modifier.size(14.dp), tint = c.faint)
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(Path.of(project.path).fileName?.toString() ?: project.path, color = if (exists) c.text else c.faint, fontSize = 13.sp, lineHeight = 18.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(if (exists) homeRelative(project.path) else "Папка не найдена · ${homeRelative(project.path)}", color = c.faint, fontSize = 11.sp, lineHeight = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        if (project.dialogs > 0) Text("${project.dialogs} ${plural(project.dialogs, "диалог", "диалога", "диалогов")}" + (project.lastActive?.let { relativeAge(it) }?.takeIf { it.isNotEmpty() }?.let { " · $it" } ?: ""),
+            color = c.faint, fontSize = 11.sp, lineHeight = 15.sp, modifier = Modifier.padding(start = 8.dp))
+        if (exists) { Spacer(Modifier.width(10.dp)); Icon(Icons.AutoMirrored.Outlined.ArrowForward, null, Modifier.size(14.dp), tint = c.faint) }
+    }
+}
+
+/** The most recent dialog, offered on the empty screen. Opening it restores its folder. */
+data class ResumeItem(val sessionId: String, val title: String, val updatedAt: String, val project: String?)
+
+@Composable
+private fun ResumeCard(item: ResumeItem, onClick: () -> Unit) {
+    val c = LocalChillerPalette.current
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    val shape = RoundedCornerShape(12.dp)
+    Row(
+        Modifier.fillMaxWidth().clip(shape).background(if (hovered) c.hover else c.surface).border(1.dp, if (hovered) c.muted.copy(alpha = .35f) else c.border, shape)
+            .hoverable(interaction).pointerHoverIcon(PointerIcon.Hand)
+            .clickable(interactionSource = interaction, indication = null, role = Role.Button, onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.size(30.dp).clip(RoundedCornerShape(8.dp)).background(c.sidebar), contentAlignment = Alignment.Center) {
+            Icon(Icons.AutoMirrored.Outlined.Chat, null, Modifier.size(15.dp), tint = c.muted)
+        }
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(item.title.ifBlank { "Новый диалог" }, color = c.text, fontSize = 13.sp, lineHeight = 18.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(listOfNotNull(relativeAge(item.updatedAt).takeIf { it.isNotEmpty() }, item.project?.let { Path.of(it).fileName?.toString() }).joinToString(" · "),
+                color = c.faint, fontSize = 11.sp, lineHeight = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        Text("Открыть", color = c.muted, fontSize = 12.sp)
+        Spacer(Modifier.width(6.dp))
+        Icon(Icons.AutoMirrored.Outlined.ArrowForward, null, Modifier.size(14.dp), tint = c.muted)
+    }
+}
+
+/** Shown while the model is not verified: one line with the state and the action that fixes it. */
+class ConnectionPrompt(val actionLabel: String, val onAction: () -> Unit)
+
+@Composable
+private fun ConnectionRow(modelName: String, line: String, color: Color, prompt: ConnectionPrompt) {
+    val c = LocalChillerPalette.current
+    Row(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(c.sidebar.copy(alpha = .7f)).padding(start = 14.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.size(7.dp).clip(RoundedCornerShape(50)).background(color))
+        Spacer(Modifier.width(10.dp))
+        Text(modelName, color = c.text, fontSize = 12.sp, lineHeight = 18.sp, maxLines = 1)
+        Text(" · $line", color = c.muted, fontSize = 12.sp, lineHeight = 18.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+        ChillerControl(prompt.actionLabel, prompt.onAction)
+    }
+}
+
+@Composable
+private fun ShortcutHints() {
+    val c = LocalChillerPalette.current
+    Row(horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically) {
+        listOf("⌘ O" to "проект", "⌘ K" to "поиск", "⌘ N" to "новый диалог", "⌘ ↵" to "отправить").forEach { (keys, label) ->
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(keys, color = c.muted, fontSize = 11.sp, lineHeight = 15.sp, modifier = Modifier.clip(RoundedCornerShape(5.dp)).border(1.dp, c.border, RoundedCornerShape(5.dp)).padding(horizontal = 5.dp, vertical = 1.dp))
+                Spacer(Modifier.width(6.dp))
+                Text(label, color = c.faint, fontSize = 11.sp, lineHeight = 15.sp)
+            }
+        }
     }
 }
 

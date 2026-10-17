@@ -35,7 +35,7 @@ data class ModelCatalogState(
     val fetchedAt: String? = null,
     val stale: Boolean = false,
 )
-data class DesktopState(val run: RunState = RunState(), val sessions: List<SessionInfo> = emptyList(), val sessionId: String = newId(), val settings: DesktopSettings = DesktopSettings(), val apiKeyConfigured: Boolean = false, val allowProcesses: Boolean = false, val exportContent: String? = null, val exportFormat: String = "markdown", val exportSessionId: String? = null, val uiPreferences: UiPreferences = UiPreferences(), val connection: ConnectionState = ConnectionState(), val catalog: ModelCatalogState = ModelCatalogState())
+data class DesktopState(val run: RunState = RunState(), val sessions: List<SessionInfo> = emptyList(), val sessionId: String = newId(), val settings: DesktopSettings = DesktopSettings(), val apiKeyConfigured: Boolean = false, val allowProcesses: Boolean = false, val exportContent: String? = null, val exportFormat: String = "markdown", val exportSessionId: String? = null, val uiPreferences: UiPreferences = UiPreferences(), val connection: ConnectionState = ConnectionState(), val catalog: ModelCatalogState = ModelCatalogState(), val sessionWorkspaces: Map<String, String> = emptyMap())
 
 class DesktopController(private val directory: Path, initialCredential: String? = LocalCredentials.load(), connectionChecker: ConnectionChecker? = null, catalogClient: ModelCatalogClient? = null) {
     private val commands = Mutex()
@@ -77,7 +77,8 @@ class DesktopController(private val directory: Path, initialCredential: String? 
         }
         if (!sameOrigin(settings.baseUrl, "https://api.deepseek.com")) credential = null
         settings = rememberModel(settings, settings.baseUrl, settings.model)
-        _state.update { it.copy(settings = settings, sessions = events.list(), uiPreferences = preferencesStore.load(), apiKeyConfigured = credential != null, connection = connectionForUnverified()) }
+        refreshSessions()
+        _state.update { it.copy(settings = settings, uiPreferences = preferencesStore.load(), apiKeyConfigured = credential != null, connection = connectionForUnverified()) }
         saveSettings(settings)
     }
 
@@ -363,6 +364,7 @@ class DesktopController(private val directory: Path, initialCredential: String? 
         })
         if (events.read(s.sessionId).none { it.type == "session.workspace" })
             events.append(s.sessionId, "session.workspace", buildJsonObject { put("root", workspace.root) })
+        _state.update { it.copy(sessionWorkspaces = it.sessionWorkspaces + (s.sessionId to workspace.root)) }
         observer = scope.launch { combine(engine.state, questions.question) { run, question -> run.copy(question = run.question ?: question) }.collect { run -> _state.update { it.copy(run = run) } } }
         return engine
     }
@@ -382,7 +384,14 @@ class DesktopController(private val directory: Path, initialCredential: String? 
                 .onFailure { Files.move(temp, target, StandardCopyOption.REPLACE_EXISTING) }
         } finally { Files.deleteIfExists(temp) }
     }
-    private suspend fun refreshSessions() { val sessions = events.list(); _state.update { it.copy(sessions = sessions) } }
+    private suspend fun refreshSessions() {
+        val sessions = events.list()
+        val known = _state.value.sessionWorkspaces
+        val roots = known + sessions.take(MAX_SESSION_ROOTS).filter { it.id !in known }.mapNotNull { session ->
+            runCatching { events.findEarly(session.id, "session.workspace")?.payload?.get("root")?.jsonPrimitive?.contentOrNull }.getOrNull()?.let { session.id to it }
+        }
+        _state.update { it.copy(sessions = sessions, sessionWorkspaces = roots) }
+    }
     private fun showError(message: String) { _state.update { it.copy(run = it.run.copy(status = "failed", error = message)) } }
     private fun cachedReceipt(requestId: String): SendReceipt? = synchronized(sendReceiptsLock) { sendReceipts[requestId] }
     private fun rememberReceipt(receipt: SendReceipt) = synchronized(sendReceiptsLock) {
@@ -446,5 +455,5 @@ class DesktopController(private val directory: Path, initialCredential: String? 
         else -> message
     }
 
-    private companion object { const val MAX_MODEL_LENGTH = 200; const val MAX_RECENT_WORKSPACES = 6 }
+    private companion object { const val MAX_MODEL_LENGTH = 200; const val MAX_RECENT_WORKSPACES = 6; const val MAX_SESSION_ROOTS = 60 }
 }

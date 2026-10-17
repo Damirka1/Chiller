@@ -77,6 +77,20 @@ class JsonlEventStore(private val directory: Path) : EventStore {
         }
     }.getOrDefault(false)
 
+    /**
+     * The first event of [type] within the first [maxLines] journal lines, without reading the whole session.
+     * Used for metadata written early in a session, such as `session.workspace`. Malformed lines are skipped.
+     */
+    suspend fun findEarly(sessionId: String, type: String, maxLines: Int = 400): StoredEvent? = withContext(Dispatchers.IO) {
+        val file = file(sessionId)
+        if (!Files.isRegularFile(file)) return@withContext null
+        Files.newBufferedReader(file, Charsets.UTF_8).use { reader ->
+            generateSequence { reader.readLine() }.take(maxLines)
+                .filter { it.contains("\"$type\"") }
+                .firstNotNullOfOrNull { line -> runCatching { codec.decodeFromString<StoredEvent>(line) }.getOrNull()?.takeIf { it.type == type } }
+        }
+    }
+
     override suspend fun list(): List<SessionInfo> = mutex.withLock {
         withContext(Dispatchers.IO) {
             val ids = Files.list(directory).use { paths -> paths.filter { Files.isDirectory(it) }.map { it.fileName.toString() }.toList() }

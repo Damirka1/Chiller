@@ -63,3 +63,17 @@ fun filterSessions(sessions: List<SessionInfo>, query: String): List<SessionInfo
     val q = query.trim()
     return if (q.isEmpty()) sessions else sessions.filter { it.title.contains(q, ignoreCase = true) }
 }
+
+data class RecentProject(val path: String, val dialogs: Int, val lastActive: String?)
+
+/**
+ * Recent projects from both sources: folders opened in settings and folders recorded by dialogs.
+ * Ordered by the latest dialog activity; folders without dialogs keep their settings order after them.
+ */
+fun recentProjects(settingsRecent: List<String>, sessions: List<SessionInfo>, sessionWorkspaces: Map<String, String>, limit: Int = 5): List<RecentProject> {
+    val byRoot = sessions.mapNotNull { s -> sessionWorkspaces[s.id]?.let { it to s } }.groupBy({ it.first }, { it.second })
+    val active = byRoot.map { (root, list) -> RecentProject(root, list.size, list.maxOfOrNull { it.updatedAt }) }
+        .sortedByDescending { it.lastActive.orEmpty() }
+    val idle = settingsRecent.filter { it !in byRoot }.map { RecentProject(it, 0, null) }
+    return (active + idle).distinctBy { it.path }.take(limit)
+}

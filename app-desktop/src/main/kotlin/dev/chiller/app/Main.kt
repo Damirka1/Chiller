@@ -86,7 +86,7 @@ fun main() = application {
             onNewSession = { scope.launch { controller.newSession() } },
             onSelectSession = { scope.launch { controller.selectSession(it) } },
             onChooseWorkspace = chooseWorkspace,
-            recentWorkspaces = state.settings.recentWorkspaces,
+            recentWorkspaces = state.settings.recentWorkspaces, sessionWorkspaces = state.sessionWorkspaces,
             titleBar = titleBar, buildStamp = BuildStamp.value,
             onOpenTrace = {
                 val trace = controller.tracePath(state.sessionId).toFile()

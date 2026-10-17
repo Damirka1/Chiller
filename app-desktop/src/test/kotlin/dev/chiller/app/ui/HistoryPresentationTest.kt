@@ -43,4 +43,12 @@ class HistoryPresentationTest {
         assertEquals(listOf("b"), filterSessions(sessions, " ui ").map { it.id })
         assertEquals(2, filterSessions(sessions, "").size)
     }
+
+    @Test fun recentProjectsMergeDialogRootsAndSettings() {
+        val sessions = listOf(SessionInfo("a", "x", "2026-10-17T10:00:00Z"), SessionInfo("b", "y", "2026-10-17T12:00:00Z"), SessionInfo("c", "z", "2026-10-16T09:00:00Z"))
+        val roots = mapOf("a" to "/p/one", "b" to "/p/two", "c" to "/p/one")
+        val projects = recentProjects(listOf("/p/three", "/p/one"), sessions, roots)
+        assertEquals(listOf("/p/two", "/p/one", "/p/three"), projects.map { it.path })
+        assertEquals(listOf(1, 2, 0), projects.map { it.dialogs })
+    }
 }

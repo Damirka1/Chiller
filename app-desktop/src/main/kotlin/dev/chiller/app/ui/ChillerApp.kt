@@ -62,6 +62,8 @@ import dev.chiller.app.di.ModelCatalogState
 import dev.chiller.contracts.*
 import dev.chiller.design.*
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.serialization.json.*
@@ -96,6 +98,7 @@ fun ChillerApp(
     connection: ConnectionState = ConnectionState(), onCheckConnection: () -> Unit = {}, onCancelConnection: () -> Unit = {},
     catalog: ModelCatalogState = ModelCatalogState(), onRefreshModels: () -> Unit = {}, onCancelCatalogRefresh: () -> Unit = {},
     recentWorkspaces: List<String> = emptyList(), onOpenWorkspace: (String) -> Unit = {},
+    sessionWorkspaces: Map<String, String> = emptyMap(),
     onOpenTrace: (() -> Unit)? = null,
     /** macOS full-window content: the native title bar is transparent and the traffic lights float over the app. */
     titleBar: TitleBarSpec? = null,
@@ -195,11 +198,19 @@ fun ChillerApp(
                                 Column(Modifier.weight(1f).fillMaxHeight()) {
                                     if (empty) {
                                         val (line, color) = connectionSummary(connection, apiKeyConfigured)
+                                        val resume = sessions.firstOrNull { it.id != selectedSessionId }?.let { ResumeItem(it.id, it.title, it.updatedAt, sessionWorkspaces[it.id]) }
                                         StartScreen(
-                                            workspacePath, recentWorkspaces.filter { it != workspacePath }, friendlyModel(providerModel), line, color,
+                                            workspacePath, recentProjects(recentWorkspaces, sessions, sessionWorkspaces).filter { it.path != workspacePath }, friendlyModel(providerModel), line, color,
                                             onOpenFolder = onChooseWorkspace, onOpenPath = { if (!active) onOpenWorkspace(it) },
                                             onStarter = { starter -> updateDraft(starter.prompt); if (starter.needsEdits) mode = ExecutionMode.WORKSPACE_EDIT },
                                             modifier = Modifier.weight(1f).fillMaxWidth(),
+                                            resume = resume, onResume = { if (!active) onSelectSession(it) },
+                                            connection = when {
+                                                connection.status == "verified" -> null
+                                                !apiKeyConfigured -> ConnectionPrompt("Добавить ключ") { settings = true }
+                                                connection.status == "checking" -> null
+                                                else -> ConnectionPrompt("Проверить") { onCheckConnection() }
+                                            },
                                         )
                                     } else {
                                         Conversation(state, reducedMotion, onAnswerQuestion, onUndo, !active, { text -> updateDraft(text); sendError = null }, Modifier.weight(1f).fillMaxWidth())
@@ -266,10 +277,15 @@ private fun Sidebar(
         }
         ChillerControl("Новый диалог", onNew, Modifier.fillMaxWidth(), icon = Icons.Outlined.Add, enabled = enabled, trailing = "⌘ N")
         SidebarSearch(query, { query = it }, searchFocus)
-        Spacer(Modifier.height(12.dp))
-        Text("Проект", color = c.muted, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp))
-        Hint(workspace ?: "Открыть папку проекта") {
-            ChillerControl(workspace?.substringAfterLast('/') ?: "Открыть папку…", onChoose, Modifier.fillMaxWidth(), icon = Icons.Outlined.FolderOpen, style = if (workspace != null) ControlStyle.SELECTED else ControlStyle.QUIET, enabled = enabled, trailing = if (workspace != null) "⌘ O" else null)
+        Spacer(Modifier.height(10.dp))
+        if (workspace == null) {
+            ChillerControl("Открыть проект…", onChoose, Modifier.fillMaxWidth(), icon = Icons.Outlined.FolderOpen, enabled = enabled, trailing = "⌘ O")
+        } else {
+            Text("Проект", color = c.muted, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp))
+            val branch by produceState<String?>(null, workspace) { value = withContext(Dispatchers.IO) { gitBranch(java.nio.file.Path.of(workspace)) } }
+            Hint(homeRelative(workspace)) {
+                ChillerControl(workspace.substringAfterLast('/'), onChoose, Modifier.fillMaxWidth(), icon = Icons.Outlined.FolderOpen, style = ControlStyle.SELECTED, enabled = enabled, trailing = branch)
+            }
         }
         Spacer(Modifier.height(14.dp))
         Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
