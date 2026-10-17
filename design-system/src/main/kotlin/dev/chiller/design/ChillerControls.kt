@@ -26,6 +26,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.key.*
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.layout.Layout
@@ -44,6 +45,20 @@ import kotlin.math.sin
 
 enum class ControlStyle { QUIET, OUTLINE, PRIMARY, SELECTED }
 
+/**
+ * Focus rings are for keyboard navigation. A pointer press hides them, Tab shows them again,
+ * so a clicked button does not keep a ring that looks like a stuck state. Text fields always show focus.
+ */
+object ChillerFocusVisibility {
+    var keyboard by mutableStateOf(false)
+}
+
+/** Apply at a window root: Tab / arrow navigation turns focus rings on. */
+fun Modifier.chillerKeyboardFocusTracking(): Modifier = onPreviewKeyEvent { event ->
+    if (event.type == KeyEventType.KeyDown && event.key in setOf(Key.Tab, Key.DirectionUp, Key.DirectionDown, Key.DirectionLeft, Key.DirectionRight)) ChillerFocusVisibility.keyboard = true
+    false
+}
+
 @Composable
 fun ChillerControl(
     label: String, onClick: () -> Unit, modifier: Modifier = Modifier,
@@ -51,12 +66,16 @@ fun ChillerControl(
     enabled: Boolean = true, trailing: String? = null,
     /** Keeps [trailing] right after the label instead of pinning it to the far edge, so the control stays content-sized. */
     inlineTrailing: Boolean = false,
+    /** A small status dot before the label, e.g. connection state. */
+    dot: Color? = null,
 ) {
     val c = LocalChillerPalette.current
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
     val pressed by interaction.collectIsPressedAsState()
-    var focused by remember { mutableStateOf(false) }
+    LaunchedEffect(pressed) { if (pressed) ChillerFocusVisibility.keyboard = false }
+    var hasFocus by remember { mutableStateOf(false) }
+    val focused = hasFocus && ChillerFocusVisibility.keyboard
     val fill by animateColorAsState(when {
         style == ControlStyle.PRIMARY -> if (pressed) c.text.copy(alpha = .8f) else c.text
         pressed -> c.selected
@@ -69,12 +88,13 @@ fun ChillerControl(
         modifier.defaultMinSize(minHeight = if (LocalChillerCompact.current) 28.dp else 32.dp).clip(RoundedCornerShape(7.dp)).background(fill)
             .then(if (focused || style == ControlStyle.OUTLINE) Modifier.border(if (focused) 2.dp else 1.dp, if (focused) c.focus else c.border, RoundedCornerShape(7.dp)) else Modifier)
             .pointerHoverIcon(PointerIcon.Hand)
-            .onFocusChanged { focused = it.isFocused }
+            .onFocusChanged { hasFocus = it.isFocused }
             .clickable(interactionSource = interaction, indication = null, enabled = enabled, role = Role.Button, onClick = onClick)
             .padding(horizontal = 10.dp, vertical = 5.dp),
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(if (inlineTrailing && trailing != null) 5.dp else 7.dp),
     ) {
         icon?.let { Icon(it, null, Modifier.size(15.dp), tint = foreground.copy(alpha = if (enabled) .85f else .35f)) }
+        dot?.let { Box(Modifier.size(7.dp).clip(CircleShape).background(it)) }
         if (inlineTrailing && trailing != null) {
             InlineTrailingLabel(label, trailing, foreground, if (style == ControlStyle.PRIMARY) c.canvas.copy(alpha = .5f) else c.faint, enabled)
         } else {
@@ -112,9 +132,10 @@ fun ChillerIconButton(icon: ImageVector, label: String, onClick: () -> Unit, mod
     val hovered by interaction.collectIsHoveredAsState()
     val pressed by interaction.collectIsPressedAsState()
     var focused by remember { mutableStateOf(false) }
+    LaunchedEffect(pressed) { if (pressed) ChillerFocusVisibility.keyboard = false }
     val fill by animateColorAsState(when { primary && enabled -> c.text; pressed -> c.selected; hovered && enabled -> c.hover; else -> Color.Transparent }, tween(if (LocalChillerReducedMotion.current) 0 else 100))
     Box(modifier.size(30.dp).clip(RoundedCornerShape(7.dp)).background(fill)
-        .then(if (focused) Modifier.border(2.dp, c.focus, RoundedCornerShape(7.dp)) else Modifier)
+        .then(if (focused && ChillerFocusVisibility.keyboard) Modifier.border(2.dp, c.focus, RoundedCornerShape(7.dp)) else Modifier)
         .pointerHoverIcon(PointerIcon.Hand)
         .onFocusChanged { focused = it.isFocused }
         .clickable(interactionSource = interaction, indication = null, enabled = enabled, role = Role.Button, onClick = onClick)
@@ -129,7 +150,7 @@ fun ChillerToggle(checked: Boolean, onChange: (Boolean) -> Unit, label: String, 
     val offset by animateDpAsState(if (checked) 14.dp else 2.dp, tween(if (LocalChillerReducedMotion.current) 0 else 140))
     var focused by remember { mutableStateOf(false) }
     Box(Modifier.size(34.dp, 20.dp).clip(CircleShape).background(if (checked) c.text else c.border)
-        .then(if (focused) Modifier.border(2.dp, c.focus, CircleShape) else Modifier)
+        .then(if (focused && ChillerFocusVisibility.keyboard) Modifier.border(2.dp, c.focus, CircleShape) else Modifier)
         .onFocusChanged { focused = it.isFocused }
         .pointerHoverIcon(PointerIcon.Hand).clickable(enabled = enabled, role = Role.Switch) { onChange(!checked) }
         .semantics { contentDescription = label }) {
