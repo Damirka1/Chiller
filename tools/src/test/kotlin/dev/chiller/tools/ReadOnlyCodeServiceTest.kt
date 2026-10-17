@@ -12,7 +12,7 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 class ReadOnlyCodeServiceTest {
-    @Test fun findsLexicalSymbolsInFreshNonGitWorkspaceWithIgnores() = runBlocking {
+    @Test fun findsLexicalSymbolsInFreshNonGitWorkspaceWithIgnores() = runBlocking<Unit> {
         val root = Files.createTempDirectory("chiller-symbols-no-git")
         val outside = Files.createTempFile("chiller-outside-symbol", ".kt")
         try {
@@ -33,7 +33,7 @@ class ReadOnlyCodeServiceTest {
         } finally { root.toFile().deleteRecursively(); Files.deleteIfExists(outside) }
     }
 
-    @Test fun fixedGitReadsAndLexicalSymbolsStayBounded() = runBlocking {
+    @Test fun fixedGitReadsAndLexicalSymbolsStayBounded() = runBlocking<Unit> {
         val root = Files.createTempDirectory("chiller-readonly-git")
         try {
             val init = ProcessBuilder("git", "init", "-q").directory(root.toFile()).start()
@@ -71,7 +71,7 @@ class ReadOnlyCodeServiceTest {
         } finally { root.toFile().deleteRecursively() }
     }
 
-    @Test fun refusesWorkspaceNestedInsideLargerRepository() = runBlocking {
+    @Test fun refusesWorkspaceNestedInsideLargerRepository() = runBlocking<Unit> {
         val parent = Files.createTempDirectory("chiller-parent-git")
         val nested = Files.createDirectories(parent.resolve("nested"))
         try {

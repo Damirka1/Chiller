@@ -30,7 +30,7 @@ class RunBudgetProviderTest {
         add(ModelEvent.Completed(AgentMessage("assistant", "ok"), "stop"))
     }
 
-    @Test fun `parent and children reserve from one shared cap concurrently`() = runBlocking {
+    @Test fun `parent and children reserve from one shared cap concurrently`() = runBlocking<Unit> {
         val release = CompletableDeferred<Unit>()
         val bothStarted = CompletableDeferred<Unit>()
         var started = 0
