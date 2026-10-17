@@ -142,6 +142,9 @@ fun ChillerApp(
     comparison: ComparisonModel? = null,
     /** Undo all file changes of one turn (change ids oldest first). */
     onRewindTurn: (List<String>) -> Unit = {},
+    /** Result of the project's check command after the last editing run. */
+    verify: dev.chiller.app.di.VerifyState = dev.chiller.app.di.VerifyState(),
+    onDismissVerify: () -> Unit = {},
     openComparisonOnStart: Boolean = false,
     onOpenTrace: (() -> Unit)? = null,
     /** macOS full-window content: the native title bar is transparent and the traffic lights float over the app. */
@@ -337,6 +340,7 @@ fun ChillerApp(
                                 saveCredential = base.saveCredential, deleteCredential = base.deleteCredential,
                                 refreshCaptureTargets = base.refreshCaptureTargets, selectCaptureTarget = base.selectCaptureTarget,
                                 openComparison = comparison?.let { { settings = false; comparing = true } },
+                                setVerifyCommand = base.setVerifyCommand,
                                 close = { settings = false },
                             ), Modifier.weight(1f).fillMaxWidth(), initial = openSettingsOnStart)
                         } else if (comparing && comparison != null && !active) {
@@ -377,6 +381,7 @@ fun ChillerApp(
                                     Box(Modifier.fillMaxWidth().padding(horizontal = if (compact) 20.dp else 32.dp).padding(top = 6.dp, bottom = 18.dp), contentAlignment = Alignment.Center) {
                                         Column(Modifier.widthIn(max = 760.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                             sendError?.let { Text(it, color = c.negative, fontSize = 12.sp, lineHeight = 18.sp) }
+                                            VerifyBanner(verify, onDismissVerify)
                                             if (demoCompleted) {
                                                 Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(c.sidebar).border(1.dp, c.border, RoundedCornerShape(12.dp)).padding(horizontal = 14.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
                                                     Icon(Icons.Outlined.CheckCircleOutline, null, Modifier.size(17.dp), tint = c.positive)

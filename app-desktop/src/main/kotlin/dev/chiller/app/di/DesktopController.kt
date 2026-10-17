@@ -29,7 +29,9 @@ import java.nio.file.Path
 import java.nio.file.StandardCopyOption
 
 @Serializable
-data class DesktopSettings(val baseUrl: String = "https://api.deepseek.com", val model: String = "deepseek-flash", val thinking: Boolean = false, val workspace: String? = null, val rememberedModels: Map<String, List<String>> = emptyMap(), val recentWorkspaces: List<String> = emptyList(), val agent: AgentOptions = AgentOptions(), val credentialOrigins: List<String> = emptyList())
+data class DesktopSettings(val baseUrl: String = "https://api.deepseek.com", val model: String = "deepseek-flash", val thinking: Boolean = false, val workspace: String? = null, val rememberedModels: Map<String, List<String>> = emptyMap(), val recentWorkspaces: List<String> = emptyList(), val agent: AgentOptions = AgentOptions(), val credentialOrigins: List<String> = emptyList(),
+    /** Check command per project root, e.g. "./gradlew test"; used by auto-verify. */
+    val verifyCommands: Map<String, String> = emptyMap())
 
 /** How the agent runs; applied from the next dialog. Bounded so a typo cannot start an unbounded run. */
 @Serializable
@@ -48,8 +50,11 @@ data class AgentOptions(
     val temperature: Double? = null,
     /** Extra top-level request fields as a JSON object, e.g. vLLM structured-output options. */
     val requestExtras: String = "",
+    /** After an editing run, run the project's check command and send failures back to the agent. */
+    val autoVerify: Boolean = false,
+    val autoVerifyAttempts: Int = 2,
 ) {
-    fun sanitized() = copy(maxRounds = maxRounds.coerceIn(4, 60), maxOutputTokens = maxOutputTokens.coerceIn(1024, 16_384), maxRequests = maxRequests.coerceIn(1, 120), totalOutputTokens = totalOutputTokens.coerceIn(1024, 262144),
+    fun sanitized() = copy(autoVerifyAttempts = autoVerifyAttempts.coerceIn(1, 3), maxRounds = maxRounds.coerceIn(4, 60), maxOutputTokens = maxOutputTokens.coerceIn(1024, 16_384), maxRequests = maxRequests.coerceIn(1, 120), totalOutputTokens = totalOutputTokens.coerceIn(1024, 262144),
         profile = profile.takeIf { it in setOf("auto", "full", "compact") } ?: "auto", temperature = temperature?.coerceIn(0.0, 2.0), requestExtras = requestExtras.take(4000))
 }
 data class SendReceipt(val accepted: Boolean, val sessionId: String, val clientRequestId: String, val reason: String? = null)
@@ -61,7 +66,7 @@ data class ModelCatalogState(
     val fetchedAt: String? = null,
     val stale: Boolean = false,
 )
-data class DesktopState(val run: RunState = RunState(), val sessions: List<SessionInfo> = emptyList(), val sessionId: String = newId(), val settings: DesktopSettings = DesktopSettings(), val apiKeyConfigured: Boolean = false, val allowProcesses: Boolean = false, val exportContent: String? = null, val exportFormat: String = "markdown", val exportSessionId: String? = null, val uiPreferences: UiPreferences = UiPreferences(), val connection: ConnectionState = ConnectionState(), val catalog: ModelCatalogState = ModelCatalogState(), val sessionWorkspaces: Map<String, String> = emptyMap(), val subagents: List<SubagentSnapshot> = emptyList(), val captureTargets: List<CaptureTarget> = emptyList(), val selectedCaptureTarget: String? = null, val activeProfile: String? = null)
+data class DesktopState(val run: RunState = RunState(), val sessions: List<SessionInfo> = emptyList(), val sessionId: String = newId(), val settings: DesktopSettings = DesktopSettings(), val apiKeyConfigured: Boolean = false, val allowProcesses: Boolean = false, val exportContent: String? = null, val exportFormat: String = "markdown", val exportSessionId: String? = null, val uiPreferences: UiPreferences = UiPreferences(), val connection: ConnectionState = ConnectionState(), val catalog: ModelCatalogState = ModelCatalogState(), val sessionWorkspaces: Map<String, String> = emptyMap(), val subagents: List<SubagentSnapshot> = emptyList(), val captureTargets: List<CaptureTarget> = emptyList(), val selectedCaptureTarget: String? = null, val activeProfile: String? = null, val verify: VerifyState = VerifyState())
 
 class DesktopController(
     private val directory: Path, initialCredential: String? = LocalCredentials.load(), connectionChecker: ConnectionChecker? = null, catalogClient: ModelCatalogClient? = null,
@@ -548,7 +553,9 @@ class DesktopController(
                 rememberReceipt(acceptedReceipt)
                 accepted.complete(true)
             }
-            job.invokeOnCompletion { if (!accepted.isCompleted) accepted.complete(false); scope.launch { refreshSessions() } }
+            val changesBefore = _state.value.run.activities.count { it.diff != null && it.status == "completed" }
+            if (!autoVerifySending) autoVerifyAttempt = 0
+            job.invokeOnCompletion { if (!accepted.isCompleted) accepted.complete(false); scope.launch { refreshSessions() }; scope.launch { afterRun(session, mode, changesBefore) } }
             val wasAccepted = accepted.await()
             if (wasAccepted) SendReceipt(true, session, requestId) else rejected("Задача не приняла сообщение")
         } catch (cancelled: CancellationException) { throw cancelled }
@@ -582,6 +589,67 @@ class DesktopController(
         } catch (e: ToolException) { showError("${e.code}: ${e.message}") }
         catch (_: Exception) { showError("Откат не выполнен. Файл мог измениться.") }
     }
+
+    private var autoVerifyAttempt = 0
+    @Volatile private var autoVerifySending = false
+
+    fun setVerifyCommand(root: String, command: String) {
+        scope.launch {
+            commands.withLock {
+                val trimmed = command.trim().take(500)
+                val settings = _state.value.settings.let { it.copy(verifyCommands = if (trimmed.isEmpty()) it.verifyCommands - root else it.verifyCommands + (root to trimmed)) }
+                _state.update { it.copy(settings = settings) }
+                saveSettings(settings)
+            }
+        }
+    }
+
+    /**
+     * The "definition of done" loop: after a completed editing run that changed files, run the project's own
+     * check command (argv, no shell, project root, only with process permission). On failure the agent gets the
+     * output and one more try, up to the configured attempts. Nothing runs when any of these is missing.
+     */
+    private suspend fun afterRun(session: String, mode: ExecutionMode, changesBefore: Int) {
+        val s = _state.value
+        val options = s.settings.agent.sanitized()
+        val root = s.settings.workspace ?: return
+        val command = s.settings.verifyCommands[root]?.takeIf { it.isNotBlank() } ?: return
+        if (!options.autoVerify || mode != ExecutionMode.WORKSPACE_EDIT || !s.allowProcesses || s.sessionId != session) return
+        if (s.run.status != "completed" || s.run.activities.count { it.diff != null && it.status == "completed" } <= changesBefore) return
+        val argv = runCatching { splitCommand(command) }.getOrNull()?.takeIf { it.isNotEmpty() }
+            ?: run { _state.update { it.copy(verify = VerifyState("error", command, message = "Команда проверки не разобрана: проверьте кавычки")) }; return }
+        val attempt = autoVerifyAttempt + 1
+        _state.update { it.copy(verify = VerifyState("running", command, attempt = attempt, maxAttempts = options.autoVerifyAttempts)) }
+        val processes = processService ?: return
+        val started = System.nanoTime()
+        val output = try {
+            processes.start(StartProcessRequest(argv, ".", timeoutMs = 600_000, background = false), "verify-${newId()}")
+        } catch (e: ToolException) {
+            _state.update { it.copy(verify = VerifyState("error", command, attempt = attempt, maxAttempts = options.autoVerifyAttempts, message = "${e.code}: ${e.message}")) }; return
+        } catch (e: Exception) {
+            _state.update { it.copy(verify = VerifyState("error", command, attempt = attempt, maxAttempts = options.autoVerifyAttempts, message = "Не удалось запустить: ${e.message?.take(200)}")) }; return
+        }
+        val duration = (System.nanoTime() - started) / 1_000_000
+        val tail = output.output.takeLast(6000)
+        runCatching { events.append(session, "verify.result", buildJsonObject { put("command", command); put("exitCode", output.exitCode); put("state", output.state); put("durationMs", duration); put("attempt", attempt) }) }
+        if (output.exitCode == 0) {
+            autoVerifyAttempt = 0
+            _state.update { it.copy(verify = VerifyState("passed", command, 0, duration, attempt, options.autoVerifyAttempts, tail)) }
+            return
+        }
+        if (attempt >= options.autoVerifyAttempts) {
+            autoVerifyAttempt = 0
+            _state.update { it.copy(verify = VerifyState("gave_up", command, output.exitCode, duration, attempt, options.autoVerifyAttempts, tail, "Попытки исчерпаны — посмотрите вывод")) }
+            return
+        }
+        autoVerifyAttempt = attempt
+        _state.update { it.copy(verify = VerifyState("failed", command, output.exitCode, duration, attempt, options.autoVerifyAttempts, tail, "Отправил агенту вывод ошибки")) }
+        autoVerifySending = true
+        try { send(verificationFollowUp(command, output.exitCode, output.state, tail, attempt, options.autoVerifyAttempts), ExecutionMode.WORKSPACE_EDIT) }
+        finally { autoVerifySending = false }
+    }
+
+    fun dismissVerify() { _state.update { it.copy(verify = VerifyState()) } }
 
     /** Outcome of rewinding a turn: how many changes were undone and why the others were not. */
     data class RewindResult(val undone: Int, val failed: List<String>)

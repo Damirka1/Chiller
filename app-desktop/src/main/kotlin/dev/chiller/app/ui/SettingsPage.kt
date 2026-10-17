@@ -49,6 +49,8 @@ data class SettingsData(
     val recent: List<String> = emptyList(), val dataDir: String = "", val demoCount: Int = 0,
     val version: String = "dev", val build: String = "", val commit: String = "", val runtime: String = "", val os: String = "",
     val captureTargets: List<CaptureTarget> = emptyList(), val selectedCaptureTarget: String? = null, val screenshotSupported: Boolean = false,
+    /** The open project, its saved check command and a suggestion from its build files. */
+    val workspace: String? = null, val verifyCommand: String = "", val suggestedVerifyCommand: String? = null,
 )
 
 class SettingsActions(
@@ -58,6 +60,7 @@ class SettingsActions(
     val removeRecent: (String) -> Unit = {}, val openPath: (String) -> Unit = {}, val openUrl: (String) -> Unit = {},
     val deleteDemos: () -> Unit = {},
     val openComparison: (() -> Unit)? = null, val close: () -> Unit = {},
+    val setVerifyCommand: (root: String, command: String) -> Unit = { _, _ -> },
     val saveCredential: () -> Unit = {}, val deleteCredential: () -> Unit = {},
     val refreshCaptureTargets: () -> Unit = {}, val selectCaptureTarget: (String) -> Unit = {},
 )
@@ -224,6 +227,7 @@ private fun AgentSection(data: SettingsData, actions: SettingsActions) {
     val c = LocalChillerPalette.current
     val a = data.agent
     ProfileCard(data, actions)
+    VerifyCard(data, actions)
     Card {
         SectionTitle("Лимиты прогона", "Ограничивают одну задачу. Применяются со следующего диалога.")
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -278,6 +282,32 @@ private fun AgentSection(data: SettingsData, actions: SettingsActions) {
 }
 
 private fun formatK(v: Int) = if (v >= 1024) "${v / 1024}k" else "$v"
+
+/** Auto-verify: the project's own check command runs after editing runs; failures go back to the agent. */
+@Composable
+private fun VerifyCard(data: SettingsData, actions: SettingsActions) {
+    val c = LocalChillerPalette.current
+    val a = data.agent
+    Card {
+        SectionTitle("Автопроверка", "После задачи в режиме «Изменения», если агент менял файлы, запускается команда проверки проекта. Если она падает, агент получает вывод и исправляет — не больше заданного числа попыток.")
+        SettingToggle("Проверять после правок", "Нужны включённые «Команды процессов». Команда запускается без shell, в корне проекта", a.autoVerify) { actions.agent(a.copy(autoVerify = it)) }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Попыток исправления", color = c.text, fontSize = 13.sp, modifier = Modifier.weight(1f))
+            listOf(1, 2, 3).forEach { n -> ChillerControl("$n", { actions.agent(a.copy(autoVerifyAttempts = n)) }, style = if (a.autoVerifyAttempts == n) ControlStyle.SELECTED else ControlStyle.QUIET) }
+        }
+        val root = data.workspace
+        if (root == null) Text("Откройте проект, чтобы задать его команду проверки.", color = c.faint, fontSize = 11.sp)
+        else {
+            var command by remember(root, data.verifyCommand) { mutableStateOf(data.verifyCommand) }
+            ChillerField(command, { command = it }, "Команда проверки для ${root.substringAfterLast('/')}", data.suggestedVerifyCommand ?: "например, ./gradlew test")
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                ChillerControl("Сохранить", { actions.setVerifyCommand(root, command) }, style = ControlStyle.OUTLINE, enabled = command.trim() != data.verifyCommand)
+                data.suggestedVerifyCommand?.takeIf { it != command.trim() }?.let { s -> ChillerControl("Подставить «$s»", { command = s }) }
+            }
+            if (a.autoVerify && !data.allowProcesses) Text("Сейчас «Команды процессов» выключены — проверка не запустится.", color = c.negative, fontSize = 11.sp)
+        }
+    }
+}
 
 /** Which harness profile the model gets: toolbox size, prompt style, temperature and raw request extras. */
 @Composable
