@@ -45,6 +45,32 @@ class AgentCoordinatorTest {
         assertEquals("completed", fixture.coordinator.state.value.status)
     }
 
+    @Test fun projectInstructionsAreAStableSystemMessageAndRoundsAreTraced() = runTest {
+        val requests = mutableListOf<ModelRequest>()
+        var round = 0
+        val provider = ScriptedProvider { request -> flow {
+            requests += request
+            if (round++ == 0) {
+                emit(ModelEvent.Usage(TokenUsage(promptTokens = 100, completionTokens = 5)))
+                emit(ModelEvent.Completed(AgentMessage("assistant", null, toolCalls = listOf(ToolCall("c1", "read", "{}"))), "tool_calls"))
+            } else emit(ModelEvent.Completed(AgentMessage("assistant", "done"), "stop"))
+        } }
+        val traced = mutableListOf<JsonObject>()
+        val fixture = fixture(provider, dispatcher = StandardTestDispatcher(testScheduler), instructions = "Run make test.", traces = { traced += it })
+        fixture.coordinator.send("go", ExecutionMode.WORKSPACE_EDIT)
+        advanceUntilIdle()
+        assertEquals("completed", fixture.coordinator.state.value.status)
+        requests.forEach { request ->
+            assertEquals(listOf("system", "system", "system"), request.messages.take(3).map { it.role })
+            assertTrue(request.messages[1].content!!.contains("Run make test."))
+        }
+        assertEquals(listOf(1, 2), traced.map { it.getValue("round").jsonPrimitive.int })
+        assertEquals("tool_calls", traced[0].getValue("finishReason").jsonPrimitive.content)
+        assertEquals(100, traced[0].getValue("usage").jsonObject.getValue("promptTokens").jsonPrimitive.int)
+        assertTrue("toolSchemas" in traced[0] && "toolSchemas" !in traced[1])
+        assertEquals("done", traced[1].getValue("response").jsonObject.getValue("content").jsonPrimitive.content)
+    }
+
     @Test fun legacyMessageJsonWithoutOriginStillDecodes() {
         val legacy = Json.decodeFromString<AgentMessage>("""{"role":"assistant","content":"old reply"}""")
         assertEquals("old reply", legacy.content)
@@ -318,10 +344,12 @@ class AgentCoordinatorTest {
         eventStore: MemoryEvents = MemoryEvents(),
         dispatcher: kotlinx.coroutines.CoroutineDispatcher = StandardTestDispatcher(),
         model: String = "model",
+        instructions: String? = null,
+        traces: RunTraceSink? = null,
     ): Fixture {
         val scope = CoroutineScope(SupervisorJob() + dispatcher)
         val processes = RecordingProcesses()
-        return Fixture(AgentCoordinator(provider, tools, eventStore, processes, "session", model, scope = scope), processes)
+        return Fixture(AgentCoordinator(provider, tools, eventStore, processes, "session", model, projectInstructions = instructions, traces = traces, scope = scope), processes)
     }
 
     private data class Fixture(val coordinator: AgentCoordinator, val processes: RecordingProcesses)

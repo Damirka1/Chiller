@@ -76,6 +76,15 @@ fun main() = application {
             onSelectSession = { scope.launch { controller.selectSession(it) } },
             onChooseWorkspace = chooseWorkspace,
             recentWorkspaces = state.settings.recentWorkspaces,
+            onOpenTrace = {
+                val trace = controller.tracePath(state.sessionId).toFile()
+                runCatching {
+                    val desktop = java.awt.Desktop.getDesktop()
+                    if (trace.exists() && desktop.isSupported(java.awt.Desktop.Action.BROWSE_FILE_DIR)) desktop.browseFileDirectory(trace)
+                    else trace.parentFile.also { it.mkdirs() }.let(desktop::open)
+                }
+                Unit
+            },
             onOpenWorkspace = { path -> scope.launch { controller.chooseWorkspace(java.nio.file.Path.of(path)) } },
             onConfigureProvider = { url, model, thinking, key -> controller.configure(url, model, thinking, key); controller.state.value.sessionId },
             onAnswerQuestion = controller::answer,

@@ -88,6 +88,7 @@ fun ChillerApp(
     connection: ConnectionState = ConnectionState(), onCheckConnection: () -> Unit = {}, onCancelConnection: () -> Unit = {},
     catalog: ModelCatalogState = ModelCatalogState(), onRefreshModels: () -> Unit = {}, onCancelCatalogRefresh: () -> Unit = {},
     recentWorkspaces: List<String> = emptyList(), onOpenWorkspace: (String) -> Unit = {},
+    onOpenTrace: (() -> Unit)? = null,
 ) {
     val systemDark = isSystemInDarkTheme()
     var view by remember { mutableStateOf(preferences) }
@@ -210,7 +211,7 @@ fun ChillerApp(
                             ) {
                                 Row(if (compact) Modifier.fillMaxSize() else Modifier.width(inspectorWidth).fillMaxHeight()) {
                                     if (!compact) Box(Modifier.width(10.dp).fillMaxHeight().background(c.sidebar).pointerHoverIcon(PointerIcon(java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.E_RESIZE_CURSOR))).semantics { contentDescription = "Ширина панели изменений" }.draggable(inspectorResize, Orientation.Horizontal, onDragStopped = { onPreferences(view) }))
-                                    Inspector(state, onUndo, !active, reducedMotion, Modifier.weight(1f).fillMaxHeight(), selectedActivityId, { selectedActivityId = it }, { delta -> updateView(view.copy(inspectorWidth = (view.inspectorWidth + delta).coerceIn(280f, 480f))) })
+                                    Inspector(state, onOpenTrace, onUndo, !active, reducedMotion, Modifier.weight(1f).fillMaxHeight(), selectedActivityId, { selectedActivityId = it }, { delta -> updateView(view.copy(inspectorWidth = (view.inspectorWidth + delta).coerceIn(280f, 480f))) })
                                 }
                             }
                         }
@@ -615,7 +616,7 @@ private fun CodeBlock(code: String, language: String) {
 }
 
 @Composable
-private fun Inspector(run: RunState, onUndo: (String) -> Unit, canUndo: Boolean, reduced: Boolean, modifier: Modifier, selectedId: String?, onSelected: (String) -> Unit, onWidth: (Float) -> Unit) {
+private fun Inspector(run: RunState, onOpenTrace: (() -> Unit)?, onUndo: (String) -> Unit, canUndo: Boolean, reduced: Boolean, modifier: Modifier, selectedId: String?, onSelected: (String) -> Unit, onWidth: (Float) -> Unit) {
     val c = LocalChillerPalette.current
     val activities = run.activities
     var tab by remember { mutableStateOf("changes") }
@@ -634,7 +635,7 @@ private fun Inspector(run: RunState, onUndo: (String) -> Unit, canUndo: Boolean,
                 ChillerIconButton(Icons.Outlined.KeyboardArrowLeft, "Расширить панель", { onWidth(24f) })
                 ChillerIconButton(Icons.Outlined.KeyboardArrowRight, "Сузить панель", { onWidth(-24f) })
             }
-            if (tab == "run") RunPanel(run, Modifier.weight(1f).fillMaxWidth())
+            if (tab == "run") RunPanel(run, Modifier.weight(1f).fillMaxWidth(), onOpenTrace)
             else if (shown.isEmpty()) Box(Modifier.weight(1f).fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Icon(Icons.Outlined.Difference, null, Modifier.size(23.dp), tint = c.faint)

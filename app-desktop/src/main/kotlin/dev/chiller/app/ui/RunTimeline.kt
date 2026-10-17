@@ -274,7 +274,7 @@ private fun toolIcon(name: String): ImageVector = when (name) {
 
 /** Studio's run tab: the counters the engine reports for the latest run, and its last visible reasoning. */
 @Composable
-internal fun RunPanel(state: RunState, modifier: Modifier) {
+internal fun RunPanel(state: RunState, modifier: Modifier, onOpenTrace: (() -> Unit)? = null) {
     val c = LocalChillerPalette.current
     Column(modifier.verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         if (state.modelRounds == 0 && state.status == "idle") {
@@ -300,6 +300,7 @@ internal fun RunPanel(state: RunState, modifier: Modifier) {
             "Контекст ≈" to (state.contextEstimatedTokens?.let { compactTokens(it.toLong()) } ?: "—"),
         ))
         Text("Токены — как их сообщил провайдер; «—» значит, что значение не пришло. Контекст — оценка по символам / 4.", color = c.faint, fontSize = 11.sp, lineHeight = 16.sp)
+        onOpenTrace?.let { ChillerControl("Трассировка запросов", it, icon = Icons.Outlined.ReceiptLong, style = ControlStyle.OUTLINE) }
         latestPlan(state)?.let { steps ->
             Text("План модели · ${steps.count { it.second == "done" }}/${steps.size}", color = c.muted, fontSize = 12.sp)
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {

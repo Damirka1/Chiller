@@ -7,6 +7,7 @@ import dev.chiller.runtime.LocalProcessService
 import dev.chiller.sessions.*
 import dev.chiller.tools.BuiltinTools
 import dev.chiller.workspace.LocalWorkspace
+import dev.chiller.workspace.ProjectInstructions
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.cio.CIO
 import io.ktor.client.plugins.HttpTimeout
@@ -336,6 +337,10 @@ class DesktopController(private val directory: Path, initialCredential: String? 
         catch (_: Exception) { showError("Откат не выполнен. Файл мог измениться.") }
     }
 
+    /** Per-session trace of model rounds under the app data directory. */
+    fun tracePath(sessionId: String): Path = directory.resolve("traces").resolve("$sessionId.jsonl")
+    private fun traceSink(sessionId: String): RunTraceSink { val file = TraceFile(tracePath(sessionId)); return RunTraceSink { file.append(it) } }
+
     private suspend fun buildEngine(): AgentCoordinator {
         val s = _state.value
         val root = Path.of(s.settings.workspace ?: throw IllegalStateException("Choose workspace"))
@@ -349,8 +354,13 @@ class DesktopController(private val directory: Path, initialCredential: String? 
             ChatCompletionsProfile.deepSeekFlash(s.settings.baseUrl, s.settings.model)
         else ChatCompletionsProfile("generic", s.settings.baseUrl, s.settings.model)
         val provider = ChatCompletionsProvider(http, profile) { credential }
-        val engine = AgentCoordinator(provider, tools, events, processes, s.sessionId, s.settings.model, s.settings.thinking, scope = scope)
+        // Read once per engine: an edit to AGENTS.md applies from the next dialog.
+        val instructions = withContext(Dispatchers.IO) { ProjectInstructions.load(root) }
+        val engine = AgentCoordinator(provider, tools, events, processes, s.sessionId, s.settings.model, s.settings.thinking, projectInstructions = instructions?.text, traces = traceSink(s.sessionId), scope = scope)
         coordinator = engine
+        if (instructions != null) events.append(s.sessionId, "context.instructions", buildJsonObject {
+            put("sources", JsonArray(instructions.sources.map(::JsonPrimitive))); put("truncated", instructions.truncated)
+        })
         if (events.read(s.sessionId).none { it.type == "session.workspace" })
             events.append(s.sessionId, "session.workspace", buildJsonObject { put("root", workspace.root) })
         observer = scope.launch { combine(engine.state, questions.question) { run, question -> run.copy(question = run.question ?: question) }.collect { run -> _state.update { it.copy(run = run) } } }
