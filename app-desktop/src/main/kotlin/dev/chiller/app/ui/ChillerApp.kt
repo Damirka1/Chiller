@@ -336,6 +336,7 @@ private fun Composer(
 ) {
     val c = LocalChillerPalette.current
     var focused by remember { mutableStateOf(false) }
+    var modelMenu by remember { mutableStateOf(false) }
     var field by remember { mutableStateOf(TextFieldValue(draft)) }
     LaunchedEffect(draft) { if (field.text != draft) { field = TextFieldValue(draft, TextRange(draft.length)); onComposition(false) } }
     // Empty block: 26 dp text + 20 dp vertical padding + 6 dp gap + 32 dp toolbar = 84 dp. The text area grows to 144 dp
@@ -343,34 +344,96 @@ private fun Composer(
     val fieldMaxHeight = 144.dp
     val shape = RoundedCornerShape(16.dp)
     val borderColor by animateColorAsState(if (focused) c.muted.copy(alpha = .55f) else c.border, tween(if (LocalChillerReducedMotion.current) 0 else 120))
-    Column(modifier.shadow(3.dp, shape, ambientColor = c.text.copy(alpha = .04f), spotColor = c.text.copy(alpha = .04f)).clip(shape).background(c.surface).border(1.dp, borderColor, shape).padding(horizontal = 12.dp, vertical = 10.dp)) {
+    Column(
+        modifier.shadow(3.dp, shape, ambientColor = c.text.copy(alpha = .04f), spotColor = c.text.copy(alpha = .04f)).clip(shape).background(c.surface)
+            .border(1.dp, borderColor, shape).padding(horizontal = 12.dp, vertical = 10.dp)
+            .onPreviewKeyEvent { event -> if (modelMenu && event.type == KeyEventType.KeyDown && event.key == Key.Escape) { modelMenu = false; true } else false }
+    ) {
         BasicTextField(field, { field = it; onDraft(it.text); onComposition(it.composition != null) },
             modifier = Modifier.fillMaxWidth().heightIn(min = 26.dp, max = fieldMaxHeight).onFocusChanged { focused = it.isFocused }.verticalScroll(rememberScrollState()),
             textStyle = TextStyle(color = c.text, fontSize = 14.sp, lineHeight = 22.sp, letterSpacing = 0.sp), cursorBrush = SolidColor(c.text),
             decorationBox = { inner -> Box { if (draft.isEmpty()) Text("Напишите задачу…", color = c.faint, fontSize = 14.sp, lineHeight = 22.sp); inner() } },
         )
+        if (modelMenu) {
+            Spacer(Modifier.height(6.dp))
+            ModelPanel(
+                model = model, models = models, configured = configured, running = running, catalog = catalog,
+                onRefresh = onRefreshModels, onCancelRefresh = onCancelCatalogRefresh,
+                onClose = { modelMenu = false }, onModel = onModel,
+                onSettings = { modelMenu = false; onSettings() },
+            )
+        }
         Spacer(Modifier.height(6.dp))
-        ComposerToolbar(mode, onMode, model, models, configured, running, pending, draft.isNotBlank(), contextNote, catalog, onRefreshModels, onCancelCatalogRefresh, allowProcesses, onAllow, onSettings, onModel, onSend, onStop)
+        ComposerToolbar(mode, onMode, model, running, pending, draft.isNotBlank(), contextNote, modelMenu, { modelMenu = !modelMenu }, allowProcesses, onAllow, onSend, onStop)
+    }
+}
+
+/**
+ * The model picker expands inside the composer above the toolbar. An inline panel cannot be
+ * positioned away from its anchor, which removes the floating-popup failure mode entirely.
+ */
+@Composable
+private fun ModelPanel(
+    model: String, models: List<String>, configured: Boolean, running: Boolean, catalog: ModelCatalogState,
+    onRefresh: () -> Unit, onCancelRefresh: () -> Unit, onClose: () -> Unit, onModel: (String) -> Unit, onSettings: () -> Unit,
+) {
+    val c = LocalChillerPalette.current
+    var filter by remember { mutableStateOf("") }
+    val panelShape = RoundedCornerShape(10.dp)
+    val discovered = catalog.models.map { it.id }
+    val known = (listOf(model) + discovered + models).distinct().take(20)
+    val query = filter.trim()
+    val shown = if (query.isEmpty()) known else known.filter { it.contains(query, true) || modelLabel(it).contains(query, true) }
+    Column(Modifier.fillMaxWidth().clip(panelShape).background(c.canvas).border(1.dp, c.border, panelShape).padding(6.dp)) {
+        Row(Modifier.fillMaxWidth().padding(start = 8.dp, end = 2.dp, top = 2.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Модели API", color = c.text, fontSize = 12.sp)
+                Text(catalogLine(catalog, configured), color = if (catalog.status == "failed") c.negative else c.muted, fontSize = 11.sp, lineHeight = 15.sp)
+            }
+            if (catalog.status == "loading") ChillerIconButton(Icons.Outlined.Close, "Отменить загрузку списка", onCancelRefresh)
+            else ChillerIconButton(Icons.Outlined.Refresh, "Обновить список моделей", onRefresh, enabled = !running)
+            ChillerIconButton(Icons.Outlined.Close, "Закрыть список моделей", onClose)
+        }
+        Box(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 2.dp).height(1.dp).background(c.border))
+        if (known.size > 6) {
+            Box(Modifier.padding(horizontal = 4.dp, vertical = 4.dp)) {
+                ChillerField(filter, { filter = it }, "Поиск модели", placeholder = "ID или название")
+            }
+        }
+        Column(Modifier.heightIn(max = 210.dp).verticalScroll(rememberScrollState())) {
+            shown.forEach { id ->
+                val source = when { id == model -> null; id in discovered -> "API"; else -> "вручную" }
+                Hint(modelDetail(id, catalog)) {
+                    ChillerControl(modelLabel(id), { onModel(id); onClose() }, Modifier.fillMaxWidth(), icon = if (id == model) Icons.Outlined.Check else null, trailing = source)
+                }
+            }
+            if (shown.isEmpty() && known.isNotEmpty()) {
+                Text("Ничего не найдено по запросу «$filter».", color = c.muted, fontSize = 11.sp, modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp))
+            }
+            if (catalog.status == "ready" && catalog.models.isEmpty()) {
+                Text("Провайдер не вернул ни одной модели. Задайте ID вручную в настройках.", color = c.muted, fontSize = 11.sp, lineHeight = 16.sp, modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp))
+            }
+        }
+        Box(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp).height(1.dp).background(c.border))
+        Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("Смена модели создаёт новый диалог", color = c.muted, fontSize = 11.sp, modifier = Modifier.weight(1f).padding(start = 4.dp))
+            ChillerControl("Настройки", onSettings, icon = Icons.Outlined.Tune)
+        }
     }
 }
 
 @Composable
 private fun ComposerToolbar(
-    mode: ExecutionMode, onMode: (ExecutionMode) -> Unit, model: String, models: List<String>, configured: Boolean, running: Boolean,
-    pending: Boolean, draftNotEmpty: Boolean, contextNote: String?, catalog: ModelCatalogState, onRefreshModels: () -> Unit,
-    onCancelCatalogRefresh: () -> Unit, allowProcesses: Boolean, onAllow: (Boolean) -> Unit,
-    onSettings: () -> Unit, onModel: (String) -> Unit, onSend: () -> Unit, onStop: () -> Unit,
+    mode: ExecutionMode, onMode: (ExecutionMode) -> Unit, model: String, running: Boolean,
+    pending: Boolean, draftNotEmpty: Boolean, contextNote: String?, modelMenuOpen: Boolean, onToggleModel: () -> Unit,
+    allowProcesses: Boolean, onAllow: (Boolean) -> Unit, onSend: () -> Unit, onStop: () -> Unit,
 ) {
     val c = LocalChillerPalette.current
     var modeMenu by remember { mutableStateOf(false) }
-    var modelMenu by remember { mutableStateOf(false) }
-    var modelFilter by remember { mutableStateOf("") }
-    LaunchedEffect(modelMenu) { if (!modelMenu) modelFilter = "" }
     // At larger type the model label needs proportionally more room before the toolbar is allowed to wrap.
     val fontScale = LocalDensity.current.fontScale
     val minModelWidth = (104f * fontScale.coerceIn(1f, 2f)).dp
     val modeMenuWidth = (224f * fontScale.coerceIn(1f, 1.4f)).dp
-    val modelMenuWidth = (300f * fontScale.coerceIn(1f, 1.4f)).dp
     val menuShape = RoundedCornerShape(10.dp)
     Box(Modifier.fillMaxWidth()) {
         Layout(
@@ -380,7 +443,7 @@ private fun ComposerToolbar(
                 }
                 Box {
                     Hint(contextNote?.let { "$model\n$it" } ?: model) {
-                        ChillerControl(friendlyModel(model), { modelMenu = !modelMenu }, enabled = !running, trailing = "⌄", inlineTrailing = true)
+                        ChillerControl(friendlyModel(model), onToggleModel, enabled = !running, trailing = "⌄", inlineTrailing = true, style = if (modelMenuOpen) ControlStyle.SELECTED else ControlStyle.QUIET)
                     }
                 }
                 ChillerIconButton(if (running && !pending) Icons.Outlined.Stop else Icons.Outlined.ArrowUpward, if (pending) "Сохранение сообщения" else if (running) "Остановить" else "Отправить", if (running && !pending) onStop else onSend, enabled = !pending && (running || draftNotEmpty), primary = true)
@@ -425,51 +488,13 @@ private fun ComposerToolbar(
                 }
             }
         }
-        if (modelMenu) Popup(popupPositionProvider = AboveToolbarPositionProvider(alignRight = true, gapPx = menuGap), onDismissRequest = { modelMenu = false }, properties = PopupProperties(focusable = true)) {
-            Column(Modifier.width(modelMenuWidth).shadow(12.dp, menuShape).clip(menuShape).background(c.surface).border(1.dp, c.border, menuShape).padding(6.dp)) {
-                Row(Modifier.fillMaxWidth().padding(start = 8.dp, end = 2.dp, top = 2.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text("Модели API", color = c.text, fontSize = 12.sp)
-                        Text(catalogLine(catalog, configured), color = if (catalog.status == "failed") c.negative else c.muted, fontSize = 11.sp, lineHeight = 15.sp)
-                    }
-                    if (catalog.status == "loading") ChillerIconButton(Icons.Outlined.Close, "Отменить загрузку списка", onCancelCatalogRefresh)
-                    else ChillerIconButton(Icons.Outlined.Refresh, "Обновить список моделей", onRefreshModels, enabled = !running)
-                }
-                Box(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp).height(1.dp).background(c.border))
-                val discovered = catalog.models.map { it.id }
-                val known = (listOf(model) + discovered + models).distinct().take(20)
-                if (known.size > 8) {
-                    Box(Modifier.padding(horizontal = 4.dp, vertical = 2.dp)) {
-                        ChillerField(modelFilter, { modelFilter = it }, "Поиск модели", placeholder = "ID или название")
-                    }
-                }
-                val shown = if (modelFilter.isBlank()) known else known.filter { it.contains(modelFilter.trim(), true) || modelLabel(it).contains(modelFilter.trim(), true) }
-                Column(Modifier.heightIn(max = 288.dp).verticalScroll(rememberScrollState())) {
-                    shown.forEach { id ->
-                        val source = when { id == model -> null; id in discovered -> "API"; else -> "вручную" }
-                        Hint(modelDetail(id, catalog)) {
-                            ChillerControl(modelLabel(id), { modelMenu = false; if (id != model) onModel(id) }, Modifier.fillMaxWidth(), icon = if (id == model) Icons.Outlined.Check else null, trailing = source)
-                        }
-                    }
-                    if (shown.isEmpty() && known.isNotEmpty()) {
-                        Text("Ничего не найдено по запросу «$modelFilter».", color = c.muted, fontSize = 11.sp, modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp))
-                    }
-                    if (catalog.status == "ready" && catalog.models.isEmpty()) {
-                        Text("Провайдер не вернул ни одной модели. Задайте ID вручную в настройках.", color = c.muted, fontSize = 11.sp, lineHeight = 16.sp, modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp))
-                    }
-                }
-                Box(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp).height(1.dp).background(c.border))
-                Text("Смена модели создаёт новый диалог", color = c.muted, fontSize = 11.sp, modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp))
-                ChillerControl("Настройки моделей", { modelMenu = false; onSettings() }, Modifier.fillMaxWidth(), icon = Icons.Outlined.Tune)
-            }
-        }
     }
 }
 
 /**
  * Places a menu fully above the toolbar it belongs to, aligned to the left or right edge
  * of the toolbar and clamped to the window. Compose's built-in alignment aligns popup and
- * anchor bottoms, which made the menu cover the button that opened it.
+ * anchor bottoms, which made a menu cover the button that opened it.
  */
 private class AboveToolbarPositionProvider(private val alignRight: Boolean, private val gapPx: Int) : PopupPositionProvider {
     override fun calculatePosition(anchorBounds: IntRect, windowSize: IntSize, layoutDirection: LayoutDirection, popupContentSize: IntSize): IntOffset {
@@ -482,7 +507,8 @@ private class AboveToolbarPositionProvider(private val alignRight: Boolean, priv
     }
 }
 
-private fun catalogLine(catalog: ModelCatalogState, configured: Boolean): String = when (catalog.status) {    "loading" -> "Загружаю список…"
+private fun catalogLine(catalog: ModelCatalogState, configured: Boolean): String = when (catalog.status) {
+    "loading" -> "Загружаю список…"
     "failed" -> catalog.message.ifBlank { "Список моделей не получен" }
     "ready" -> {
         val base = if (catalog.models.isEmpty()) "Список пуст — задайте ID вручную" else "Моделей: ${catalog.models.size}"
