@@ -9,11 +9,12 @@
 
 | Проверка | Команда | Результат |
 |---|---|---|
-| Юнит-тесты | `./gradlew check` | 138 тестов, 0 падений, 0 skipped |
-| Offline smoke | `./gradlew :evals:offlineSmoke` | пройден: search → read → chained edit → реальные Python-проверки → final → restart → stale-отказ; все 8 eval-проверок падают на нетронутой задаче и проходят на эталоне |
-| Live eval | `./gradlew :evals:liveEval` | `deepseek-flash`, 17.10: **8/8**, 1 прогон на задачу; 32 раунда, 38 tool-вызовов, 0 ошибок, 55.9 с; prompt 75.3k, completion 3.8k, cached 61.4k. Задачи простые, n=1 — это базовая линия, не статистика |
+| Юнит-тесты | `./gradlew check` | 154 теста, 0 падений, 0 skipped (macOS; на Windows POSIX-тесты процессов пропускаются) |
+| Offline smoke | `./gradlew :evals:offlineSmoke` | пройден: search → read → chained edit → реальные Python-проверки → final → restart → stale-отказ; все 9 eval-проверок падают на нетронутой задаче и проходят на эталоне |
+| Live eval | `./gradlew :evals:liveEval` | `deepseek-flash`, 17.10 вечер: **9/9** (включая delegate-research с двумя помощниками), 1 прогон на задачу, 0 ошибок инструментов; отдельно delegate-research ×2: 2/2, помощники 2/2 завершены. Задачи простые, n=1 — базовая линия, не статистика |
 | Live DeepSeek | `./gradlew :evals:liveDeepSeekSmoke` | пройден дважды на финальном коде: 5 раундов, 6 tool-вызовов, 0 ошибок, 9.1–9.8 с; prompt ~10.8k, completion 576–634, cached 8 192–9 600 |
-| macOS-пакет | `./gradlew :app-desktop:createDistributable` | собран |
+| macOS-пакет | `./gradlew :app-desktop:createDistributable`, `packageDmg` | собраны; `Chiller-1.1.0.dmg` локально |
+| CI | `.github/workflows/ci.yml`, `release.yml` | YAML валиден; на GitHub **не запускались** (ничего не запушено) |
 | Запуск приложения | `./gradlew :app-desktop:run` (изолированные данные, без ключа) | процесс стартовал, исключений в логе нет; **визуальная приёмка — вручную** |
 
 Live-прогон — это **один** сценарий на `deepseek-flash`. Он подтверждает, что реальная модель
@@ -35,10 +36,13 @@ Live-прогон — это **один** сценарий на `deepseek-flash`
 | Сессии | реализовано | JSONL + fsync, torn-tail recovery, экспорт MD/JSON; retention и миграций нет |
 | Контекст | реализовано | оценка по символам/4, целые ходы, pruning старых tool-результатов; точного tokenizer нет |
 | Метрики прогона | реализовано | `run.summary` в журнале: раунды, tool-вызовы, ошибки, время, usage |
-| UI Focus/Studio | частично | стартовый экран (недавние проекты, drag-and-drop папки, карточка проекта, стартовые задачи), лента прогона с итогами, composer с папкой/контекстом/подключением, поиск диалогов ⌘K, вкладка «Прогон» в Studio; проверено рендером вне экрана, ручной клик-приёмки нет; keyboard/IME/VoiceOver и платформы не проверены |
-| Субагенты | нет | контракты/супервизор/mailbox не реализованы |
-| Gemma / vLLM | подготовлено частично | профиль провайдера может не требовать ключ, eval-раннер использует это для loopback; desktop всё ещё считает отсутствие ключа offline; live-проверки нет |
-| Windows/Linux | не проверено | упаковка и поведение не проверялись |
+| UI Focus/Studio | частично | Studio: изменения по файлам с диффом и отменой, карточки помощников, прогон; @-упоминания файлов; markdown; стартовый экран (недавние проекты, drag-and-drop папки, карточка проекта, стартовые задачи), лента прогона с итогами, composer с папкой/контекстом/подключением, поиск диалогов ⌘K, вкладка «Прогон» в Studio; проверено рендером вне экрана, ручной клик-приёмки нет; keyboard/IME/VoiceOver и платформы не проверены |
+| Субагенты | реализовано, live-подтверждено | только чтение, глубина 1, ≤3 на прогон, лимиты на ребёнка (6 раундов, 1024 ток., 120 с), mailbox, wait по cursor, отмена побеждает, сироты останавливаются, restore → interrupted; usage помощников отдельно в `run.summary`. Общего токен-бюджета родителя и детей нет |
+| Gemma / vLLM | подготовлено | пресет vLLM/Ollama/LM Studio; loopback работает без ключа и в desktop, и в eval; live-проверки нет (нет сервера) |
+| Провайдеры | реализовано | 12 пресетов, ключи по origin в памяти + env/.env по имени переменной; вживую проверен только DeepSeek |
+| Настройки | реализовано | отдельная страница: подключение, агент (лимиты, помощники, инструкции, процессы), внешний вид, данные, клавиши, о программе |
+| Версии | реализовано | `chillerVersion` в gradle.properties → jar, DMG/MSI, «О программе» с коммитом из CI |
+| Windows/Linux | не проверено | CI-задания для Windows подготовлены, но не запускались; локально не проверялось |
 
 ## Известные ограничения
 
@@ -55,6 +59,6 @@ Live-прогон — это **один** сценарий на `deepseek-flash`
 ```sh
 ./gradlew check :evals:offlineSmoke
 ./gradlew :evals:liveDeepSeekSmoke   # opt-in: ключ в env или .env, малый бюджет
-./gradlew :evals:liveEval            # opt-in: 8 задач, отчёт в reports/local/evals; CHILLER_EVAL_* для endpoint/модели/задач
+./gradlew :evals:liveEval            # opt-in: 9 задач, отчёт в reports/local/evals; CHILLER_EVAL_* для endpoint/модели/задач
 ./gradlew :app-desktop:run
 ```

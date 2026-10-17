@@ -154,3 +154,17 @@ User explicitly resumed after limits reset. Read-only audit began at14:43 Asia/A
 - macOS window uses full-window content with a transparent, untitled title bar (`apple.awt.fullWindowContent`, `apple.awt.transparentTitleBar`, `apple.awt.windowTitleVisible`). The traffic lights float over a 30 dp draggable strip at the top of the sidebar; with the sidebar hidden the toolbar leaves 78 dp for them. Empty toolbar space drags the window (Compose `WindowDraggableArea`). The build stamp moved from the title to the Settings footer.
 - Dependency: `org.slf4j:slf4j-nop:2.0.17` (MIT) as runtimeOnly in app-desktop and evals, silencing the SLF4J no-binding warning from Ktor; logging stays off.
 - Not verified: the window appearance itself (no screen-capture permission in this session); double-click-to-zoom on the hidden title bar is not implemented.
+
+## Autonomous pass — subagents, Studio, providers, settings, CI — 17 October (evening)
+
+- Subagents per the audit design (contracts/Subagents.kt, SubagentSupervisor, SubagentTools): read-only, depth one, path-scoped, mailbox, cursor wait, cancel wins, orphan stop, restore as interrupted; per-child limits; helpers' usage reported separately. Not done: a shared parent+children token budget.
+- Studio rebuilt: changes grouped by file with per-change diff and undo, helper cards with progress and stop, run metrics with helpers total.
+- Providers: 12 presets, keys per origin (memory only; env/.env by variable name), loopback without a key in the desktop app. Only DeepSeek verified live.
+- Settings page replaces the modal; AgentOptions persisted (rounds, output, helpers, instructions).
+- Versioning `chillerVersion=1.1.0`; DMG/MSI formats; About shows version/build/commit. `packageDmg` built Chiller-1.1.0.dmg locally.
+- CI/CD: ci.yml (Linux/macOS/Windows tests, DMG+MSI artifacts), release.yml (tag → installers → GitHub Release). Not run on GitHub: nothing was pushed.
+- Composer @-mentions, user-message edit/copy, attention request when a background run ends.
+- Checks: `./gradlew check` 154 tests, 0 failures, 0 skipped (full rerun); offline smoke passed with 9 meaningful eval checks.
+- Live deepseek-flash: full eval 9/9, 0 tool errors; delegate-research ×2 → 2/2 with both helpers completed each time.
+- Not verified: Windows/Linux, GitHub workflows, other providers, Gemma/vLLM, @-mention popover and settings page by hand (offscreen renders only for the settings page and Studio).
+
