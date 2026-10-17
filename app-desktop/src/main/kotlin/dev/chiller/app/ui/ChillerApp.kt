@@ -89,7 +89,7 @@ fun ChillerApp(
     LaunchedEffect(Unit) { rootFocus.requestFocus() }
     ChillerTheme(darkTheme = dark ?: systemDark) {
         val c = LocalChillerPalette.current
-        BoxWithConstraints(Modifier.fillMaxSize().background(c.canvas).focusRequester(rootFocus).focusable().onPreviewKeyEvent {
+        BoxWithConstraints(Modifier.fillMaxSize().background(c.canvas).focusRequester(rootFocus).onPreviewKeyEvent {
             if (it.type == KeyEventType.KeyDown && (it.isMetaPressed || it.isCtrlPressed)) {
                 when (it.key) {
                     Key.Enter -> { send(); true }
@@ -97,7 +97,7 @@ fun ChillerApp(
                     else -> false
                 }
             } else false
-        }) {
+        }.focusable()) {
             val showSidebar = sidebar && maxWidth >= 740.dp
             Row(Modifier.fillMaxSize()) {
                 if (showSidebar) Sidebar(sessions, selectedSessionId, workspacePath, apiKeyConfigured, !active, onNewSession, onSelectSession, onChooseWorkspace,
@@ -433,9 +433,9 @@ private fun Settings(url: String, model: String, thinking: Boolean, configured: 
     val dialogFocus = remember { FocusRequester() }
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         LaunchedEffect(Unit) { dialogFocus.requestFocus() }
-        Column(Modifier.width(440.dp).focusRequester(dialogFocus).focusable().onPreviewKeyEvent {
+        Column(Modifier.width(440.dp).focusRequester(dialogFocus).onPreviewKeyEvent {
             if (it.type == KeyEventType.KeyDown && it.key == Key.Escape) { onDismiss(); true } else false
-        }.clip(RoundedCornerShape(13.dp)).background(c.surface).border(1.dp, c.border, RoundedCornerShape(13.dp)).padding(25.dp), verticalArrangement = Arrangement.spacedBy(19.dp)) {
+        }.focusable().clip(RoundedCornerShape(13.dp)).background(c.surface).border(1.dp, c.border, RoundedCornerShape(13.dp)).padding(25.dp), verticalArrangement = Arrangement.spacedBy(19.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text("Подключение", color = c.text, fontSize = 19.sp, letterSpacing = (-.5).sp)
                 Spacer(Modifier.weight(1f)); ChillerIconButton(Icons.Outlined.Close, "Закрыть настройки", onDismiss)

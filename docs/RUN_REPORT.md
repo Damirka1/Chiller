@@ -29,8 +29,8 @@
 - Checkpoints journal before-images and reconcile pending file operations by hashes. Restart undo is supported for committed file changes. Unknown operations never replay automatically.
 - No-clobber create/move currently requires hard links; move limited to the same directory. ACL/xattrs not copied; parent sync support recorded. Portable NIO cannot guarantee CAS against an external writer.
 - Process termination is best-effort descendants, not process groups/job containment. Logs capped at 1 MiB/process, pages at 16 KiB. Native credentials/PTY/screenshots remain future work.
-- Session logs have critical append fsync and recovery for a truncated final record. Index currently derives by scan. Retention/export UI not implemented.
-- Context has conservative size and round/time bounds, not automatic compaction/token accounting. Reasoning replay stored privately; raw token deltas are not persisted individually.
+- Session logs have critical append fsync and recovery for a truncated final record. Index currently derives by scan. Markdown/JSON export and preview implemented; retention UI not implemented.
+- Context selects whole turns under conservative character/round/time bounds; no LLM summarization or exact provider token accounting. Reasoning replay stored privately; raw token deltas are not persisted individually.
 - Ask-user works during an active run; durable pending-question resume needs completion. Per-operation unknown-outcome ledger needs further hardening beyond call IDs and journal reconciliation.
 - Profile changes start a new conversation. Keys are session-only UI input or explicit environment reference; never saved to settings.
 - UI was rewritten by coordinator after user rejected Material-looking first screen. Uses custom Foundation controls and explicit desktop typography. Focus/Studio/theme/settings/offline-chat were reviewed in actual window. Keyboard shortcuts/IME, long-scroll behavior and native titlebar dark appearance still need fixes/review.
@@ -39,7 +39,7 @@
 
 **User steering at midnight:** first Material-looking UI was rejected. Coordinator replaced it with custom Foundation controls, neutral selection, explicit desktop typography, compact navigation and a unified welcome/composer, then reviewed both layouts in native app. Preserve this direction; do not reintroduce standard Material buttons, switches, segmented controls or decorative demo cards. Further UI correctness/polish takes priority over feature expansion. The revised direction has not yet received user feedback.
 
-1. Full offline check is green (37 tests). Preserve this integration baseline while addressing remaining items.
+1. Full offline check is green (47 tests). Preserve this integration baseline while addressing remaining items.
 2. Fix keyboard shortcuts with proper window/native menu handling; verify focused/unfocused Cmd/Ctrl+N and Cmd/Ctrl+Enter, Escape in settings. Review native titlebar appearance for dark theme. Keep source UI style custom.
 3. Initial implementation checkpoint is being committed to master. Standalone test .app remains open (not a Gradle task); current terminal session97162 belongs to that process. Reuse CUA app path for inspection; old unbundled net.java.openjdk.java could not bind.
 4. Complete pending-question journaling/resume, context/budget telemetry, Markdown/JSON export and packaging. Keep API-key live checks opt-in.
@@ -66,3 +66,13 @@ All three workers completed their assigned source/test changes. Coordinator owns
 - Native GUI actually verified menu Send and Markdown preview/close. Settings closed by button; Escape still did not dismiss under CUA. The latest recovery/question UI has compilation/unit coverage but not a fresh visual check.
 - Next build slot is free; worker resume_hardening finished. Local .app may still be running an earlier build in settings/conversation. Relaunch the rebuilt bundle for latest source.
 - Startup: `./gradlew :app-desktop:run`; isolated offline: `CHILLER_DATA_DIR="$PWD/.chiller/local" DEEPSEEK_API_KEY= ./gradlew :app-desktop:run`.
+
+## Morning checkpoint — 17 October
+
+- Source baseline 1cb6aff; branch master. No new agents or live calls needed for this pass.
+- Corrected modifier ordering: preview key handlers precede focusable nodes in main canvas/settings. This fixes event scope structurally but **does not close keyboard acceptance**: after rebuilding and relaunching, CUA Cmd+N and Escape still left the visible state unchanged, including after raising the window. Needs manual keyboard diagnosis; menu/button actions remain usable.
+- Rebuilt and launched actual bundle with explicit empty DEEPSEEK_API_KEY and project-local CHILLER_DATA_DIR. Clicked historical offline session: transcript restored correctly with no workspace error. This closes the earlier history GUI regression.
+- `./gradlew check :evals:offlineSmoke :app-desktop:createDistributable`: passed. 47 tests; actual search/read/edit/Python/restart/stale-rejection smoke passed. Live API tests skipped, not implied by offline results.
+- Latest test process session22027. CUA subsequently reported the user changed the app, so further UI actions stopped to avoid stale targeting.
+- **Delivery status: working desktop prototype, partial alpha.** Remaining alpha acceptance: keyboard/IME/accessibility and long-session GUI testing, durable answer continuation/steering (currently read-only interrupted question recovery), retention/schema migration, exact provider capabilities/budgets and live DeepSeek/Gemma validation. Broader planned eval corpus, filesystem watcher and platform matrix are not complete.
+- Run: `./gradlew :app-desktop:run`. Bundle: `app-desktop/build/compose/binaries/main/app/Chiller.app`. No push/publication.
