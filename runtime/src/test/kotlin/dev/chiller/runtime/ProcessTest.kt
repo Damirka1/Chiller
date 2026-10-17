@@ -6,6 +6,9 @@ import java.nio.file.Files
 import kotlin.test.*
 
 class ProcessTest {
+    // These scenarios drive a POSIX shell; Windows CI runs the rest of the suite.
+    @org.junit.jupiter.api.BeforeEach fun requireShell() = org.junit.jupiter.api.Assumptions.assumeTrue(Files.isExecutable(java.nio.file.Path.of("/bin/sh")), "Requires /bin/sh")
+
     @Test fun capturesBothPipesAndExit() = runBlocking {
         val service = LocalProcessService(Files.createTempDirectory("chiller-process"))
         try {

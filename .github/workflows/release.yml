@@ -1,0 +1,66 @@
+# Push a tag like v1.2.0 to build macOS and Windows installers with that version and attach them to a GitHub Release.
+name: Release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: write
+
+jobs:
+  installers:
+    name: Installer · ${{ matrix.os }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - os: macos-latest
+            task: packageDmg
+            output: app-desktop/build/compose/binaries/main/dmg/*.dmg
+          - os: windows-latest
+            task: packageMsi
+            output: app-desktop/build/compose/binaries/main/msi/*.msi
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - name: Version from tag
+        id: version
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          if ! [[ "$version" =~ ^[1-9][0-9]*\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Tag must look like v1.2.3 with major > 0 (installer rule), got $GITHUB_REF_NAME" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Build installer
+        shell: bash
+        run: ./gradlew :app-desktop:${{ matrix.task }} -PchillerVersion=${{ steps.version.outputs.version }} --stacktrace
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installer-${{ runner.os }}
+          path: ${{ matrix.output }}
+          if-no-files-found: error
+
+  publish:
+    needs: installers
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
+          # Installers are not code-signed yet: macOS asks to confirm the first launch, Windows SmartScreen may warn.
+          body: |
+            Unsigned builds: on macOS open with right-click → Open the first time; on Windows SmartScreen may ask to confirm.
