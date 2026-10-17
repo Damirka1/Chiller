@@ -42,6 +42,20 @@ class LocalWorkspaceTest {
         override suspend fun read(sessionId: String, artifactId: String, offset: Int, limit: Int): String = blobs.getValue(artifactId).substring(offset.coerceAtMost(blobs.getValue(artifactId).length), (offset + limit).coerceAtMost(blobs.getValue(artifactId).length))
     }
 
+    @Test fun undoOfDeleteRestoresTheFileAndRefusesAnOccupiedPath() = workspace { root, ws ->
+        Files.writeString(root.resolve("notes.txt"), "keep me\n")
+        val snapshot = ws.read(ReadFileRequest("notes.txt"))
+        val deleted = ws.delete("notes.txt", snapshot.snapshotId)
+        assertFalse(Files.exists(root.resolve("notes.txt")))
+        ws.undo(deleted.id)
+        assertEquals("keep me\n", Files.readString(root.resolve("notes.txt")))
+
+        val again = ws.delete("notes.txt", ws.read(ReadFileRequest("notes.txt")).snapshotId)
+        Files.writeString(root.resolve("notes.txt"), "someone else's file\n")
+        expectError("UNDO_CONFLICT") { ws.undo(again.id) }
+        assertEquals("someone else's file\n", Files.readString(root.resolve("notes.txt")))
+    }
+
     @Test fun rejectsStaleSnapshotWithoutWriting() = workspace { root, ws ->
         Files.writeString(root.resolve("a.txt"), "old\n")
         val snapshot = ws.read(ReadFileRequest("a.txt"))

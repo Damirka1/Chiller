@@ -767,6 +767,8 @@ class LocalWorkspace(
     }
 
     private fun posixPermissions(path: Path): Set<java.nio.file.attribute.PosixFilePermission>? {
+        // Restoring a deleted file has no current permissions to keep; the new file gets the default ones.
+        if (!Files.exists(path, LinkOption.NOFOLLOW_LINKS)) return null
         val view = try { Files.getFileAttributeView(path, PosixFileAttributeView::class.java, LinkOption.NOFOLLOW_LINKS) }
         catch (_: UnsupportedOperationException) { return null } ?: return null
         return view.readAttributes().permissions()
