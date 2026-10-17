@@ -196,6 +196,55 @@ class AgentCoordinatorTest {
         assertEquals(0, provider.calls)
     }
 
+    @Test fun restoreLoadsMetricsFromLatestCompletedRunSummary() = runTest {
+        val events = MemoryEvents().apply {
+            append("session", "run.started", buildJsonObject { put("runId", "run-1") })
+            append("session", "run.completed", buildJsonObject { put("runId", "run-1") })
+            append("session", "run.summary", buildJsonObject {
+                put("runId", "run-1"); put("status", "completed"); put("rounds", 3); put("toolCalls", 2)
+                put("failedToolCalls", 1); put("durationMs", 876); put("promptTokens", 120L); put("completionTokens", 40L)
+            })
+        }
+        val fixture = fixture(ScriptedProvider { error("restore must not call provider") }, eventStore = events)
+
+        fixture.coordinator.restore()
+
+        val restored = fixture.coordinator.state.value
+        assertEquals("completed", restored.status)
+        assertEquals(3, restored.modelRounds)
+        assertEquals(2, restored.toolCalls)
+        assertEquals(1, restored.failedToolCalls)
+        assertEquals(876L, restored.runDurationMs)
+        assertEquals(120L, restored.usage.promptTokens)
+        assertEquals(40L, restored.usage.completionTokens)
+    }
+
+    @Test fun historyReplacementInvalidatesPriorRunSummaryAndMetrics() = runTest {
+        val events = MemoryEvents().apply {
+            append("session", "message", buildJsonObject { put("role", "user"); put("content", "old request") })
+            append("session", "run.started", buildJsonObject { put("runId", "run-old") })
+            append("session", "run.completed", buildJsonObject { put("runId", "run-old") })
+            append("session", "run.summary", buildJsonObject {
+                put("runId", "run-old"); put("status", "completed"); put("rounds", 4); put("toolCalls", 3)
+                put("failedToolCalls", 0); put("durationMs", 1200)
+            })
+            append("session", "history.replace_turn", buildJsonObject {
+                put("index", 0); put("expectedCount", 1)
+                put("message", Json.encodeToJsonElement(AgentMessage("user", "edited request")))
+            })
+        }
+        val fixture = fixture(ScriptedProvider { error("restore must not call provider") }, eventStore = events)
+
+        fixture.coordinator.restore()
+
+        val restored = fixture.coordinator.state.value
+        assertEquals("idle", restored.status)
+        assertEquals("edited request", restored.messages.single().content)
+        assertEquals(null, restored.runDurationMs)
+        assertEquals(0, restored.modelRounds)
+        assertEquals(0, restored.toolCalls)
+    }
+
     @Test fun planModeDoesNotExecuteAWriteCallReturnedByTheProvider() = runTest {
         val tools = RecordingTools()
         val forbidden = ToolCall("write-in-plan", "write", "{}")

@@ -1,7 +1,10 @@
 package dev.chiller.app.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -15,6 +18,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.chiller.design.ChillerPalette
@@ -29,8 +33,11 @@ sealed interface MdBlock {
     data class Heading(val level: Int, val text: String) : MdBlock
     data class ListItem(val marker: String, val depth: Int, val text: String) : MdBlock
     data class Quote(val text: String) : MdBlock
+    data class Table(val headers: List<String>, val rows: List<List<String>>, val alignments: List<TableAlignment>) : MdBlock
     data object Rule : MdBlock
 }
+
+enum class TableAlignment { LEFT, CENTER, RIGHT }
 
 private val heading = Regex("^(#{1,4})\\s+(.*)$")
 private val bullet = Regex("^(\\s*)([-*+])\\s+(.*)$")
@@ -40,8 +47,18 @@ fun parseMarkdownBlocks(text: String): List<MdBlock> {
     val blocks = mutableListOf<MdBlock>()
     val paragraph = mutableListOf<String>()
     fun flush() { if (paragraph.isNotEmpty()) { blocks += MdBlock.Paragraph(paragraph.joinToString(" ") { it.trim() }); paragraph.clear() } }
-    for (raw in text.lines()) {
+    val lines = text.lines()
+    var index = 0
+    while (index < lines.size) {
+        val raw = lines[index]
         val line = raw.trimEnd()
+        val table = if (index + 1 < lines.size) parseTableAt(lines, index) else null
+        if (table != null) {
+            flush()
+            blocks += table.first
+            index = table.second
+            continue
+        }
         val h = heading.matchEntire(line.trimStart())
         val b = bullet.matchEntire(line)
         val n = numbered.matchEntire(line)
@@ -59,9 +76,80 @@ fun parseMarkdownBlocks(text: String): List<MdBlock> {
             }
             else -> paragraph += line
         }
+        index++
     }
     flush()
     return blocks
+}
+
+/** Returns cells while honoring escaped pipes and pipes protected by matching backtick spans. */
+private fun tableCells(line: String): List<String> {
+    val cells = mutableListOf<String>()
+    val current = StringBuilder()
+    var ticks = 0
+    var i = 0
+    var beginsWithDelimiter = false
+    var sawNonWhitespace = false
+    var endsWithDelimiter = false
+    while (i < line.length) {
+        val ch = line[i]
+        if (ch == '`') {
+            var end = i + 1
+            while (end < line.length && line[end] == '`') end++
+            val run = end - i
+            current.append(line.substring(i, end))
+            sawNonWhitespace = true
+            endsWithDelimiter = false
+            ticks = if (ticks == 0) run else if (ticks == run) 0 else ticks
+            i = end
+            continue
+        }
+        if (ch == '|' && ticks == 0) {
+            if (!sawNonWhitespace) beginsWithDelimiter = true
+            cells += current.toString()
+            current.setLength(0)
+            endsWithDelimiter = true
+        } else if (ch == '\\' && i + 1 < line.length && line[i + 1] == '|') {
+            current.append('|')
+            sawNonWhitespace = true
+            endsWithDelimiter = false
+            i++
+        } else {
+            current.append(ch)
+            if (!ch.isWhitespace()) {
+                sawNonWhitespace = true
+                endsWithDelimiter = false
+            }
+        }
+        i++
+    }
+    cells += current.toString()
+    if (beginsWithDelimiter && cells.isNotEmpty()) cells.removeAt(0)
+    if (endsWithDelimiter && cells.isNotEmpty()) cells.removeAt(cells.lastIndex)
+    return cells.map(String::trim)
+}
+
+private val tableSeparator = Regex("^:?-{3,}:?$")
+private fun parseTableAt(lines: List<String>, start: Int): Pair<MdBlock.Table, Int>? {
+    val headers = tableCells(lines[start])
+    if (headers.size < 2) return null
+    val separators = tableCells(lines[start + 1])
+    if (separators.size != headers.size || separators.any { !tableSeparator.matches(it) }) return null
+    val alignments = separators.map { cell -> when {
+        cell.startsWith(':') && cell.endsWith(':') -> TableAlignment.CENTER
+        cell.endsWith(':') -> TableAlignment.RIGHT
+        else -> TableAlignment.LEFT
+    } }
+    val rows = mutableListOf<List<String>>()
+    var i = start + 2
+    while (i < lines.size && lines[i].isNotBlank() && lines[i].contains('|')) {
+        val cells = tableCells(lines[i])
+        // A malformed row invalidates the candidate, leaving all lines to normal Markdown parsing.
+        if (cells.size != headers.size) return null
+        rows += cells
+        i++
+    }
+    return MdBlock.Table(headers, rows, alignments) to i
 }
 
 private val inline = Regex("`([^`]+)`|\\*\\*([^*]+)\\*\\*|__([^_]+)__|(?<![\\w*])\\*([^*\\s][^*]*)\\*(?!\\w)|(?<!\\w)_([^_\\s][^_]*)_(?!\\w)|\\[([^\\]]+)]\\(([^)\\s]+)\\)")
@@ -118,8 +206,43 @@ fun MarkdownText(text: String, tail: AnnotatedString? = null) {
                     Spacer(Modifier.width(12.dp))
                     Text(withTail(index, inlineMarkdown(block.text, c)), color = c.muted, fontSize = 14.sp, lineHeight = 23.sp)
                 }
+                is MdBlock.Table -> MarkdownTable(block, c)
                 MdBlock.Rule -> Box(Modifier.fillMaxWidth().padding(vertical = 6.dp).height(1.dp).background(c.border))
             }
+        }
+    }
+}
+
+@Composable
+private fun MarkdownTable(table: MdBlock.Table, c: ChillerPalette) {
+    val allRows = listOf(table.headers) + table.rows
+    val widths = table.headers.indices.map { column ->
+        val longestLine = allRows.maxOf { row -> row[column].lineSequence().maxOfOrNull(String::length) ?: 0 }
+        // Approximate 13sp glyph width and clamp pathological cells; long values wrap in-cell.
+        (longestLine * 7.2f + 20f).coerceIn(112f, 280f).dp
+    }
+    val tableWidth = widths.fold(0.dp) { total, width -> total + width }
+    Column(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
+        allRows.forEachIndexed { rowIndex, row ->
+            Row(Modifier.height(IntrinsicSize.Min)) {
+                row.forEachIndexed { column, value ->
+                    val header = rowIndex == 0
+                    Text(
+                        inlineMarkdown(value, c), color = c.text,
+                        fontSize = 13.sp, lineHeight = 20.sp,
+                        fontWeight = if (header) FontWeight.SemiBold else FontWeight.Normal,
+                        textAlign = when (table.alignments[column]) {
+                            TableAlignment.LEFT -> TextAlign.Left
+                            TableAlignment.CENTER -> TextAlign.Center
+                            TableAlignment.RIGHT -> TextAlign.Right
+                        },
+                        modifier = Modifier.width(widths[column]).fillMaxHeight().background(if (header) c.hover else c.surface)
+                            .border(1.dp, c.border)
+                            .padding(horizontal = 10.dp, vertical = 7.dp)
+                    )
+                }
+            }
+            if (rowIndex < table.rows.size) Box(Modifier.width(tableWidth).height(1.dp).background(c.border))
         }
     }
 }

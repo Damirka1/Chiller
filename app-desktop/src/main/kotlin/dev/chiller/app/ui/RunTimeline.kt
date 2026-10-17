@@ -105,7 +105,8 @@ internal fun ToolGroup(activities: List<Activity>, reduced: Boolean, onUndo: (St
     LaunchedEffect(activities.map { it.status }, questions.map { it.id }) {
         open = running || questions.isNotEmpty()
     }
-    Column(Modifier.fillMaxWidth().clip(shape).border(1.dp, c.border, shape)) {
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+      Column(Modifier.fillMaxWidth().clip(shape).border(1.dp, c.border, shape)) {
         if (activities.size > 1) {
             HeaderRow(open, { open = !open }) {
                 if (running) Pulse(c.accent) else Icon(if (uncertain) Icons.Outlined.Info else if (failed.isEmpty()) Icons.Outlined.Check else Icons.Outlined.ErrorOutline, null, Modifier.size(14.dp), tint = if (uncertain) c.muted else if (failed.isEmpty()) c.positive else c.negative)
@@ -119,10 +120,18 @@ internal fun ToolGroup(activities: List<Activity>, reduced: Boolean, onUndo: (St
         val visible = compactToolActivities(activities, open)
         visible.forEachIndexed { index, activity ->
             if (index > 0 || activities.size > 1) Box(Modifier.fillMaxWidth().height(1.dp).background(c.border.copy(alpha = .6f)))
-            ToolRow(activity, reduced, onUndo, canUndo, framed = false, onPreviewFile = onPreviewFile, onRevealFile = onRevealFile)
+            ToolRow(activity, reduced, onUndo, canUndo, framed = false, onPreviewFile = onPreviewFile, onRevealFile = onRevealFile, showPresentation = false)
         }
+      }
+      presentedFiles(activities).forEach { FilePresentationCard(it, onPreviewFile, onRevealFile) }
     }
 }
+
+/** Results stay visible independently of disclosure state. Latest presentation wins per path. */
+internal fun presentedFiles(activities: List<Activity>): List<FilePresentation> = activities
+    .filter { it.status in SUCCESS && it.name in setOf("show_file", "capture_window") }
+    .mapNotNull { presentedFileFromOutput(it.output) }
+    .asReversed().distinctBy { it.path }.asReversed()
 
 @Composable
 private fun HeaderRow(open: Boolean, onClick: () -> Unit, content: @Composable RowScope.() -> Unit) {
@@ -141,7 +150,7 @@ private fun HeaderRow(open: Boolean, onClick: () -> Unit, content: @Composable R
 }
 
 @Composable
-internal fun ToolRow(activity: Activity, reduced: Boolean, onUndo: (String) -> Unit, canUndo: Boolean, framed: Boolean = true, onPreviewFile: suspend (String) -> ByteArray? = { null }, onRevealFile: (String) -> Unit = {}) {
+internal fun ToolRow(activity: Activity, reduced: Boolean, onUndo: (String) -> Unit, canUndo: Boolean, framed: Boolean = true, onPreviewFile: suspend (String) -> ByteArray? = { null }, onRevealFile: (String) -> Unit = {}, showPresentation: Boolean = true) {
     val c = LocalChillerPalette.current
     val failed = activity.status in FAILED
     val running = activity.status in RUNNING
@@ -178,7 +187,7 @@ internal fun ToolRow(activity: Activity, reduced: Boolean, onUndo: (String) -> U
             }
             Icon(if (open) Icons.Outlined.KeyboardArrowUp else Icons.Outlined.KeyboardArrowDown, null, Modifier.size(15.dp), tint = c.faint)
         }
-        presentedFile?.let { FilePresentationCard(it, onPreviewFile, onRevealFile) }
+        if (showPresentation) presentedFile?.let { FilePresentationCard(it, onPreviewFile, onRevealFile) }
         AnimatedVisibility(open, enter = if (reduced) EnterTransition.None else expandVertically(tween(180)) + fadeIn(tween(120)), exit = if (reduced) ExitTransition.None else shrinkVertically(tween(160)) + fadeOut(tween(100))) {
             Column(Modifier.fillMaxWidth().background(c.sidebar.copy(alpha = .5f))) {
                 if (activity.diff != null) Diff(activity.diff!!)
@@ -192,46 +201,6 @@ internal fun ToolRow(activity: Activity, reduced: Boolean, onUndo: (String) -> U
                 }
             }
         }
-    }
-}
-
-@Composable
-internal fun FilePresentationCard(file: FilePresentation, onPreviewFile: suspend (String) -> ByteArray?, onRevealFile: (String) -> Unit, showReveal: Boolean = true) {
-    val c = LocalChillerPalette.current
-    val imageMime = file.mimeType.equals("image/png", ignoreCase = true) || file.mimeType.equals("image/jpeg", ignoreCase = true) || file.mimeType.equals("image/jpg", ignoreCase = true)
-    var bitmap by remember(file.path, file.sizeBytes) { mutableStateOf<ImageBitmap?>(null) }
-    var previewAttempted by remember(file.path, file.sizeBytes) { mutableStateOf(false) }
-    val previewer by rememberUpdatedState(onPreviewFile)
-    LaunchedEffect(file.path, file.sizeBytes, imageMime) {
-        if (imageMime && file.path.isNotBlank()) {
-            bitmap = withContext(Dispatchers.IO) {
-                runCatching { previewer(file.path)?.let(::decodePreviewImage) }.getOrNull()
-            }
-            previewAttempted = true
-        }
-    }
-    Row(
-        Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 7.dp).clip(RoundedCornerShape(8.dp))
-            .background(c.surface).border(1.dp, c.border, RoundedCornerShape(8.dp)).padding(8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        if (imageMime) {
-            if (bitmap != null) Image(bitmap!!, contentDescription = "Предварительный просмотр ${file.name}", modifier = Modifier.size(96.dp, 68.dp).clip(RoundedCornerShape(6.dp)), contentScale = ContentScale.Crop)
-            else Box(Modifier.size(96.dp, 68.dp).clip(RoundedCornerShape(6.dp)).background(c.sidebar), contentAlignment = Alignment.Center) {
-                Icon(Icons.Outlined.Image, null, Modifier.size(24.dp), tint = c.faint)
-            }
-            Spacer(Modifier.width(10.dp))
-        } else {
-            Icon(Icons.Outlined.InsertDriveFile, null, Modifier.size(20.dp), tint = c.muted)
-            Spacer(Modifier.width(9.dp))
-        }
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(file.name, color = c.text, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text("${file.mimeType} · ${formatPresentedSize(file.sizeBytes)}", color = c.faint, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            if (imageMime && !previewAttempted) Text("Загружаю миниатюру…", color = c.faint, fontSize = 10.sp)
-            else if (imageMime && bitmap == null) Text("Предварительный просмотр недоступен", color = c.faint, fontSize = 10.sp)
-        }
-        if (showReveal) ChillerControl("Показать в папке", { onRevealFile(file.path) }, icon = Icons.Outlined.FolderOpen, style = ControlStyle.QUIET)
     }
 }
 
@@ -350,6 +319,27 @@ internal fun runSummaryParts(state: RunState): List<String> {
     }
 }
 
+
+/** Count each process once, using its latest observed terminal result in the current user turn. */
+internal fun latestFailedCommands(state: RunState): Int {
+    val messages = state.messages.drop((state.messages.indexOfLast { it.role == "user" } + 1).coerceAtLeast(0))
+    val calls = messages.flatMap { it.toolCalls }.associate { it.id to it.name }
+    val outcomes = linkedMapOf<String, Boolean>()
+    for (message in messages) {
+        if (message.role != "tool" || calls[message.toolCallId] !in setOf("run_process", "read_process", "stop_process")) continue
+        runCatching {
+            val result = Json.parseToJsonElement(message.content.orEmpty()).jsonObject
+            val data = result["data"]?.jsonObject ?: return@runCatching
+            val id = data["processId"]?.jsonPrimitive?.contentOrNull ?: return@runCatching
+            val status = data["state"]?.jsonPrimitive?.contentOrNull
+            val exit = data["exitCode"]?.jsonPrimitive?.longOrNull
+            if (status == "timed_out") outcomes[id] = true
+            else if (status == "exited" && exit != null) outcomes[id] = exit != 0L
+        }
+    }
+    return outcomes.values.count { it }
+}
+
 internal fun formatDuration(ms: Long): String = when {
     ms < 1_000 -> "$ms мс"
     ms < 60_000 -> "%.1f с".format(java.util.Locale.ROOT, ms / 1000.0).replace('.', ',')
@@ -417,10 +407,11 @@ internal fun RunPanel(state: RunState, modifier: Modifier, onOpenTrace: (() -> U
         MetricGrid(listOf(
             "Раунды" to state.modelRounds.toString(),
             "Действия" to state.toolCalls.toString(),
-            "Ошибки" to state.failedToolCalls.toString(),
+            "Ошибки инструментов" to state.failedToolCalls.toString(),
+            "Неуспешные команды" to latestFailedCommands(state).toString(),
             "Время" to (state.runDurationMs?.let(::formatDuration) ?: "—"),
-            "Запрос, ток." to compactTokens(usage.promptTokens).replace("?", "—"),
-            "Ответ, ток." to compactTokens(usage.completionTokens).replace("?", "—"),
+            "Вход, всего ток." to compactTokens(usage.promptTokens).replace("?", "—"),
+            "Выход, всего ток." to compactTokens(usage.completionTokens).replace("?", "—"),
             "Из кэша" to (cacheShare ?: "—"),
             "Контекст ≈" to (state.contextEstimatedTokens?.let { compactTokens(it.toLong()) } ?: "—"),
         ))
@@ -431,7 +422,7 @@ internal fun RunPanel(state: RunState, modifier: Modifier, onOpenTrace: (() -> U
                 "Их токены" to "${compactTokens(total.promptTokens).replace("?", "—")} → ${compactTokens(total.completionTokens).replace("?", "—")}",
             ))
         }
-        Text("Токены — как их сообщил провайдер; «—» значит, что значение не пришло. Контекст — оценка по символам / 4.", color = c.faint, fontSize = 11.sp, lineHeight = 16.sp)
+        Text("Токены суммируются за все раунды последнего прогона; «—» — значение не сообщено. Контекст — текущая оценка по символам / 4. Неуспешные команды — процессы с ненулевым кодом выхода или тайм-аутом; ошибка запуска учитывается среди ошибок инструментов.", color = c.faint, fontSize = 11.sp, lineHeight = 16.sp)
         onOpenTrace?.let { ChillerControl("Трассировка запросов", it, icon = Icons.Outlined.ReceiptLong, style = ControlStyle.OUTLINE) }
         latestPlan(state)?.let { steps ->
             Text("План модели · ${steps.count { it.second == "done" }}/${steps.size}", color = c.muted, fontSize = 12.sp)
