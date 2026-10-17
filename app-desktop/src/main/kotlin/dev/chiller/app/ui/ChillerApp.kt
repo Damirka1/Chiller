@@ -48,6 +48,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -57,6 +58,7 @@ import androidx.compose.ui.window.PopupProperties
 import dev.chiller.app.di.UiPreferences
 import dev.chiller.app.di.SendReceipt
 import dev.chiller.app.di.ConnectionState
+import dev.chiller.app.di.ModelCatalogState
 import dev.chiller.contracts.*
 import dev.chiller.design.*
 import kotlinx.coroutines.launch
@@ -84,6 +86,7 @@ fun ChillerApp(
     onRenameSession: suspend (String, String) -> Boolean = { _, _ -> false },
     onExportSession: (String, String) -> Unit = { _, _ -> },
     connection: ConnectionState = ConnectionState(), onCheckConnection: () -> Unit = {}, onCancelConnection: () -> Unit = {},
+    catalog: ModelCatalogState = ModelCatalogState(), onRefreshModels: () -> Unit = {}, onCancelCatalogRefresh: () -> Unit = {},
 ) {
     val systemDark = isSystemInDarkTheme()
     var view by remember { mutableStateOf(preferences) }
@@ -194,10 +197,10 @@ fun ChillerApp(
                                     Box(Modifier.fillMaxWidth().padding(horizontal = if (compact) 20.dp else 32.dp).padding(top = 6.dp, bottom = 18.dp), contentAlignment = Alignment.Center) {
                                         Column(Modifier.widthIn(max = 760.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                             sendError?.let { Text(it, color = c.negative, fontSize = 12.sp, lineHeight = 18.sp) }
-                                            Composer(draft, updateDraft, mode, { mode = it }, providerModel, active, send, onStop, allowProcesses, onAllowProcessesChange, { settings = true }, Modifier.fillMaxWidth(), apiKeyConfigured, models, { selected ->
+                                            Composer(draft, updateDraft, mode, { mode = it }, providerModel, active, send, onStop, { settings = true }, Modifier.fillMaxWidth(), apiKeyConfigured, models, { selected ->
                                                 val oldDraft = draft
                                                 scope.launch { onSelectModel(selected)?.let { id -> drafts.putIfAbsent(id, oldDraft) } }
-                                            }, { composing = it }, pendingSend, contextNote)
+                                            }, { composing = it }, pendingSend, contextNote, catalog, onRefreshModels, onCancelCatalogRefresh, allowProcesses, onAllowProcessesChange)
                                         }
                                     }
                                 }
@@ -319,7 +322,14 @@ private fun Toolbar(title: String?, workspace: String?, layout: WorkspaceLayout,
 }
 
 @Composable
-private fun Composer(draft: String, onDraft: (String) -> Unit, mode: ExecutionMode, onMode: (ExecutionMode) -> Unit, model: String, running: Boolean, onSend: () -> Unit, onStop: () -> Unit, allowProcesses: Boolean, onAllow: (Boolean) -> Unit, onSettings: () -> Unit, modifier: Modifier, configured: Boolean, models: List<String>, onModel: (String) -> Unit, onComposition: (Boolean) -> Unit, pending: Boolean, contextNote: String?) {
+private fun Composer(
+    draft: String, onDraft: (String) -> Unit, mode: ExecutionMode, onMode: (ExecutionMode) -> Unit,
+    model: String, running: Boolean, onSend: () -> Unit, onStop: () -> Unit,
+    onSettings: () -> Unit, modifier: Modifier, configured: Boolean, models: List<String>,
+    onModel: (String) -> Unit, onComposition: (Boolean) -> Unit, pending: Boolean, contextNote: String?,
+    catalog: ModelCatalogState, onRefreshModels: () -> Unit, onCancelCatalogRefresh: () -> Unit,
+    allowProcesses: Boolean, onAllow: (Boolean) -> Unit,
+) {
     val c = LocalChillerPalette.current
     var focused by remember { mutableStateOf(false) }
     var field by remember { mutableStateOf(TextFieldValue(draft)) }
@@ -336,14 +346,15 @@ private fun Composer(draft: String, onDraft: (String) -> Unit, mode: ExecutionMo
             decorationBox = { inner -> Box { if (draft.isEmpty()) Text("Напишите задачу…", color = c.faint, fontSize = 14.sp, lineHeight = 22.sp); inner() } },
         )
         Spacer(Modifier.height(6.dp))
-        ComposerToolbar(mode, onMode, model, models, configured, running, pending, draft.isNotBlank(), contextNote, allowProcesses, onAllow, onSettings, onModel, onSend, onStop)
+        ComposerToolbar(mode, onMode, model, models, configured, running, pending, draft.isNotBlank(), contextNote, catalog, onRefreshModels, onCancelCatalogRefresh, allowProcesses, onAllow, onSettings, onModel, onSend, onStop)
     }
 }
 
 @Composable
 private fun ComposerToolbar(
     mode: ExecutionMode, onMode: (ExecutionMode) -> Unit, model: String, models: List<String>, configured: Boolean, running: Boolean,
-    pending: Boolean, draftNotEmpty: Boolean, contextNote: String?, allowProcesses: Boolean, onAllow: (Boolean) -> Unit,
+    pending: Boolean, draftNotEmpty: Boolean, contextNote: String?, catalog: ModelCatalogState, onRefreshModels: () -> Unit,
+    onCancelCatalogRefresh: () -> Unit, allowProcesses: Boolean, onAllow: (Boolean) -> Unit,
     onSettings: () -> Unit, onModel: (String) -> Unit, onSend: () -> Unit, onStop: () -> Unit,
 ) {
     val c = LocalChillerPalette.current
@@ -352,68 +363,103 @@ private fun ComposerToolbar(
     // At larger type the model label needs proportionally more room before the toolbar is allowed to wrap.
     val fontScale = LocalDensity.current.fontScale
     val minModelWidth = (104f * fontScale.coerceIn(1f, 2f)).dp
-    val modeMenuWidth = (210f * fontScale.coerceIn(1f, 1.5f)).dp
-    val modelMenuWidth = (250f * fontScale.coerceIn(1f, 1.4f)).dp
-    Layout(
-        content = {
-            Box {
-                ChillerControl(if (mode == ExecutionMode.PLAN) "План" else "Изменения", { modeMenu = !modeMenu }, icon = if (mode == ExecutionMode.PLAN) Icons.Outlined.Lightbulb else Icons.Outlined.Edit, enabled = !running)
-                if (modeMenu) Popup(alignment = Alignment.BottomStart, onDismissRequest = { modeMenu = false }, properties = PopupProperties(focusable = true)) {
-                    Column(Modifier.width(modeMenuWidth).clip(RoundedCornerShape(9.dp)).background(c.surface).border(1.dp, c.border, RoundedCornerShape(9.dp)).padding(5.dp)) {
-                        ChillerControl("План · только чтение", { onMode(ExecutionMode.PLAN); modeMenu = false }, Modifier.fillMaxWidth(), icon = Icons.Outlined.Lightbulb, style = if (mode == ExecutionMode.PLAN) ControlStyle.SELECTED else ControlStyle.QUIET)
-                        ChillerControl("Изменения в проекте", { onMode(ExecutionMode.WORKSPACE_EDIT); modeMenu = false }, Modifier.fillMaxWidth(), icon = Icons.Outlined.Edit, style = if (mode == ExecutionMode.WORKSPACE_EDIT) ControlStyle.SELECTED else ControlStyle.QUIET)
-                        if (mode == ExecutionMode.WORKSPACE_EDIT) {
-                            Box(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 5.dp).height(1.dp).background(c.border))
-                            Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                                Text("Команды процессов", color = c.muted, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                                ChillerToggle(allowProcesses, { onAllow(it) }, "Команды процессов", enabled = !running)
-                            }
+    val modeMenuWidth = (224f * fontScale.coerceIn(1f, 1.4f)).dp
+    val modelMenuWidth = (300f * fontScale.coerceIn(1f, 1.4f)).dp
+    val menuShape = RoundedCornerShape(10.dp)
+    Box(Modifier.fillMaxWidth()) {
+        Layout(
+            content = {
+                Box {
+                    ChillerControl(if (mode == ExecutionMode.PLAN) "План" else "Изменения", { modeMenu = !modeMenu }, icon = if (mode == ExecutionMode.PLAN) Icons.Outlined.Lightbulb else Icons.Outlined.Edit, enabled = !running)
+                }
+                Box {
+                    Hint(contextNote?.let { "$model\n$it" } ?: model) {
+                        ChillerControl(friendlyModel(model), { modelMenu = !modelMenu }, enabled = !running, trailing = "⌄", inlineTrailing = true)
+                    }
+                }
+                ChillerIconButton(if (running && !pending) Icons.Outlined.Stop else Icons.Outlined.ArrowUpward, if (pending) "Сохранение сообщения" else if (running) "Остановить" else "Отправить", if (running && !pending) onStop else onSend, enabled = !pending && (running || draftNotEmpty), primary = true)
+            },
+            modifier = Modifier.fillMaxWidth()
+        ) { measurables, constraints ->
+            val gap = 8.dp.roundToPx()
+            val width = if (constraints.hasBoundedWidth) constraints.maxWidth else constraints.minWidth
+            val leading = measurables[0].measure(Constraints())
+            val trailing = measurables[2].measure(Constraints())
+            val singleLine = (width - leading.width - trailing.width - gap * 2).coerceAtLeast(0)
+            val wrapped = singleLine < minModelWidth.roundToPx()
+            val modelControl = measurables[1].measure(Constraints(maxWidth = if (wrapped) (width - leading.width - gap).coerceAtLeast(0) else singleLine))
+            if (wrapped) {
+                val line = maxOf(leading.height, modelControl.height)
+                val rowGap = 6.dp.roundToPx()
+                layout(width, line + rowGap + trailing.height) {
+                    leading.placeRelative(0, (line - leading.height) / 2)
+                    modelControl.placeRelative(leading.width + gap, (line - modelControl.height) / 2)
+                    trailing.placeRelative(width - trailing.width, line + rowGap)
+                }
+            } else {
+                val height = maxOf(leading.height, modelControl.height, trailing.height)
+                layout(width, height) {
+                    leading.placeRelative(0, (height - leading.height) / 2)
+                    modelControl.placeRelative(leading.width + gap, (height - modelControl.height) / 2)
+                    trailing.placeRelative(width - trailing.width, (height - trailing.height) / 2)
+                }
+            }
+        }
+        if (modeMenu) Popup(alignment = Alignment.BottomStart, offset = IntOffset(0, -6), onDismissRequest = { modeMenu = false }, properties = PopupProperties(focusable = true)) {
+            Column(Modifier.width(modeMenuWidth).shadow(12.dp, menuShape).clip(menuShape).background(c.surface).border(1.dp, c.border, menuShape).padding(5.dp)) {
+                ChillerControl("План · только чтение", { onMode(ExecutionMode.PLAN); modeMenu = false }, Modifier.fillMaxWidth(), icon = Icons.Outlined.Lightbulb, style = if (mode == ExecutionMode.PLAN) ControlStyle.SELECTED else ControlStyle.QUIET)
+                ChillerControl("Изменения в проекте", { onMode(ExecutionMode.WORKSPACE_EDIT); modeMenu = false }, Modifier.fillMaxWidth(), icon = Icons.Outlined.Edit, style = if (mode == ExecutionMode.WORKSPACE_EDIT) ControlStyle.SELECTED else ControlStyle.QUIET)
+                if (mode == ExecutionMode.WORKSPACE_EDIT) {
+                    Box(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 5.dp).height(1.dp).background(c.border))
+                    Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text("Команды процессов", color = c.muted, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                        ChillerToggle(allowProcesses, { onAllow(it) }, "Команды процессов", enabled = !running)
+                    }
+                }
+            }
+        }
+        if (modelMenu) Popup(alignment = Alignment.BottomEnd, offset = IntOffset(0, -6), onDismissRequest = { modelMenu = false }, properties = PopupProperties(focusable = true)) {
+            Column(Modifier.width(modelMenuWidth).shadow(12.dp, menuShape).clip(menuShape).background(c.surface).border(1.dp, c.border, menuShape).padding(6.dp)) {
+                Row(Modifier.fillMaxWidth().padding(start = 8.dp, end = 2.dp, top = 2.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Модели API", color = c.text, fontSize = 12.sp)
+                        Text(catalogLine(catalog, configured), color = if (catalog.status == "failed") c.negative else c.muted, fontSize = 11.sp, lineHeight = 15.sp)
+                    }
+                    if (catalog.status == "loading") ChillerIconButton(Icons.Outlined.Close, "Отменить загрузку списка", onCancelCatalogRefresh)
+                    else ChillerIconButton(Icons.Outlined.Refresh, "Обновить список моделей", onRefreshModels, enabled = !running)
+                }
+                Box(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp).height(1.dp).background(c.border))
+                val discovered = catalog.models.map { it.id }
+                val known = (listOf(model) + discovered + models).distinct().take(20)
+                Column(Modifier.heightIn(max = 288.dp).verticalScroll(rememberScrollState())) {
+                    known.forEach { id ->
+                        val source = when { id == model -> null; id in discovered -> "API"; else -> "вручную" }
+                        Hint(id) {
+                            ChillerControl(modelLabel(id), { modelMenu = false; if (id != model) onModel(id) }, Modifier.fillMaxWidth(), icon = if (id == model) Icons.Outlined.Check else null, trailing = source)
                         }
                     }
-                }
-            }
-            Box {
-                Hint(contextNote?.let { "$model\n$it" } ?: model) {
-                    ChillerControl(friendlyModel(model), { modelMenu = !modelMenu }, enabled = !running, trailing = "⌄", inlineTrailing = true)
-                }
-                if (modelMenu) Popup(alignment = Alignment.BottomEnd, onDismissRequest = { modelMenu = false }, properties = PopupProperties(focusable = true)) {
-                    Column(Modifier.width(modelMenuWidth).clip(RoundedCornerShape(9.dp)).background(c.surface).border(1.dp, c.border, RoundedCornerShape(9.dp)).padding(8.dp)) {
-                        Text(if (configured) "Ключ задан · возможности не проверены" else "Ключ не задан", color = c.muted, fontSize = 11.sp, modifier = Modifier.padding(6.dp))
-                        contextNote?.let { Text(it, color = c.muted, fontSize = 11.sp, modifier = Modifier.padding(start = 6.dp, end = 6.dp, bottom = 2.dp)) }
-                        (listOf(model) + models).distinct().forEach { id -> Hint(id) { ChillerControl(modelLabel(id), { modelMenu = false; if (id != model) onModel(id) }, Modifier.fillMaxWidth(), icon = if (id == model) Icons.Outlined.Check else null) } }
-                        Text("Смена модели создаёт новый диалог", color = c.muted, fontSize = 11.sp, modifier = Modifier.padding(6.dp))
-                        ChillerControl("Настройки моделей", { modelMenu = false; onSettings() }, Modifier.fillMaxWidth(), icon = Icons.Outlined.Tune)
+                    if (catalog.status == "ready" && catalog.models.isEmpty()) {
+                        Text("Провайдер не вернул ни одной модели. Задайте ID вручную в настройках.", color = c.muted, fontSize = 11.sp, lineHeight = 16.sp, modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp))
                     }
                 }
-            }
-            ChillerIconButton(if (running && !pending) Icons.Outlined.Stop else Icons.Outlined.ArrowUpward, if (pending) "Сохранение сообщения" else if (running) "Остановить" else "Отправить", if (running && !pending) onStop else onSend, enabled = !pending && (running || draftNotEmpty), primary = true)
-        },
-        modifier = Modifier.fillMaxWidth()
-    ) { measurables, constraints ->
-        val gap = 8.dp.roundToPx()
-        val width = if (constraints.hasBoundedWidth) constraints.maxWidth else constraints.minWidth
-        val leading = measurables[0].measure(Constraints())
-        val trailing = measurables[2].measure(Constraints())
-        val singleLine = (width - leading.width - trailing.width - gap * 2).coerceAtLeast(0)
-        val wrapped = singleLine < minModelWidth.roundToPx()
-        val modelControl = measurables[1].measure(Constraints(maxWidth = if (wrapped) (width - leading.width - gap).coerceAtLeast(0) else singleLine))
-        if (wrapped) {
-            val line = maxOf(leading.height, modelControl.height)
-            val rowGap = 6.dp.roundToPx()
-            layout(width, line + rowGap + trailing.height) {
-                leading.placeRelative(0, (line - leading.height) / 2)
-                modelControl.placeRelative(leading.width + gap, (line - modelControl.height) / 2)
-                trailing.placeRelative(width - trailing.width, line + rowGap)
-            }
-        } else {
-            val height = maxOf(leading.height, modelControl.height, trailing.height)
-            layout(width, height) {
-                leading.placeRelative(0, (height - leading.height) / 2)
-                modelControl.placeRelative(leading.width + gap, (height - modelControl.height) / 2)
-                trailing.placeRelative(width - trailing.width, (height - trailing.height) / 2)
+                Box(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp).height(1.dp).background(c.border))
+                Text("Смена модели создаёт новый диалог", color = c.muted, fontSize = 11.sp, modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp))
+                ChillerControl("Настройки моделей", { modelMenu = false; onSettings() }, Modifier.fillMaxWidth(), icon = Icons.Outlined.Tune)
             }
         }
     }
+}
+
+private fun catalogLine(catalog: ModelCatalogState, configured: Boolean): String = when (catalog.status) {
+    "loading" -> "Загружаю список…"
+    "failed" -> catalog.message.ifBlank { "Список моделей не получен" }
+    "ready" -> {
+        val base = if (catalog.models.isEmpty()) "Список пуст — задайте ID вручную" else "Моделей: ${catalog.models.size}"
+        val time = catalog.fetchedAt?.let(::formatCheckTime)
+        val line = if (time.isNullOrBlank()) base else "$base · $time"
+        if (catalog.stale) "устарел · $line" else line
+    }
+    else -> if (configured) "Список не загружен" else "Ключ не задан"
 }
 
 @Composable

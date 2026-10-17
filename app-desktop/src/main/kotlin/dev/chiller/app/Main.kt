@@ -84,6 +84,7 @@ fun main() = application {
             onRenameSession = controller::renameSession,
             onExportSession = { id, format -> scope.launch { controller.prepareExport(format, id) } },
             connection = state.connection, onCheckConnection = { controller.checkConnection() }, onCancelConnection = controller::cancelConnectionCheck,
+            catalog = state.catalog, onRefreshModels = { controller.refreshModels() }, onCancelCatalogRefresh = controller::cancelCatalogRefresh,
             exportPreview = state.exportContent, exportFormat = state.exportFormat,
             onDismissExport = controller::dismissExport,
             onSaveExport = {

@@ -27,9 +27,16 @@ import java.nio.file.StandardCopyOption
 data class DesktopSettings(val baseUrl: String = "https://api.deepseek.com", val model: String = "deepseek-flash", val thinking: Boolean = false, val workspace: String? = null, val rememberedModels: Map<String, List<String>> = emptyMap())
 data class SendReceipt(val accepted: Boolean, val sessionId: String, val clientRequestId: String, val reason: String? = null)
 data class ConnectionState(val status: String = "unverified", val message: String = "", val checkedAt: String? = null)
-data class DesktopState(val run: RunState = RunState(), val sessions: List<SessionInfo> = emptyList(), val sessionId: String = newId(), val settings: DesktopSettings = DesktopSettings(), val apiKeyConfigured: Boolean = false, val allowProcesses: Boolean = false, val exportContent: String? = null, val exportFormat: String = "markdown", val exportSessionId: String? = null, val uiPreferences: UiPreferences = UiPreferences(), val connection: ConnectionState = ConnectionState())
+data class ModelCatalogState(
+    val status: String = "idle",
+    val models: List<ProviderModel> = emptyList(),
+    val message: String = "",
+    val fetchedAt: String? = null,
+    val stale: Boolean = false,
+)
+data class DesktopState(val run: RunState = RunState(), val sessions: List<SessionInfo> = emptyList(), val sessionId: String = newId(), val settings: DesktopSettings = DesktopSettings(), val apiKeyConfigured: Boolean = false, val allowProcesses: Boolean = false, val exportContent: String? = null, val exportFormat: String = "markdown", val exportSessionId: String? = null, val uiPreferences: UiPreferences = UiPreferences(), val connection: ConnectionState = ConnectionState(), val catalog: ModelCatalogState = ModelCatalogState())
 
-class DesktopController(private val directory: Path, initialCredential: String? = LocalCredentials.load(), connectionChecker: ConnectionChecker? = null) {
+class DesktopController(private val directory: Path, initialCredential: String? = LocalCredentials.load(), connectionChecker: ConnectionChecker? = null, catalogClient: ModelCatalogClient? = null) {
     private val commands = Mutex()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
@@ -50,6 +57,11 @@ class DesktopController(private val directory: Path, initialCredential: String? 
     private var connectionCheckJob: Job? = null
     private val connectionLifecycleLock = Any()
     private val connectionRevision = AtomicLong(0)
+    private val injectedCatalogClient = catalogClient
+    private val catalog: ModelCatalogClient by lazy { injectedCatalogClient ?: KtorModelCatalogClient(http) }
+    private var catalogJob: Job? = null
+    private var catalogRevision = AtomicLong(0)
+    private val catalogLifecycleLock = Any()
     private val sendReceipts = LinkedHashMap<String, SendReceipt>()
     private val sendReceiptsLock = Any()
     private val http = HttpClient(CIO) {
@@ -81,7 +93,64 @@ class DesktopController(private val directory: Path, initialCredential: String? 
 
     fun configuredModels(): List<String> {
         val settings = state.value.settings
-        return (listOf(settings.model) + settings.rememberedModels[normalizeEndpoint(settings.baseUrl)].orEmpty()).distinct().take(20)
+        val discovered = state.value.catalog.models.map { it.id }
+        return (listOf(settings.model) + discovered + settings.rememberedModels[normalizeEndpoint(settings.baseUrl)].orEmpty()).distinct().take(20)
+    }
+
+    /** Explicit model listing. It is a separate user action from the paid connection check. */
+    fun refreshModels(): Job = synchronized(catalogLifecycleLock) {
+        val revision = catalogRevision.incrementAndGet()
+        catalogJob?.cancel()
+        scope.launch {
+            val snapshot = commands.withLock {
+                if (revision != catalogRevision.get()) return@withLock null
+                val profile = _state.value.settings
+                val key = credential?.takeIf { it.isNotBlank() }
+                _state.update { it.copy(catalog = it.catalog.copy(status = "loading", message = "")) }
+                profile to key
+            } ?: return@launch
+            val (profile, key) = snapshot
+            val result = try {
+                catalog.discover(profile.baseUrl, key)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                ModelCatalogResult(errorCode = "NETWORK", message = "Network error or request timed out")
+            }
+            commands.withLock {
+                if (revision != catalogRevision.get() || profile != _state.value.settings) return@withLock
+                _state.update { state ->
+                    val previous = state.catalog
+                    state.copy(catalog = if (result.ok) {
+                        ModelCatalogState(status = "ready", models = result.models, fetchedAt = Instant.now().toString())
+                    } else {
+                        previous.copy(status = "failed", message = catalogMessage(result, key), stale = previous.models.isNotEmpty())
+                    })
+                }
+            }
+        }.also { catalogJob = it }
+    }
+
+    fun cancelCatalogRefresh() = synchronized(catalogLifecycleLock) { invalidateCatalogLocked() }
+
+    private fun invalidateCatalog() = synchronized(catalogLifecycleLock) { invalidateCatalogLocked() }
+
+    private fun invalidateCatalogLocked() {
+        catalogRevision.incrementAndGet()
+        catalogJob?.cancel()
+        catalogJob = null
+        _state.update { it.copy(catalog = ModelCatalogState()) }
+    }
+
+    private fun catalogMessage(result: ModelCatalogResult, key: String?) = when (result.errorCode) {
+        "AUTHENTICATION_FAILED" -> "Провайдер отклонил ключ"
+        "UNSUPPORTED" -> "Этот адрес не отдаёт список моделей — укажите ID вручную"
+        "RATE_LIMITED" -> "Провайдер ограничил частоту запросов"
+        "RESPONSE_TOO_LARGE" -> "Ответ со списком моделей слишком большой"
+        "MALFORMED_RESPONSE" -> "Провайдер вернул неожиданный формат списка"
+        "PROVIDER_TIMEOUT", "NETWORK" -> "Список моделей не получен: таймаут или сеть"
+        "PROVIDER_HTTP_ERROR" -> "Провайдер не отдал список моделей"
+        else -> (result.message ?: "Не удалось получить список моделей").let { message -> if (key.isNullOrBlank()) message else message.replace(key, "[СКРЫТО]") }.take(200)
     }
 
     suspend fun selectModel(model: String): String? = commands.withLock {
@@ -161,6 +230,7 @@ class DesktopController(private val directory: Path, initialCredential: String? 
         next = rememberModel(next, next.baseUrl, next.model)
         val profileChanged = oldSettings.baseUrl != next.baseUrl || oldSettings.model != next.model || oldSettings.thinking != next.thinking || oldCredential != credential
         if (profileChanged) invalidateConnectionCheck()
+        if (oldSettings.baseUrl != next.baseUrl || oldCredential != credential) invalidateCatalog()
         _state.update { it.copy(settings = next, apiKeyConfigured = credential != null, sessionId = newId(), run = RunState(), connection = if (profileChanged) connectionForUnverified() else it.connection) }
         saveSettings(next)
         resetEngine()
@@ -345,6 +415,7 @@ class DesktopController(private val directory: Path, initialCredential: String? 
             pending
         }
         pendingCheck?.cancelAndJoin()
+        synchronized(catalogLifecycleLock) { catalogRevision.incrementAndGet(); catalogJob?.cancel(); catalogJob = null }
         resetEngine(); (checker as? AutoCloseable)?.close(); http.close(); credential = null; scope.cancel()
     }
 
