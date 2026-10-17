@@ -75,6 +75,29 @@ interface LlmProvider {
     fun stream(request: ModelRequest): Flow<ModelEvent>
 }
 
+/** One model returned by a provider's model listing. Absent metadata stays null, never guessed. */
+@Serializable
+data class ProviderModel(
+    val id: String,
+    val displayName: String? = null,
+    val contextWindow: Int? = null,
+    val maxOutputTokens: Int? = null,
+)
+
+@Serializable
+data class ModelCatalogResult(
+    val models: List<ProviderModel> = emptyList(),
+    val errorCode: String? = null,
+    val message: String? = null,
+) {
+    val ok: Boolean get() = errorCode == null
+}
+
+/** Lists models for one endpoint. Never sends project text and never implies tool/vision support. */
+interface ModelCatalogClient {
+    suspend fun discover(baseUrl: String, apiKey: String?): ModelCatalogResult
+}
+
 @Serializable
 data class ToolError(val code: String, val message: String, val retryable: Boolean = false, val recovery: String? = null)
 
