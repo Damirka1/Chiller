@@ -11,9 +11,15 @@ First packaged preview of Chiller, a Kotlin/Compose desktop coding agent with Fo
 - Paste/drop attachments, automatic text attachment above5 KiB, per-chat draft/import ownership, rename/delete chats and logical edit/delete whole turns.
 - Read-only helper agents with mailbox, wait/cancel and Studio progress. Original Chiller native icon.
 
+## Downloads
+
+- macOS DMG: Apple Silicon / arm64 (not a universal or Intel build).
+- Windows MSI: x64.
+- Linux: source build; tests and offline smoke passed on the Linux CI runner, no Linux installer in this release.
+
 ## Verification boundary
 
-Default offline checks never spend model tokens. The latest local test count and CI/release results are recorded in RUN_REPORT. Previous live DeepSeek tests passed on an earlier checkpoint; the new tools/attachments have fixtures and real filesystem/process coverage, not a fresh paid-model benchmark. Gemma/vLLM is unverified without the server.
+Default offline checks never spend model tokens. The final local gate passed243 tests with zero failures/errors/skips; offline smoke and synthetic native Keychain smoke passed. CI passed tests on Linux/macOS/Windows and built DMG/MSI (POSIX-only tests are skipped on Windows; offline smoke runs on Linux/macOS). Release workflow results are recorded in RUN_REPORT. Previous live DeepSeek tests passed on an earlier checkpoint; the new tools/attachments have fixtures and real filesystem/process coverage, not a fresh paid-model benchmark. Gemma/vLLM is unverified without the server.
 
 The native Keychain synthetic create/reopen/update/delete smoke passed on macOS. Public web search, HTML and plain-text fetch passed; one GitHub JSON endpoint was unavailable in the smoke, while JSON preservation is fixture-tested. Real selected-window capture, drag/drop/clipboard matrix, IME/VoiceOver, Windows/Linux GUI acceptance remain pending. New native UI automation could not bind the Preview window; compilation/unit results are not substituted for this check.
 

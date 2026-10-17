@@ -201,3 +201,14 @@ User explicitly resumed after limits reset. Read-only audit began at14:43 Asia/A
 
 - Synchronous transferable snapshot now captures text/file paths/image reference before native drop completes; async importer never re-reads the expired transferable. One-shot expiring6 KiB transferable regression added. Explicit screenshot/network catalog admission and denied-capture-no-invocation assertions added.
 - `./gradlew check :evals:offlineSmoke :app-desktop:createDistributable`: passed again, **243 tests,0 failures/errors/skipped**. Current master was pushed as51755a6; CI39050486193 started, macOS tests+offline passed while other jobs were pending at this checkpoint. Follow-up commit will trigger a fresh full matrix before tagging.
+
+
+### Published first preview — completed
+
+- Functional/tag commit: **6fdc7d8c968f615880f30d6c8cec92a6be5fa041**. Annotated tag **v1.1.0** pushed after CI success; branch remains master. Documentation-only final report follows the tag without changing application code.
+- [CI39050745646](https://github.com/Damirka1/Chiller/actions/runs/39050745646): **success**. Tests passed on Ubuntu/macOS/Windows; offline smoke passed on Ubuntu/macOS (intentionally not configured on Windows); both DMG/MSI installer jobs passed. POSIX-only tests are skipped on Windows, not presented as native process verification.
+- [Release39051514743](https://github.com/Damirka1/Chiller/actions/runs/39051514743): **success**, both installers built and publication job completed. [Chiller v1.1.0 Preview](https://github.com/Damirka1/Chiller/releases/tag/v1.1.0) is published (draft=false, prerelease=true). Prepared feature/limit notes applied after workflow publication.
+- Assets verified through GitHub API as uploaded: **Chiller-1.1.0.dmg**,150580881 bytes, Apple Silicon arm64; **Chiller-1.1.0.msi**,136930111 bytes, Windows x64. Runner architectures were confirmed from completed installer logs; macOS package is not universal/Intel. Linux is source-build only. Assets are unsigned.
+- GitHub-reported SHA256: DMG `a42fae5828e18dc6fcb1fa8ae7523f3ed6d70598ea46d36eeeaf3574c1db5084`; MSI `24eeff042a0855b624762c279a994b69666a0398a4b893dcdb90f2f0d9dc2eea`.
+- Remote CI emitted nonfatal warnings for older Actions runtime/setup-java versions and upcoming runner image changes. Updating/pinning those is follow-up maintenance; no successful check was disabled to publish. Final docs-only commit skips a redundant CI rebuild; application code/tag are the fully checked6fdc7d8.
+- Remaining acceptance: real selected-window screenshot permission/capture, clipboard/drop/native keyboard/IME/accessibility matrix, Windows/Linux interactive UI, fresh bounded live eval of new tools/attachments, Gemma/vLLM. Image vision, OS sandbox/PTY/LSP, writable helpers/MCP/multi-file transactions remain outside preview scope. No new paid calls were made in this pass.
