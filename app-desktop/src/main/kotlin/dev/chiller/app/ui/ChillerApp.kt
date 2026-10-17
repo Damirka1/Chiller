@@ -627,7 +627,8 @@ private fun Conversation(state: RunState, reduced: Boolean, onAnswer: (String) -
                 item(key = key) {
                     val previous = projection.entries.getOrNull(position - 1)?.message?.role
                     Column(entryModifier(key).widthIn(max = 760.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        if (!entry.message.content.isNullOrBlank()) Message(entry.message, showHeader = !(entry.message.role == "assistant" && previous == "assistant"))
+                        if (!entry.message.content.isNullOrBlank()) Message(entry.message, showHeader = !(entry.message.role == "assistant" && previous == "assistant"),
+                            onEdit = if (entry.message.role == "user" && canUndo) onRestoreDraft else null)
                         ToolGroup(entry.activities, reduced, onUndo, canUndo)
                     }
                 }
@@ -710,12 +711,22 @@ private fun Hint(text: String, content: @Composable () -> Unit) {
 }
 
 @Composable
-private fun Message(message: AgentMessage, showHeader: Boolean = true, streaming: Boolean = false) {
+private fun Message(message: AgentMessage, showHeader: Boolean = true, streaming: Boolean = false, onEdit: ((String) -> Unit)? = null) {
     val content = message.content.orEmpty()
     val c = LocalChillerPalette.current
     if (message.role == "user") {
         // The user's own messages sit on the right as quiet bubbles; the assistant writes on the page.
-        Row(Modifier.fillMaxWidth().padding(start = 64.dp), horizontalArrangement = Arrangement.End) {
+        val clipboard = LocalClipboardManager.current
+        val interaction = remember { MutableInteractionSource() }
+        val hovered by interaction.collectIsHoveredAsState()
+        Row(Modifier.fillMaxWidth().padding(start = 64.dp).hoverable(interaction), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.Bottom) {
+            // Edit puts the text back into the composer; nothing is resent until the user sends it.
+            androidx.compose.animation.AnimatedVisibility(hovered, enter = fadeIn(tween(120)), exit = fadeOut(tween(120))) {
+                Row(Modifier.padding(end = 6.dp)) {
+                    onEdit?.let { ChillerIconButton(Icons.Outlined.Edit, "Изменить и отправить снова", { it(content) }, Modifier.size(26.dp)) }
+                    ChillerIconButton(Icons.Outlined.ContentCopy, "Копировать", { clipboard.setText(AnnotatedString(content)) }, Modifier.size(26.dp))
+                }
+            }
             SelectionContainer {
                 Text(content.trim(), color = c.text, fontSize = 14.sp, lineHeight = 22.sp, letterSpacing = 0.sp,
                     modifier = Modifier.widthIn(max = 560.dp).clip(RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp, bottomStart = 18.dp, bottomEnd = 6.dp))

@@ -48,6 +48,15 @@ fun main() = application {
             window.rootPane.putClientProperty("apple.awt.windowTitleVisible", false)
         }
         val titleBar = remember(mac) { if (!mac) null else TitleBarSpec(dragArea = { modifier -> WindowDraggableArea(modifier) { androidx.compose.foundation.layout.Box(androidx.compose.ui.Modifier.fillMaxSize()) } }) }
+        // A finished task while the window is in the background asks for attention once (Dock bounce / taskbar flash).
+        var wasActive by remember { mutableStateOf(false) }
+        LaunchedEffect(active, state.run.status) {
+            if (wasActive && !active && state.run.status in setOf("completed", "failed") && !window.isActive) runCatching {
+                if (java.awt.Taskbar.isTaskbarSupported() && java.awt.Taskbar.getTaskbar().isSupported(java.awt.Taskbar.Feature.USER_ATTENTION))
+                    java.awt.Taskbar.getTaskbar().requestUserAttention(true, false)
+            }
+            wasActive = active
+        }
         var demoCount by remember { mutableStateOf(controller.demoProjectCount()) }
         LaunchedEffect(state.sessionId) { demoCount = controller.demoProjectCount() }
         val chooseWorkspace = {
