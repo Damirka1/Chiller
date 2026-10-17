@@ -167,6 +167,21 @@ val EVAL_TASKS: List<EvalTask> = listOf(
         },
     ),
     EvalTask(
+        id = "delegate-research",
+        title = "Раздать исследование помощникам (только чтение)",
+        prompt = "Use helper agents: start one spawn_agent for the billing/ folder and one for the shipping/ folder, in parallel. Each should report the constant that limits the amount per order. Collect both with wait_agents/agent_result and answer with both constant names and values.",
+        files = mapOf(
+            "billing/limits.py" to "# Billing rules\nMAX_INVOICE_TOTAL = 25000\nCURRENCY = 'EUR'\n",
+            "billing/invoice.py" to "from billing.limits import MAX_INVOICE_TOTAL\n\ndef check(total):\n    return total <= MAX_INVOICE_TOTAL\n",
+            "shipping/rules.py" to "# Shipping rules\nMAX_PARCELS_PER_ORDER = 12\nDEFAULT_CARRIER = 'dhl'\n",
+            "shipping/plan.py" to "from shipping.rules import MAX_PARCELS_PER_ORDER\n\ndef split(n):\n    return min(n, MAX_PARCELS_PER_ORDER)\n",
+        ),
+        mode = ExecutionMode.PLAN,
+        allowProcesses = false,
+        check = { _, answer -> mentionsAll(answer, "MAX_INVOICE_TOTAL", "25000", "MAX_PARCELS_PER_ORDER", "12") },
+        reference = { "MAX_INVOICE_TOTAL = 25000 (billing/limits.py); MAX_PARCELS_PER_ORDER = 12 (shipping/rules.py)." },
+    ),
+    EvalTask(
         id = "fix-without-running",
         title = "Исправить без запуска процессов",
         prompt = "is_leap_year in dates.py is wrong for century years (1900 is not a leap year, 2000 is). Fix it. You cannot run commands in this task.",

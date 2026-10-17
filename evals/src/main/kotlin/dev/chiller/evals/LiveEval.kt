@@ -2,6 +2,8 @@ package dev.chiller.evals
 
 import dev.chiller.agent.AgentCoordinator
 import dev.chiller.agent.RunTraceSink
+import dev.chiller.agent.SubagentSupervisor
+import dev.chiller.tools.SubagentTools
 import dev.chiller.contracts.InteractionBroker
 import dev.chiller.contracts.UserQuestion
 import dev.chiller.providers.ChatCompletionsProfile
@@ -35,6 +37,7 @@ data class EvalResult(
     val task: String, val attempt: Int, val passed: Boolean, val verdict: String, val status: String, val error: String?,
     val rounds: Int, val toolCalls: Int, val failedToolCalls: Int, val toolErrors: Map<String, Int>, val toolsUsed: List<String>,
     val durationMs: Long, val promptTokens: Long?, val completionTokens: Long?, val cachedPromptTokens: Long?, val finalAnswer: String,
+    val subagents: Int = 0, val subagentsCompleted: Int = 0,
 )
 
 @Serializable
@@ -105,15 +108,16 @@ private suspend fun runTask(task: EvalTask, attempt: Int, provider: ChatCompleti
     val store = JsonlEventStore(root.resolve("sessions"))
     val artifacts = LocalArtifactStore(root.resolve("artifacts"))
     val processes = LocalProcessService(project)
-    val tools = BuiltinTools(LocalWorkspace(project, store, artifacts, session), processes, artifacts, object : InteractionBroker {
+    val builtin = BuiltinTools(LocalWorkspace(project, store, artifacts, session), processes, artifacts, object : InteractionBroker {
         override suspend fun ask(question: UserQuestion) = "No answer is available in an unattended evaluation. Make a reasonable assumption and state it."
     })
     val traceFile = TraceFile(outDir.resolve("traces/$session.jsonl"))
     val started = System.nanoTime()
     var failure: String? = null
     return kotlinx.coroutines.coroutineScope {
-        val engine = AgentCoordinator(provider, tools, store, processes, session, model, thinking, maxRounds = maxRounds, maxOutputTokens = maxOutput,
-            projectInstructions = ProjectInstructions.load(project)?.text, traces = RunTraceSink { traceFile.append(it) }, scope = this)
+        val supervisor = SubagentSupervisor(provider, builtin, store, session, model, this)
+        val engine = AgentCoordinator(provider, SubagentTools(builtin, supervisor), store, processes, session, model, thinking, maxRounds = maxRounds, maxOutputTokens = maxOutput,
+            projectInstructions = ProjectInstructions.load(project)?.text, traces = RunTraceSink { traceFile.append(it) }, subagents = supervisor, scope = this)
         try {
             withTimeout(5 * 60_000L) { engine.send(task.prompt, task.mode, task.allowProcesses).join() }
         } catch (_: kotlinx.coroutines.TimeoutCancellationException) { failure = "timeout after 5 min"; engine.stop() }
@@ -126,10 +130,12 @@ private suspend fun runTask(task: EvalTask, attempt: Int, provider: ChatCompleti
         }.groupingBy { it }.eachCount()
         processes.close()
         Files.walk(root).use { it.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists) }
+        val helpers = supervisor.state.value
         EvalResult(
             task.id, attempt, verdict.passed && state.status == "completed", verdict.detail, state.status, failure ?: state.error?.take(300),
             state.modelRounds, state.toolCalls, state.failedToolCalls, errors, state.activities.map { it.name }.distinct(),
             (System.nanoTime() - started) / 1_000_000, state.usage.promptTokens, state.usage.completionTokens, state.usage.cachedPromptTokens, answer.take(1500),
+            subagents = helpers.size, subagentsCompleted = helpers.count { it.status == dev.chiller.contracts.SubagentStatus.COMPLETED },
         )
     }
 }
@@ -144,10 +150,10 @@ internal fun renderMarkdown(report: EvalReport): String = buildString {
     appendLine("**Passed ${passed}/${results.size}** · rounds ${results.sumOf { it.rounds }} · tool calls ${results.sumOf { it.toolCalls }} (failed ${results.sumOf { it.failedToolCalls }}) · " +
         "time ${"%.1f".format(results.sumOf { it.durationMs } / 1000.0)} s · prompt ${results.sumOf { it.promptTokens ?: 0 }} · completion ${results.sumOf { it.completionTokens ?: 0 }} · cached ${results.sumOf { it.cachedPromptTokens ?: 0 }} tokens")
     appendLine()
-    appendLine("| Task | # | Result | Rounds | Tools (failed) | Time, s | Prompt / completion tok. | Verdict |")
-    appendLine("|---|---|---|---|---|---|---|---|")
+    appendLine("| Task | # | Result | Rounds | Tools (failed) | Helpers | Time, s | Prompt / completion tok. | Verdict |")
+    appendLine("|---|---|---|---|---|---|---|---|---|")
     results.forEach { r ->
-        appendLine("| ${r.task} | ${r.attempt} | ${if (r.passed) "PASS" else "FAIL"} | ${r.rounds} | ${r.toolCalls} (${r.failedToolCalls}) | ${"%.1f".format(r.durationMs / 1000.0)} | ${r.promptTokens ?: "—"} / ${r.completionTokens ?: "—"} | ${r.verdict.replace("|", "\\|").take(120)} |")
+        appendLine("| ${r.task} | ${r.attempt} | ${if (r.passed) "PASS" else "FAIL"} | ${r.rounds} | ${r.toolCalls} (${r.failedToolCalls}) | ${if (r.subagents > 0) "${r.subagentsCompleted}/${r.subagents}" else "—"} | ${"%.1f".format(r.durationMs / 1000.0)} | ${r.promptTokens ?: "—"} / ${r.completionTokens ?: "—"} | ${r.verdict.replace("|", "\\|").take(120)} |")
     }
     val errors = results.flatMap { it.toolErrors.entries }.groupBy({ it.key }, { it.value }).mapValues { it.value.sum() }
     if (errors.isNotEmpty()) {
