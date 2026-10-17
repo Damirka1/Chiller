@@ -299,6 +299,45 @@ class AgentCoordinatorTest {
         assertEquals(listOf("read-a", "read-b"), state.messages.filter { it.role == "tool" }.map { it.toolCallId })
     }
 
+    @Test fun lifecycleToolSplitsReadBatchesAndWaitsBeforeLaterReads() = runTest {
+        val waitEntered = CompletableDeferred<Unit>()
+        val releaseWait = CompletableDeferred<Unit>()
+        val started = mutableListOf<String>()
+        val calls = listOf(
+            ToolCall("read-before", "read", "{}"),
+            ToolCall("wait", "wait_agents", "{}"),
+            ToolCall("read-after", "read", "{}"),
+        )
+        val provider = ScriptedProvider { request -> flow {
+            if (request.messages.none { it.role == "tool" }) emit(ModelEvent.Completed(AgentMessage("assistant", toolCalls = calls), "tool_calls"))
+            else emit(ModelEvent.Completed(AgentMessage("assistant", "done"), "stop"))
+        } }
+        val lifecycleTools = object : ToolExecutor {
+            override val specs = listOf("read", "wait_agents").map {
+                ToolSpec(it, it, JsonObject(emptyMap()), ToolEffect.READ)
+            }
+            override suspend fun execute(call: ToolCall, context: ToolContext): ToolResult {
+                started += call.id
+                if (call.name == "wait_agents") {
+                    waitEntered.complete(Unit)
+                    releaseWait.await()
+                }
+                return ToolResult(true, buildJsonObject { put("ok", true) })
+            }
+        }
+        val scope = CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler))
+        val coordinator = AgentCoordinator(provider, lifecycleTools, MemoryEvents(), RecordingProcesses(), "session", "model", scope = scope)
+        coordinator.send("read around helpers", ExecutionMode.PLAN)
+        runCurrent()
+        waitEntered.await()
+
+        assertEquals(listOf("read-before", "wait"), started, "the later read must wait for lifecycle completion")
+        releaseWait.complete(Unit)
+        advanceUntilIdle()
+        assertEquals(listOf("read-before", "wait", "read-after"), started)
+        assertEquals("completed", coordinator.state.value.status)
+    }
+
     @Test fun providerUsageIsSumsAcrossRoundsAndSummaryIsJournaled() = runTest {
         val call = ToolCall("call-1", "read", "{}")
         var round = 0

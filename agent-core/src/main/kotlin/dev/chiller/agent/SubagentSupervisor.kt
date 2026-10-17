@@ -10,8 +10,8 @@ import kotlinx.serialization.json.*
 /**
  * Runs read-only child loops for the main agent (depth one: children get only list/search/read and cannot
  * delegate). Limits are per child — rounds, output tokens per round, wall time — plus a cap on children per
- * parent run; there is no shared token budget yet. State lives in a StateFlow so wait() cannot miss a wakeup;
- * the mutex is never held across model calls, tool calls or waits.
+ * parent run. State lives in a StateFlow so wait() cannot miss a wakeup; the mutex is never held across
+ * model calls, tool calls or waits. Critical state is journaled before publication.
  */
 class SubagentSupervisor(
     private val provider: LlmProvider,
@@ -44,15 +44,21 @@ class SubagentSupervisor(
     override suspend fun begin(parentRunId: String) { lock.withLock { activeRun = parentRunId } }
 
     override suspend fun finish(parentRunId: String) {
-        val jobs = lock.withLock {
+        val (toCancel, toJoin, journalFailure) = lock.withLock {
             closedRuns += parentRunId
             if (activeRun == parentRunId) activeRun = null
-            children.values.filter { it.snapshot.parentRunId == parentRunId && !it.snapshot.status.isTerminal }.mapNotNull { child ->
-                transition(child) { it.copy(status = SubagentStatus.CANCELLED, error = "Основной прогон завершился раньше", activity = "", finishedAt = now()) }
-                child.job
+            var failure: Throwable? = null
+            val allChildren = children.values.filter { it.snapshot.parentRunId == parentRunId }
+            val pending = allChildren.filter { !it.snapshot.status.isTerminal }
+            pending.forEach { child ->
+                try { transition(child) { it.copy(status = SubagentStatus.CANCELLED, error = "Основной прогон завершился раньше", activity = "", finishedAt = now()) } }
+                catch (error: Throwable) { if (failure == null) failure = error }
             }
+            Triple(pending.mapNotNull { it.job }, allChildren.mapNotNull { it.job }, failure)
         }
-        jobs.forEach { it.cancel() }
+        toCancel.forEach { it.cancel() }
+        toJoin.joinAll()
+        journalFailure?.let { throw it }
     }
 
     override suspend fun restore(history: List<StoredEvent>) {
@@ -90,7 +96,10 @@ class SubagentSupervisor(
                 fail("LIMIT_REACHED", "At most $maxChildrenPerRun subagents per run", "Wait for running agents and reuse their results")
             val child = Child(SubagentSnapshot(newId(), context.runId, taskId, goal, model, SubagentStatus.QUEUED, maxRounds = normalized.maxRounds, allowedPaths = paths), normalized)
             children[child.snapshot.id] = child
-            transition(child) { it }
+            try { transition(child) { it } } catch (error: Throwable) {
+                children.remove(child.snapshot.id)
+                throw error
+            }
             child.job = scope.launch { runChild(child) }
             trim()
             child.snapshot
@@ -116,10 +125,16 @@ class SubagentSupervisor(
         // A message is only accepted when a later round can still read it.
         if (child.snapshot.rounds >= child.snapshot.maxRounds) fail("TOO_LATE", "Agent is on its last round and cannot read new messages")
         if (child.mailbox.size >= 32) fail("MAILBOX_FULL", "Agent already has 32 unread messages")
-        val sequence = ++child.nextSequence
+        val sequence = child.nextSequence + 1
         child.mailbox.addLast(body)
+        try {
+            transition(child) { it.copy(acceptedMessages = it.acceptedMessages + 1) }
+        } catch (error: Throwable) {
+            child.mailbox.removeLast()
+            throw error
+        }
+        child.nextSequence = sequence
         child.messageIds[key] = body to sequence
-        transition(child) { it.copy(acceptedMessages = it.acceptedMessages + 1) }
         SubagentMessageReceipt(agentId, key, sequence, accepted = true)
     }
 
@@ -134,14 +149,22 @@ class SubagentSupervisor(
     }
 
     override suspend fun cancel(context: ToolContext, agentId: String): SubagentSnapshot {
-        val (snapshot, job) = lock.withLock { requireRun(context); cancelLocked(owned(context, agentId), "Остановлен основным агентом") }
-        job?.cancel()
+        val child = lock.withLock { requireRun(context); owned(context, agentId) }
+        var failure: Throwable? = null
+        val (snapshot, job) = try { lock.withLock { cancelLocked(child, "Остановлен основным агентом") } }
+        catch (error: Throwable) { failure = error; child.snapshot to child.job }
+        job?.cancelAndJoin()
+        failure?.let { throw it }
         return snapshot
     }
 
     override suspend fun cancelByUser(agentId: String): SubagentSnapshot? {
-        val (snapshot, job) = lock.withLock { children[agentId]?.let { cancelLocked(it, "Остановлен пользователем") } } ?: return null
-        job?.cancel()
+        val child = lock.withLock { children[agentId] } ?: return null
+        var failure: Throwable? = null
+        val (snapshot, job) = try { lock.withLock { cancelLocked(child, "Остановлен пользователем") } }
+        catch (error: Throwable) { failure = error; child.snapshot to child.job }
+        job?.cancelAndJoin()
+        failure?.let { throw it }
         return snapshot
     }
 
@@ -149,7 +172,7 @@ class SubagentSupervisor(
 
     /** Cancel is terminal and wins over a completion that arrives later. */
     private suspend fun cancelLocked(child: Child, reason: String): Pair<SubagentSnapshot, Job?> {
-        if (child.snapshot.status.isTerminal) return child.snapshot to null
+        if (child.snapshot.status.isTerminal) return child.snapshot to child.job
         transition(child) { it.copy(status = SubagentStatus.CANCELLED, error = reason, activity = "", finishedAt = now()) }
         return child.snapshot to child.job
     }
@@ -180,10 +203,20 @@ class SubagentSupervisor(
         )
         val childContext = ToolContext(sessionId, "subagent-${child.snapshot.id}", ExecutionMode.PLAN, allowProcesses = false)
         for (round in 0 until request.maxRounds) {
-            val inbox = lock.withLock { generateSequence { child.mailbox.removeFirstOrNull() }.toList() }
+            // Draining the mailbox and advancing rounds is one boundary. A sender either
+            // lands before this snapshot and is included, or waits for the next round.
+            val inbox = lock.withLock {
+                val drained = generateSequence { child.mailbox.removeFirstOrNull() }.toList()
+                try {
+                    transition(child) { it.copy(rounds = round + 1, processedMessages = it.processedMessages + drained.size, activity = if (round == request.maxRounds - 1) "пишет итог" else "думает") }
+                } catch (error: Throwable) {
+                    drained.asReversed().forEach(child.mailbox::addFirst)
+                    throw error
+                }
+                drained
+            }
             inbox.forEach { messages += AgentMessage("user", "Message from the lead agent: $it") }
             val last = round == request.maxRounds - 1
-            settle(child) { it.copy(rounds = round + 1, processedMessages = it.processedMessages + inbox.size, activity = if (last) "пишет итог" else "думает") }
             if (last) messages += AgentMessage("user", "This is your last round. Answer now with your findings; tools are no longer available.")
             val response = complete(ModelRequest(model, messages, if (last) emptyList() else tools, thinking = false, maxOutputTokens = maxOutputTokens)) { usage ->
                 settle(child) { it.copy(usage = it.usage + usage) }
@@ -246,14 +279,17 @@ class SubagentSupervisor(
         transition(child, update)
     }
 
+    /** Caller holds [lock]. Important transitions are journaled before they become observable. */
     private suspend fun transition(child: Child, update: (SubagentSnapshot) -> SubagentSnapshot) {
         val before = child.snapshot
-        child.snapshot = update(before).copy(revision = ++revision)
-        publish()
-        val important = before.status != child.snapshot.status || before.rounds != child.snapshot.rounds || before.toolCalls != child.snapshot.toolCalls || before.acceptedMessages != child.snapshot.acceptedMessages || before.usage != child.snapshot.usage
-        if (important) runCatching {
-            events.append(sessionId, "subagent.state", json.encodeToJsonElement(SubagentSnapshot.serializer(), child.snapshot.copy(result = child.snapshot.result?.take(2000))).jsonObject)
+        val next = update(before).copy(revision = revision + 1)
+        val important = before.revision == 0L || before.status != next.status || before.rounds != next.rounds || before.toolCalls != next.toolCalls || before.acceptedMessages != next.acceptedMessages || before.usage != next.usage
+        if (important) {
+            events.append(sessionId, "subagent.state", json.encodeToJsonElement(SubagentSnapshot.serializer(), next.copy(result = next.result?.take(2000))).jsonObject)
         }
+        revision = next.revision
+        child.snapshot = next
+        publish()
     }
 
     private fun publish() { _state.value = children.values.map { it.snapshot } }

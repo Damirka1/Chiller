@@ -127,6 +127,7 @@ class AgentCoordinator(
                 val id = newId(); runId = id
                 val stats = RunStats()
                 try {
+                    (provider as? RunBudgetProvider)?.beginRun()
                     subagents?.begin(id)
                     withTimeout(10 * 60_000L) { run(text, mode, allowProcesses, id, onAccepted, stats) }
                 } catch (cancelled: CancellationException) {
@@ -152,6 +153,7 @@ class AgentCoordinator(
     }
 
     suspend fun stop() { job?.cancelAndJoin() }
+    suspend fun awaitCompletion() { job?.join() }
 
     private suspend fun appendSummary(id: String, stats: RunStats) {
         val state = _state.value
@@ -373,7 +375,8 @@ class AgentCoordinator(
     }
 
     private fun isReadOnly(call: ToolCall, enabled: List<ToolSpec>): Boolean =
-        enabled.firstOrNull { it.name == call.name }?.effect == ToolEffect.READ
+        call.name !in setOf("spawn_agent", "list_agents", "wait_agents", "agent_result", "message_agent", "cancel_agent") &&
+            enabled.firstOrNull { it.name == call.name }?.effect == ToolEffect.READ
 
     private suspend fun executeCall(call: ToolCall, enabled: List<ToolSpec>, mode: ExecutionMode, allowProcesses: Boolean, runId: String): ToolResult {
         val allowed = enabled.firstOrNull { it.name == call.name }

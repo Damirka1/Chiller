@@ -10,7 +10,13 @@ import kotlin.test.*
 class SubagentSupervisorTest {
     private class Events : EventStore {
         val list = mutableListOf<StoredEvent>()
-        override suspend fun append(sessionId: String, type: String, payload: JsonObject) = StoredEvent(sessionId = sessionId, seq = list.size.toLong(), type = type, payload = payload).also { synchronized(list) { list += it } }
+        var failWhen: (JsonObject) -> Boolean = { false }
+        var beforeAppend: suspend (JsonObject) -> Unit = {}
+        override suspend fun append(sessionId: String, type: String, payload: JsonObject): StoredEvent {
+            beforeAppend(payload)
+            if (failWhen(payload)) error("journal unavailable")
+            return StoredEvent(sessionId = sessionId, seq = list.size.toLong(), type = type, payload = payload).also { synchronized(list) { list += it } }
+        }
         override suspend fun read(sessionId: String) = synchronized(list) { list.toList() }
         override suspend fun list() = emptyList<SessionInfo>()
     }
@@ -129,5 +135,72 @@ class SubagentSupervisorTest {
         val restored = supervisor(this, crashed)
         restored.restore(crashed.read("s"))
         assertEquals(SubagentStatus.INTERRUPTED, restored.state.value.single().status)
+    }
+
+    @Test fun `failed durable append does not publish or leave a queued child`() = runBlocking {
+        val events = Events().apply { failWhen = { true } }
+        val sup = supervisor(this, events)
+        sup.begin("run-1")
+        assertFailsWith<IllegalStateException> { sup.spawn(ctx, SubagentRequest("a", "Explain src")) }
+        assertTrue(sup.state.value.isEmpty(), "an unjournaled child must not become visible")
+        events.failWhen = { false }
+        assertEquals(SubagentStatus.QUEUED, sup.spawn(ctx, SubagentRequest("a", "Explain src")).status)
+        sup.finish("run-1")
+    }
+
+    @Test fun `failed message journal append rolls back mailbox acceptance`() = runBlocking {
+        val events = Events()
+        val sup = supervisor(this, events)
+        sup.begin("run-1")
+        val child = sup.spawn(ctx, SubagentRequest("slow", "slow task", allowedPaths = listOf("src"), maxRounds = 3))
+        withTimeout(2_000) { while (sup.state.value.first().status != SubagentStatus.RUNNING) delay(5) }
+        events.failWhen = { it["acceptedMessages"]?.jsonPrimitive?.intOrNull == 1 }
+        assertFailsWith<IllegalStateException> { sup.send(ctx, child.id, "m1", "Focus on errors") }
+        assertEquals(0, sup.result(ctx, child.id).acceptedMessages)
+        events.failWhen = { false }
+        val receipt = sup.send(ctx, child.id, "m1", "Focus on errors")
+        withTimeout(5_000) { var cursor = 0L; while (!sup.result(ctx, child.id).status.isTerminal) cursor = sup.wait(ctx, cursor, 1_000).cursor }
+        assertEquals(1L, receipt.sequence)
+        assertEquals(1, sup.result(ctx, child.id).processedMessages)
+        sup.finish("run-1")
+    }
+
+    @Test fun `message waiting at final round boundary is rejected as too late`() = runBlocking {
+        val boundaryEntered = CompletableDeferred<Unit>()
+        val releaseBoundary = CompletableDeferred<Unit>()
+        val events = Events().apply {
+            beforeAppend = { payload ->
+                if (payload["rounds"]?.jsonPrimitive?.intOrNull == 2) {
+                    boundaryEntered.complete(Unit)
+                    releaseBoundary.await()
+                }
+            }
+        }
+        val provider = object : LlmProvider {
+            private var requests = 0
+            override suspend fun probe() = CapabilityReport("test", true, false)
+            override fun stream(request: ModelRequest): Flow<ModelEvent> = flow {
+                if (requests++ == 0) emit(ModelEvent.Completed(AgentMessage("assistant", toolCalls = listOf(ToolCall("first", "read_file", """{"path":"src/a.kt"}"""))), "tool_calls"))
+                else emit(ModelEvent.Completed(AgentMessage("assistant", "final"), "stop"))
+            }
+        }
+        val sup = SubagentSupervisor(provider, Files(), events, "s", "m", this, childTimeoutMs = 5_000)
+        sup.begin("run-1")
+        val child = sup.spawn(ctx, SubagentRequest("final", "final round", allowedPaths = listOf("src"), maxRounds = 2))
+        withTimeout(2_000) { boundaryEntered.await() }
+
+        val sending = async { runCatching { sup.send(ctx, child.id, "late", "include one more detail") } }
+        yield() // Ensure the send is queued behind the in-progress durable round transition.
+        assertEquals(false, sending.isCompleted)
+        releaseBoundary.complete(Unit)
+        val result = sending.await()
+        assertTrue(result.isFailure)
+        assertTrue((result.exceptionOrNull() as ToolException).code in setOf("TOO_LATE", "AGENT_FINISHED"))
+        withTimeout(2_000) {
+            while (!sup.result(ctx, child.id).status.isTerminal) delay(1)
+        }
+        assertEquals(0, sup.result(ctx, child.id).acceptedMessages)
+        assertEquals(0, sup.result(ctx, child.id).processedMessages)
+        sup.finish("run-1")
     }
 }
