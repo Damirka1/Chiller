@@ -4,6 +4,7 @@ import dev.chiller.contracts.*
 
 fun modelLabel(id: String): String = when (id) {
     "deepseek-flash" -> "DeepSeek V4.1 Flash"
+    "chiller-demo" -> "Демо-сценарий"
     else -> id.substringAfterLast('/').ifBlank { id }
 }
 

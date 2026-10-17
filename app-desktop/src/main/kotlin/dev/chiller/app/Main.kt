@@ -61,6 +61,9 @@ fun main() = application {
                 Separator()
                 Item("Настройки…", enabled = !active, shortcut = KeyShortcut(Key.Comma, meta = mac, ctrl = !mac), onClick = { actions.tryEmit(DesktopAction.SETTINGS) })
             }
+            Menu("Справка") {
+                Item("Демо: все инструменты", enabled = !active, onClick = { scope.launch { controller.startDemo() } })
+            }
             Menu("Диалог") {
                 Item("Отправить", enabled = !active, shortcut = KeyShortcut(Key.Enter, meta = mac, ctrl = !mac), onClick = { actions.tryEmit(DesktopAction.SEND) })
                 Item("Остановить", enabled = active, shortcut = KeyShortcut(Key.Period, meta = mac, ctrl = !mac), onClick = { actions.tryEmit(DesktopAction.STOP) })
@@ -87,6 +90,7 @@ fun main() = application {
             onSelectSession = { scope.launch { controller.selectSession(it) } },
             onChooseWorkspace = chooseWorkspace,
             recentWorkspaces = state.settings.recentWorkspaces, sessionWorkspaces = state.sessionWorkspaces,
+            onStartDemo = { scope.launch { controller.startDemo() } },
             titleBar = titleBar, buildStamp = BuildStamp.value,
             onOpenTrace = {
                 val trace = controller.tracePath(state.sessionId).toFile()

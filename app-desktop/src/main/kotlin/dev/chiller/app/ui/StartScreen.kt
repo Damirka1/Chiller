@@ -53,6 +53,7 @@ internal fun StartScreen(
     workspacePath: String?, recent: List<RecentProject>, modelName: String, connectionLine: String, connectionColor: Color,
     onOpenFolder: () -> Unit, onOpenPath: (String) -> Unit, onStarter: (Starter) -> Unit, modifier: Modifier = Modifier,
     resume: ResumeItem? = null, onResume: (String) -> Unit = {}, connection: ConnectionPrompt? = null,
+    onDemo: (() -> Unit)? = null,
 ) {
     val c = LocalChillerPalette.current
     var dropping by remember { mutableStateOf(false) }
@@ -102,6 +103,10 @@ internal fun StartScreen(
                     Spacer(Modifier.height(16.dp))
                 }
                 connection?.let { ConnectionRow(modelName, connectionLine, connectionColor, it); Spacer(Modifier.height(16.dp)) }
+                onDemo?.let {
+                    ChillerControl("Посмотреть демо: все инструменты на тестовом проекте", it, icon = Icons.Outlined.PlayCircleOutline)
+                    Spacer(Modifier.height(10.dp))
+                }
                 if (!tight) ShortcutHints()
             } else {
                 val name = Path.of(workspacePath).fileName?.toString() ?: workspacePath

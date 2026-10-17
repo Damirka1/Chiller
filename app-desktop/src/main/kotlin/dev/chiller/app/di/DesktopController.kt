@@ -278,6 +278,7 @@ class DesktopController(private val directory: Path, initialCredential: String? 
         if (requestId.isBlank() || requestId.length > 100) return rejected("Недопустимый ID отправки")
         if (text.isBlank()) return rejected("Сообщение пустое")
         if (busy()) return rejected("Уже выполняется другая задача")
+        if (events.findEarly(session, "session.demo") != null) return rejected("Это демо-диалог: в нём отвечает сценарий, а не модель. Начните новый диалог.")
         if (credential == null) {
             val user = AgentMessage("user", text)
             val answer = AgentMessage("assistant", "Это offline-режим Chiller. Интерфейс готов к работе; подключите API в настройках, чтобы выполнять задачи в проекте. Ключ хранится только на время запуска.", origin = MessageOrigin(MessageOriginKind.OFFLINE))
@@ -342,7 +343,27 @@ class DesktopController(private val directory: Path, initialCredential: String? 
     fun tracePath(sessionId: String): Path = directory.resolve("traces").resolve("$sessionId.jsonl")
     private fun traceSink(sessionId: String): RunTraceSink { val file = TraceFile(tracePath(sessionId)); return RunTraceSink { file.append(it) } }
 
-    private suspend fun buildEngine(): AgentCoordinator {
+    /**
+     * Starts the scripted demo on a fresh throwaway project under the app data directory. It runs the
+     * real agent loop with every tool, Python included, but no model and no network. The folder is
+     * not added to recent projects and the dialog refuses later real messages.
+     */
+    suspend fun startDemo() = commands.withLock {
+        if (busy()) return@withLock
+        try {
+            val stamp = java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss"))
+            val root = withContext(Dispatchers.IO) { directory.resolve("demo").resolve(stamp).also { DemoScenario.createProject(it) }.toRealPath() }
+            resetEngine()
+            _state.update { it.copy(settings = it.settings.copy(workspace = root.toString()), sessionId = newId(), run = RunState()) }
+            val engine = buildEngine(DemoScenario.Provider(), DemoScenario.MODEL_ID)
+            events.append(_state.value.sessionId, "session.demo", buildJsonObject { put("scenario", "all-tools") })
+            val job = engine.send(DemoScenario.PROMPT, ExecutionMode.WORKSPACE_EDIT, allowProcesses = true)
+            job.invokeOnCompletion { scope.launch { refreshSessions() } }
+            refreshSessions()
+        } catch (_: Exception) { showError("Не удалось запустить демо.") }
+    }
+
+    private suspend fun buildEngine(providerOverride: LlmProvider? = null, modelOverride: String? = null): AgentCoordinator {
         val s = _state.value
         val root = Path.of(s.settings.workspace ?: throw IllegalStateException("Choose workspace"))
         val workspace = LocalWorkspace(root, events, artifacts, s.sessionId)
@@ -354,10 +375,10 @@ class DesktopController(private val directory: Path, initialCredential: String? 
         val profile = if (java.net.URI(s.settings.baseUrl).host == "api.deepseek.com")
             ChatCompletionsProfile.deepSeekFlash(s.settings.baseUrl, s.settings.model)
         else ChatCompletionsProfile("generic", s.settings.baseUrl, s.settings.model)
-        val provider = ChatCompletionsProvider(http, profile) { credential }
+        val provider = providerOverride ?: ChatCompletionsProvider(http, profile) { credential }
         // Read once per engine: an edit to AGENTS.md applies from the next dialog.
         val instructions = withContext(Dispatchers.IO) { ProjectInstructions.load(root) }
-        val engine = AgentCoordinator(provider, tools, events, processes, s.sessionId, s.settings.model, s.settings.thinking, projectInstructions = instructions?.text, traces = traceSink(s.sessionId), scope = scope)
+        val engine = AgentCoordinator(provider, tools, events, processes, s.sessionId, modelOverride ?: s.settings.model, s.settings.thinking, projectInstructions = instructions?.text, traces = traceSink(s.sessionId), scope = scope)
         coordinator = engine
         if (instructions != null) events.append(s.sessionId, "context.instructions", buildJsonObject {
             put("sources", JsonArray(instructions.sources.map(::JsonPrimitive))); put("truncated", instructions.truncated)

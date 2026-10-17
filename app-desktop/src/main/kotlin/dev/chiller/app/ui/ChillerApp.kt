@@ -99,6 +99,7 @@ fun ChillerApp(
     catalog: ModelCatalogState = ModelCatalogState(), onRefreshModels: () -> Unit = {}, onCancelCatalogRefresh: () -> Unit = {},
     recentWorkspaces: List<String> = emptyList(), onOpenWorkspace: (String) -> Unit = {},
     sessionWorkspaces: Map<String, String> = emptyMap(),
+    onStartDemo: (() -> Unit)? = null,
     onOpenTrace: (() -> Unit)? = null,
     /** macOS full-window content: the native title bar is transparent and the traffic lights float over the app. */
     titleBar: TitleBarSpec? = null,
@@ -205,6 +206,7 @@ fun ChillerApp(
                                             onStarter = { starter -> updateDraft(starter.prompt); if (starter.needsEdits) mode = ExecutionMode.WORKSPACE_EDIT },
                                             modifier = Modifier.weight(1f).fillMaxWidth(),
                                             resume = resume, onResume = { if (!active) onSelectSession(it) },
+                                            onDemo = onStartDemo?.let { start -> { if (!active) start() } },
                                             connection = when {
                                                 connection.status == "verified" -> null
                                                 !apiKeyConfigured -> ConnectionPrompt("Добавить ключ") { settings = true }
