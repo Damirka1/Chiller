@@ -28,3 +28,5 @@ compose.desktop {
         }
     }
 }
+// Run from the repository root so the root .env and relative paths resolve as in the README.
+tasks.withType<JavaExec>().matching { it.name == "run" }.configureEach { workingDir = rootProject.projectDir }

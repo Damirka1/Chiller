@@ -52,6 +52,17 @@ class LocalCredentialsTest {
         assertNull(LocalCredentials.load(emptyMap(), envFile("API_TOKEN=   ")))
     }
 
+    @Test fun `module working directory finds the project root dotenv but nothing above it`() {
+        val root = directory.resolve("repo").also { Files.createDirectories(it.resolve("app-desktop")) }
+        Files.writeString(root.resolve("settings.gradle.kts"), "")
+        Files.writeString(root.resolve(".env"), "API_TOKEN=root-token")
+        assertEquals("root-token", LocalCredentials.load(emptyMap(), start = root.resolve("app-desktop")))
+
+        Files.writeString(directory.resolve(".env"), "API_TOKEN=outside-token")
+        Files.delete(root.resolve(".env"))
+        assertNull(LocalCredentials.load(emptyMap(), start = root.resolve("app-desktop")))
+    }
+
     private fun envFile(contents: String): Path = directory.resolve(".env").also {
         Files.writeString(it, contents)
     }

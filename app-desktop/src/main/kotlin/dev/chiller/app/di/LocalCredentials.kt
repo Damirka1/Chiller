@@ -11,16 +11,29 @@ object LocalCredentials {
 
     fun load(
         environment: Map<String, String> = System.getenv(),
-        envFile: Path = Path.of(".env"),
+        envFile: Path? = null,
+        start: Path = Path.of("").toAbsolutePath(),
     ): String? {
         environment["DEEPSEEK_API_KEY"]?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
         environment["API_TOKEN"]?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
 
-        val path = (if (envFile.isAbsolute) envFile else Path.of("").toAbsolutePath().resolve(envFile)).normalize()
-        val contents = readBoundedUtf8(path) ?: return null
-        val values = parse(contents)
-        return values["API_TOKEN"]?.takeIf { it.isNotEmpty() }
-            ?: values["DEEPSEEK_API_KEY"]?.takeIf { it.isNotEmpty() }
+        val candidates = if (envFile != null) listOf(if (envFile.isAbsolute) envFile else start.resolve(envFile)) else dotenvCandidates(start)
+        return candidates.firstNotNullOfOrNull { path ->
+            val values = parse(readBoundedUtf8(path.normalize()) ?: return@firstNotNullOfOrNull null)
+            values["API_TOKEN"]?.takeIf { it.isNotEmpty() } ?: values["DEEPSEEK_API_KEY"]?.takeIf { it.isNotEmpty() }
+        }
+    }
+
+    /**
+     * `.env` in the working directory, then in the enclosing project root: the nearest ancestor (at most
+     * four levels up) holding `settings.gradle.kts` or `.git`. `gradlew :app-desktop:run` and IDE runs
+     * start in a module folder, so the root `.env` would otherwise be missed. Nothing above the root is read.
+     */
+    internal fun dotenvCandidates(start: Path): List<Path> {
+        val origin = start.toAbsolutePath().normalize()
+        val root = generateSequence(origin) { it.parent }.take(5)
+            .firstOrNull { Files.isRegularFile(it.resolve("settings.gradle.kts")) || Files.exists(it.resolve(".git")) }
+        return listOfNotNull(origin.resolve(".env"), root?.resolve(".env")).distinct()
     }
 
     private fun readBoundedUtf8(path: Path): String? {
