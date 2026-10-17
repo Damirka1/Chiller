@@ -23,14 +23,14 @@ import java.nio.file.Path
 data class DesktopSettings(val baseUrl: String = "https://api.deepseek.com", val model: String = "deepseek-flash", val thinking: Boolean = false, val workspace: String? = null)
 data class DesktopState(val run: RunState = RunState(), val sessions: List<SessionInfo> = emptyList(), val sessionId: String = newId(), val settings: DesktopSettings = DesktopSettings(), val apiKeyConfigured: Boolean = false, val allowProcesses: Boolean = false, val exportContent: String? = null, val exportFormat: String = "markdown")
 
-class DesktopController(private val directory: Path) {
+class DesktopController(private val directory: Path, initialCredential: String? = LocalCredentials.load()) {
     private val commands = Mutex()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
     private val events = JsonlEventStore(directory.resolve("sessions"))
     private val artifacts = LocalArtifactStore(directory.resolve("artifacts"))
     private val exporter = SessionExporter(events)
-    private var credential: String? = System.getenv("DEEPSEEK_API_KEY")?.takeIf { it.isNotBlank() }
+    private var credential: String? = initialCredential?.takeIf { it.isNotBlank() }
     private val _state = MutableStateFlow(DesktopState(apiKeyConfigured = credential != null))
     val state: StateFlow<DesktopState> = _state.asStateFlow()
     private var coordinator: AgentCoordinator? = null

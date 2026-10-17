@@ -18,8 +18,11 @@ compose.desktop {
     application {
         mainClass = "dev.chiller.app.MainKt"
         jvmArgs += listOf("--enable-native-access=ALL-UNNAMED", "-Dapple.awt.application.name=Chiller")
+        if (providers.gradleProperty("chillerPreview").isPresent) jvmArgs += "-Dchiller.offlinePreview=true"
         nativeDistributions {
-            packageName = "Chiller"
+            val preview = providers.gradleProperty("chillerPreview").isPresent
+            packageName = if (preview) "ChillerPreview" else "Chiller"
+            macOS.bundleID = if (preview) "dev.chiller.preview" else "dev.chiller.app"
             packageVersion = "1.0.0"
             includeAllModules = true
         }

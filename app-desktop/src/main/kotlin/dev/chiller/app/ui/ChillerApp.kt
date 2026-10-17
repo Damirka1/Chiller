@@ -3,6 +3,9 @@ package dev.chiller.app.ui
 import androidx.compose.animation.*
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.*
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.*
@@ -24,10 +27,15 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.key.*
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -66,13 +74,19 @@ fun ChillerApp(
     var layout by remember { mutableStateOf(WorkspaceLayout.FOCUS) }
     var sidebar by remember { mutableStateOf(true) }
     var settings by remember { mutableStateOf(false) }
-    var draft by remember(selectedSessionId) { mutableStateOf("") }
+    val drafts = remember { mutableStateMapOf<String, String>() }
+    val draftKey = selectedSessionId ?: "new"
+    val draft = drafts[draftKey].orEmpty()
+    val updateDraft: (String) -> Unit = { drafts[draftKey] = it }
     var mode by remember { mutableStateOf(ExecutionMode.PLAN) }
     var reducedMotion by remember { mutableStateOf(false) }
     var showCompactChanges by remember { mutableStateOf(false) }
+    var inspectorWidth by remember { mutableStateOf(348.dp) }
+    val density = LocalDensity.current
+    val inspectorResize = rememberDraggableState { delta -> inspectorWidth = (inspectorWidth - with(density) { delta.toDp() }).coerceIn(280.dp, 480.dp) }
     val active = state.status in setOf("preparing", "streaming", "executing")
     val empty = state.messages.none { it.role in setOf("user", "assistant") } && state.activities.isEmpty() && state.error == null
-    val send = { if (draft.isNotBlank() && !active) { onSend(draft.trim(), mode); draft = "" } }
+    val send = { if (draft.isNotBlank() && !active) { onSend(draft.trim(), mode); updateDraft("") } }
     val handleAction by rememberUpdatedState<(DesktopAction) -> Unit> { action ->
         when (action) {
             DesktopAction.NEW_CHAT -> if (!active) onNewSession()
@@ -116,37 +130,33 @@ fun ChillerApp(
                             if (!(compact && layout == WorkspaceLayout.STUDIO && showCompactChanges)) {
                                 Column(Modifier.weight(1f).fillMaxHeight()) {
                                     if (empty) {
-                                        Box(Modifier.weight(1f).fillMaxWidth().padding(horizontal = 36.dp), contentAlignment = Alignment.Center) {
-                                            Column(Modifier.widthIn(max = 640.dp).fillMaxWidth().padding(bottom = 34.dp)) {
-                                                ChillerMark(Modifier.size(31.dp), c.accent)
-                                                Spacer(Modifier.height(21.dp))
-                                                Text("С чего начнём?", fontSize = 29.sp, lineHeight = 37.sp, letterSpacing = (-1).sp, fontWeight = FontWeight.Normal, color = c.text)
-                                                Spacer(Modifier.height(8.dp))
-                                                Text(if (workspacePath == null) "Откройте проект и расскажите, что хотите сделать." else "${workspacePath.substringAfterLast('/')} — готов к вашей следующей идее.", color = c.muted, fontSize = 13.sp, lineHeight = 21.sp)
-                                                Spacer(Modifier.height(29.dp))
-                                                Composer(draft, { draft = it }, mode, { mode = it }, providerModel, active, send, onStop, allowProcesses, onAllowProcessesChange, { settings = true }, Modifier.fillMaxWidth())
-                                                Spacer(Modifier.height(17.dp))
-                                                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                                                    ChillerControl("Разобраться в проекте", { draft = "Помоги разобраться в структуре и назначении этого проекта." }, icon = Icons.Outlined.Search)
-                                                    ChillerControl("Найти ошибку", { draft = "Помоги найти и исправить ошибку в проекте." }, icon = Icons.Outlined.BugReport)
+                                        Box(Modifier.weight(1f).fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
+                                            Column(Modifier.widthIn(max = 760.dp).fillMaxWidth().padding(bottom = 12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                                                ChillerMark(Modifier.size(34.dp), c.faint)
+                                                Spacer(Modifier.height(22.dp))
+                                                Text(if (workspacePath == null) "Что будем создавать?" else "Что сделаем в ${workspacePath.substringAfterLast('/')}?", fontSize = 26.sp, lineHeight = 34.sp, letterSpacing = (-.6).sp, color = c.text, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                                                Spacer(Modifier.height(10.dp))
+                                                Text(if (workspacePath == null) "Выберите проект или начните с идеи" else "От идеи до работающего кода — вместе с Chiller", color = c.muted, fontSize = 13.sp, lineHeight = 20.sp)
+                                                Spacer(Modifier.height(20.dp))
+                                                if (workspacePath == null) ChillerControl("Открыть проект", onChooseWorkspace, icon = Icons.Outlined.FolderOpen, style = ControlStyle.OUTLINE)
+                                                else Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                                    ChillerControl("Разобраться в проекте", { updateDraft("Помоги разобраться в структуре и назначении этого проекта.") }, icon = Icons.Outlined.Search)
+                                                    ChillerControl("Найти ошибку", { updateDraft("Помоги найти и исправить ошибку в проекте.") }, icon = Icons.Outlined.BugReport)
                                                 }
                                             }
                                         }
                                     } else {
                                         Conversation(state, reducedMotion, onAnswerQuestion, onUndo, !active, Modifier.weight(1f).fillMaxWidth())
-                                        Box(Modifier.fillMaxWidth().padding(horizontal = 28.dp, vertical = 18.dp), contentAlignment = Alignment.Center) {
-                                            Composer(draft, { draft = it }, mode, { mode = it }, providerModel, active, send, onStop, allowProcesses, onAllowProcessesChange, { settings = true }, Modifier.widthIn(max = 740.dp).fillMaxWidth())
-                                        }
                                     }
-                                    Row(Modifier.fillMaxWidth().height(27.dp).padding(horizontal = 24.dp), verticalAlignment = Alignment.CenterVertically) {
-                                        Box(Modifier.size(5.dp).clip(CircleShape).background(if (isDemo) c.faint else c.accent))
-                                        Spacer(Modifier.width(6.dp))
-                                        Text(if (isDemo) "Модель не подключена" else "${friendlyModel(providerModel)} · API", color = c.faint, fontSize = 10.sp, lineHeight = 14.sp)
-                                        Spacer(Modifier.weight(1f))
-                                        state.contextEstimatedTokens?.let { tokens ->
-                                            Text("≈ $tokens токенов${if (state.droppedContextMessages > 0) " · история сокращена" else ""}", color = c.faint, fontSize = 10.sp, modifier = Modifier.padding(end = 16.dp))
+                                    Box(Modifier.fillMaxWidth().padding(horizontal = if (compact) 20.dp else 32.dp).padding(bottom = 22.dp, top = 8.dp), contentAlignment = Alignment.Center) {
+                                        Column(Modifier.widthIn(max = 760.dp).fillMaxWidth()) {
+                                            Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                                                ChillerControl(workspacePath?.substringAfterLast('/') ?: "Выбрать проект", onChooseWorkspace, icon = Icons.Outlined.FolderOpen, enabled = !active)
+                                                Spacer(Modifier.weight(1f))
+                                                state.contextEstimatedTokens?.let { tokens -> Text("≈ $tokens токенов${if (state.droppedContextMessages > 0) " · контекст сокращён" else ""}", color = c.muted, fontSize = 11.sp) }
+                                            }
+                                            Composer(draft, updateDraft, mode, { mode = it }, providerModel, active, send, onStop, allowProcesses, onAllowProcessesChange, { settings = true }, Modifier.fillMaxWidth(), apiKeyConfigured)
                                         }
-                                        Text("⌘ ↵  Отправить", color = c.faint, fontSize = 10.sp, lineHeight = 14.sp)
                                     }
                                 }
                             }
@@ -155,7 +165,10 @@ fun ChillerApp(
                                 enter = if (reducedMotion) EnterTransition.None else expandHorizontally(tween(220)) + fadeIn(tween(160)),
                                 exit = if (reducedMotion) ExitTransition.None else shrinkHorizontally(tween(180)) + fadeOut(tween(110)),
                             ) {
-                                Inspector(state.activities, onUndo, !active, reducedMotion, if (compact) Modifier.fillMaxSize() else Modifier.width(340.dp).fillMaxHeight())
+                                Row(if (compact) Modifier.fillMaxSize() else Modifier.width(inspectorWidth).fillMaxHeight()) {
+                                    if (!compact) Box(Modifier.width(5.dp).fillMaxHeight().background(c.sidebar).draggable(inspectorResize, Orientation.Horizontal))
+                                    Inspector(state.activities, onUndo, !active, reducedMotion, Modifier.weight(1f).fillMaxHeight())
+                                }
                             }
                         }
                     }
@@ -175,20 +188,19 @@ private fun Sidebar(
     onNew: () -> Unit, onSelect: (String) -> Unit, onChoose: () -> Unit, onSettings: () -> Unit, onTheme: () -> Unit,
 ) {
     val c = LocalChillerPalette.current
-    Column(Modifier.width(224.dp).fillMaxHeight().background(c.sidebar).padding(horizontal = 12.dp)) {
-        Row(Modifier.fillMaxWidth().height(62.dp).padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+    Column(Modifier.width(248.dp).fillMaxHeight().background(c.sidebar).padding(horizontal = 12.dp)) {
+        Row(Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             ChillerMark(Modifier.size(23.dp)); Spacer(Modifier.width(9.dp))
             Text("Chiller", color = c.text, fontSize = 15.sp, fontWeight = FontWeight.Medium, letterSpacing = (-.4f).sp)
             Spacer(Modifier.weight(1f))
-            ChillerIconButton(Icons.Outlined.EditNote, "Новый диалог", onNew, enabled = enabled)
         }
         ChillerControl("Новый диалог", onNew, Modifier.fillMaxWidth(), icon = Icons.Outlined.Add, enabled = enabled, trailing = "⌘ N")
-        Spacer(Modifier.height(23.dp))
-        Text("Проект", color = c.faint, fontSize = 11.sp, modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp))
+        Spacer(Modifier.height(18.dp))
+        Text("Проект", color = c.muted, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp))
         ChillerControl(workspace?.substringAfterLast('/') ?: "Открыть папку…", onChoose, Modifier.fillMaxWidth(), icon = Icons.Outlined.FolderOpen, style = if (workspace != null) ControlStyle.SELECTED else ControlStyle.QUIET, enabled = enabled)
-        Spacer(Modifier.height(23.dp))
+        Spacer(Modifier.height(18.dp))
         Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text("Диалоги", color = c.faint, fontSize = 11.sp)
+            Text("Недавние диалоги", color = c.muted, fontSize = 12.sp)
             Spacer(Modifier.weight(1f))
             if (sessions.isNotEmpty()) Text("${sessions.size}", color = c.faint, fontSize = 10.sp)
         }
@@ -203,7 +215,7 @@ private fun Sidebar(
             ChillerIconButton(Icons.Outlined.Settings, "Настройки", onSettings, enabled = enabled)
             Column(Modifier.weight(1f).padding(start = 6.dp)) {
                 Text("Настройки", color = c.text, fontSize = 12.sp, lineHeight = 18.sp)
-                Text(if (connected) "Подключено к API" else "Подключить модель", color = c.faint, fontSize = 10.sp, lineHeight = 16.sp)
+                Text(if (connected) "Ключ задан · не проверен" else "Подключить модель", color = c.faint, fontSize = 10.sp, lineHeight = 16.sp)
             }
             ChillerIconButton(Icons.Outlined.Contrast, "Сменить тему", onTheme)
         }
@@ -217,7 +229,7 @@ private fun Toolbar(title: String?, workspace: String?, layout: WorkspaceLayout,
         ChillerIconButton(Icons.Outlined.VerticalSplit, "Боковая панель", onSidebar)
         Spacer(Modifier.width(10.dp))
         Text(workspace?.substringAfterLast('/') ?: "Chiller", color = c.muted, fontSize = 12.sp)
-        Text(" / ", color = c.border, fontSize = 12.sp)
+        Text(" / ", color = c.faint, fontSize = 12.sp)
         Text(title?.take(44) ?: "Новый диалог", color = c.text, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
         if (active) { Text(statusLabel(status), color = c.muted, fontSize = 11.sp, modifier = Modifier.padding(end = 12.dp)) }
         Row(Modifier.clip(RoundedCornerShape(7.dp)).background(c.sidebar).padding(2.dp), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -234,12 +246,13 @@ private fun Toolbar(title: String?, workspace: String?, layout: WorkspaceLayout,
 }
 
 @Composable
-private fun Composer(draft: String, onDraft: (String) -> Unit, mode: ExecutionMode, onMode: (ExecutionMode) -> Unit, model: String, running: Boolean, onSend: () -> Unit, onStop: () -> Unit, allowProcesses: Boolean, onAllow: (Boolean) -> Unit, onSettings: () -> Unit, modifier: Modifier) {
+private fun Composer(draft: String, onDraft: (String) -> Unit, mode: ExecutionMode, onMode: (ExecutionMode) -> Unit, model: String, running: Boolean, onSend: () -> Unit, onStop: () -> Unit, allowProcesses: Boolean, onAllow: (Boolean) -> Unit, onSettings: () -> Unit, modifier: Modifier, configured: Boolean) {
     val c = LocalChillerPalette.current
+    var focused by remember { mutableStateOf(false) }
     var menu by remember { mutableStateOf(false) }
-    Column(modifier.clip(RoundedCornerShape(12.dp)).background(c.surface).border(1.dp, c.border, RoundedCornerShape(12.dp)).padding(13.dp)) {
+    Column(modifier.shadow(3.dp, RoundedCornerShape(18.dp), ambientColor = c.text.copy(alpha = .04f), spotColor = c.text.copy(alpha = .04f)).clip(RoundedCornerShape(18.dp)).background(c.surface).border(1.dp, if (focused) c.muted.copy(alpha = .55f) else c.border, RoundedCornerShape(18.dp)).padding(12.dp)) {
         BasicTextField(draft, onDraft,
-            modifier = Modifier.fillMaxWidth().heightIn(min = 47.dp, max = 180.dp).verticalScroll(rememberScrollState()).padding(horizontal = 2.dp, vertical = 2.dp),
+            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp, max = 164.dp).onFocusChanged { focused = it.isFocused }.verticalScroll(rememberScrollState()).padding(horizontal = 2.dp, vertical = 2.dp),
             textStyle = TextStyle(color = c.text, fontSize = 14.sp, lineHeight = 22.sp, letterSpacing = 0.sp), cursorBrush = SolidColor(c.text),
             decorationBox = { field -> Box { if (draft.isEmpty()) Text("Напишите задачу…", color = c.faint, fontSize = 14.sp, lineHeight = 22.sp); field() } },
         )
@@ -254,9 +267,9 @@ private fun Composer(draft: String, onDraft: (String) -> Unit, mode: ExecutionMo
                     }
                 }
             }
-            Text("/", color = c.border, fontSize = 11.sp, modifier = Modifier.padding(horizontal = 2.dp))
-            ChillerControl(friendlyModel(model), onSettings, enabled = !running)
             Spacer(Modifier.weight(1f))
+            ChillerControl(friendlyModel(model) + if (configured) " · ключ задан" else " · настроить", onSettings, enabled = !running)
+            Spacer(Modifier.width(6.dp))
             if (mode == ExecutionMode.WORKSPACE_EDIT) {
                 ChillerIconButton(Icons.Outlined.Terminal, if (allowProcesses) "Команды разрешены" else "Команды выключены", { onAllow(!allowProcesses) }, enabled = !running, primary = allowProcesses)
                 Spacer(Modifier.width(8.dp))
@@ -276,8 +289,8 @@ private fun Conversation(state: RunState, reduced: Boolean, onAnswer: (String) -
     LaunchedEffect(state.messages.size, state.streamingText, state.activities, state.question) {
         if (follow && scroll.layoutInfo.totalItemsCount > 0) { if (reduced) scroll.scrollToItem(scroll.layoutInfo.totalItemsCount - 1) else scroll.animateScrollToItem(scroll.layoutInfo.totalItemsCount - 1) }
     }
-    Box(modifier) {
-        LazyColumn(state = scroll, modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = 28.dp, vertical = 28.dp), verticalArrangement = Arrangement.spacedBy(22.dp)) {
+    Box(modifier, contentAlignment = Alignment.TopCenter) {
+        LazyColumn(state = scroll, modifier = Modifier.widthIn(max = 816.dp).fillMaxSize(), contentPadding = PaddingValues(horizontal = 28.dp, vertical = 28.dp), verticalArrangement = Arrangement.spacedBy(22.dp)) {
             var activityOffset = 0
             state.messages.forEachIndexed { index, message ->
                 if (message.role in setOf("user", "assistant")) {
@@ -285,7 +298,7 @@ private fun Conversation(state: RunState, reduced: Boolean, onAnswer: (String) -
                     val activities = state.activities.drop(activityOffset).take(calls)
                     activityOffset += calls
                     item(key = "message-$index") {
-                        Column(Modifier.widthIn(max = 740.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Column(Modifier.widthIn(max = 760.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                             if (!message.content.isNullOrBlank()) Message(message.role, message.content!!)
                             activities.forEach { ToolRow(it, reduced, onUndo, canUndo) }
                         }
@@ -325,13 +338,28 @@ private fun Message(role: String, content: String) {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     val segments = content.split("```")
                     segments.forEachIndexed { index, text ->
-                        if (index % 2 == 1) Text(text.substringAfter('\n', text).trimEnd(), color = c.text, fontFamily = FontFamily.Monospace, fontSize = 12.sp, lineHeight = 20.sp,
-                            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(7.dp)).background(c.sidebar).padding(12.dp))
+                        if (index % 2 == 1) CodeBlock(text.substringAfter('\n', text).trimEnd(), text.substringBefore('\n', "").take(24))
                         else if (text.isNotBlank()) Text(text.trim(), color = c.text, fontSize = 14.sp, lineHeight = 23.sp, letterSpacing = 0.sp)
                     }
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun CodeBlock(code: String, language: String) {
+    val c = LocalChillerPalette.current
+    val clipboard = LocalClipboardManager.current
+    var copied by remember(code) { mutableStateOf(false) }
+    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).border(1.dp, c.border, RoundedCornerShape(10.dp)).background(c.sidebar)) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(language.ifBlank { "Код" }, color = c.muted, fontSize = 11.sp)
+            Spacer(Modifier.weight(1f))
+            ChillerControl(if (copied) "Скопировано" else "Копировать", { clipboard.setText(AnnotatedString(code)); copied = true }, icon = Icons.Outlined.ContentCopy)
+        }
+        Text(code, color = c.text, fontFamily = FontFamily.Monospace, fontSize = 12.sp, lineHeight = 20.sp,
+            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(12.dp))
     }
 }
 
@@ -368,7 +396,7 @@ private fun ToolRow(activity: Activity, reduced: Boolean, onUndo: (String) -> Un
 private fun Diff(diff: String) {
     val c = LocalChillerPalette.current
     SelectionContainer {
-        Column(Modifier.fillMaxWidth().background(c.canvas).padding(vertical = 7.dp)) {
+        Column(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).background(c.canvas).padding(vertical = 7.dp)) {
             diff.lineSequence().take(500).forEach { line ->
                 val added = line.startsWith('+') && !line.startsWith("+++")
                 val removed = line.startsWith('-') && !line.startsWith("---")
@@ -430,31 +458,36 @@ private fun Settings(url: String, model: String, thinking: Boolean, configured: 
     var nextThinking by remember { mutableStateOf(thinking) }
     var key by remember { mutableStateOf("") }
     var clear by remember { mutableStateOf(false) }
+    var nextAllow by remember { mutableStateOf(allow) }
+    var nextReduced by remember { mutableStateOf(reduced) }
     val dialogFocus = remember { FocusRequester() }
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         LaunchedEffect(Unit) { dialogFocus.requestFocus() }
-        Column(Modifier.width(440.dp).focusRequester(dialogFocus).onPreviewKeyEvent {
+        Column(Modifier.widthIn(max = 500.dp).fillMaxWidth().heightIn(max = 700.dp).focusRequester(dialogFocus).onPreviewKeyEvent {
             if (it.type == KeyEventType.KeyDown && it.key == Key.Escape) { onDismiss(); true } else false
-        }.focusable().clip(RoundedCornerShape(13.dp)).background(c.surface).border(1.dp, c.border, RoundedCornerShape(13.dp)).padding(25.dp), verticalArrangement = Arrangement.spacedBy(19.dp)) {
+        }.focusable().clip(RoundedCornerShape(13.dp)).background(c.surface).border(1.dp, c.border, RoundedCornerShape(13.dp)).verticalScroll(rememberScrollState()).padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text("Подключение", color = c.text, fontSize = 19.sp, letterSpacing = (-.5).sp)
+                Text("Настройки", color = c.text, fontSize = 20.sp, letterSpacing = (-.5).sp)
                 Spacer(Modifier.weight(1f)); ChillerIconButton(Icons.Outlined.Close, "Закрыть настройки", onDismiss)
             }
+            Text("Подключение к модели", color = c.text, fontSize = 13.sp, fontWeight = FontWeight.Medium)
             ChillerField(nextUrl, { nextUrl = it }, "Адрес API", "https://api.deepseek.com")
             ChillerField(nextModel, { nextModel = it }, "Модель", "deepseek-flash")
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 ChillerField(key, { key = it }, if (configured) "API-ключ · настроен" else "API-ключ", if (configured) "Оставьте пустым, чтобы сохранить текущий" else "Введите ключ", secret = true)
                 Text("Хранится в памяти до закрытия приложения.", color = c.faint, fontSize = 11.sp)
-                if (configured) ChillerControl(if (clear) "Ключ будет удалён" else "Удалить сохранённый ключ", { clear = !clear })
+                if (configured) ChillerControl(if (clear) "Ключ будет удалён при применении" else "Удалить ключ из памяти", { clear = !clear })
+                Text(if (configured) "Ключ задан. Соединение ещё не проверено запросом." else "Добавьте ключ, чтобы выполнять задачи с моделью.", color = c.muted, fontSize = 12.sp, lineHeight = 18.sp)
             }
             Box(Modifier.fillMaxWidth().height(1.dp).background(c.border))
             SettingRow("Рассуждения модели", "Если провайдер поддерживает этот режим", nextThinking) { nextThinking = it }
-            SettingRow("Разрешить команды", "Запуск процессов в режиме изменений", allow, onAllow)
-            SettingRow("Уменьшить движение", "Без раскрывающих переходов", reduced, onReduced)
+            Text("Рабочая среда", color = c.text, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+            SettingRow("Разрешить команды", "Запуск процессов в режиме изменений", nextAllow) { nextAllow = it }
+            SettingRow("Уменьшить движение", "Без раскрывающих переходов", nextReduced) { nextReduced = it }
             Row(Modifier.fillMaxWidth().padding(top = 3.dp), horizontalArrangement = Arrangement.End) {
                 ChillerControl("Отмена", onDismiss)
                 Spacer(Modifier.width(8.dp))
-                ChillerControl("Сохранить", { onSave(nextUrl.trim(), nextModel.trim(), nextThinking, if (clear) "" else key.takeIf { it.isNotBlank() }); key = "" }, style = ControlStyle.PRIMARY, enabled = nextUrl.isNotBlank() && nextModel.isNotBlank())
+                ChillerControl("Применить", { onAllow(nextAllow); onReduced(nextReduced); onSave(nextUrl.trim(), nextModel.trim(), nextThinking, if (clear) "" else key.takeIf { it.isNotBlank() }); key = "" }, style = ControlStyle.PRIMARY, enabled = nextUrl.isNotBlank() && nextModel.isNotBlank())
             }
         }
     }

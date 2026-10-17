@@ -17,13 +17,13 @@ import androidx.compose.ui.unit.sp
 data class ChillerPalette(
     val canvas: Color, val sidebar: Color, val surface: Color, val border: Color,
     val text: Color, val muted: Color, val faint: Color, val hover: Color,
-    val selected: Color, val accent: Color, val positive: Color, val negative: Color,
+    val selected: Color, val accent: Color, val focus: Color, val positive: Color, val negative: Color,
     val added: Color, val removed: Color,
 )
 val LocalChillerPalette = staticCompositionLocalOf { ChillerPalette(
-    Color(0xFFFAFAF9), Color(0xFFF0F0EE), Color.White, Color(0xFFE4E4E1),
-    Color(0xFF242522), Color(0xFF797B75), Color(0xFFA0A29B), Color(0xFFE8E8E5),
-    Color(0xFFE4E5E1), Color(0xFF4A7360), Color(0xFF477A5B), Color(0xFFB06059),
+    Color(0xFFFFFFFF), Color(0xFFF4F5F6), Color.White, Color(0xFFE1E4E7),
+    Color(0xFF252A30), Color(0xFF606871), Color(0xFF737C86), Color(0xFFEBEDF0),
+    Color(0xFFE4E7EA), Color(0xFF376D59), Color(0xFF1769AA), Color(0xFF356D57), Color(0xFFB6453A),
     Color(0xFFF0F6F0), Color(0xFFFBF0EE),
 ) }
 
@@ -38,28 +38,28 @@ private val DesktopTypography = Typography(
     labelLarge = type(13, 18, FontWeight.Medium), labelMedium = type(12, 17), labelSmall = type(11, 16),
 )
 
-private val Ink = Color(0xFF252A28)
-private val Muted = Color(0xFF626D68)
+private val Ink = Color(0xFF252A30)
+private val Muted = Color(0xFF606871)
 private val Green = Color(0xFF376D59)
-private val DarkInk = Color(0xFFE7ECE9)
-private val DarkMuted = Color(0xFFA3AEA8)
-private val DarkGreen = Color(0xFF9AC9B2)
+private val DarkInk = Color(0xFFE7E9EC)
+private val DarkMuted = Color(0xFFB0B6BE)
+private val DarkGreen = Color(0xFF91C3A9)
 
-val ChillerCanvasLight = Color(0xFFFCFCFB)
-val ChillerSidebarLight = Color(0xFFF2F3F1)
+val ChillerCanvasLight = Color(0xFFFFFFFF)
+val ChillerSidebarLight = Color(0xFFF4F5F6)
 val ChillerElevatedLight = Color(0xFFFFFFFF)
-val ChillerBorderLight = Color(0xFFDFE4E0)
-val ChillerCanvasDark = Color(0xFF1C1E20)
-val ChillerSidebarDark = Color(0xFF17191B)
-val ChillerElevatedDark = Color(0xFF222527)
-val ChillerBorderDark = Color(0xFF353C38)
+val ChillerBorderLight = Color(0xFFE1E4E7)
+val ChillerCanvasDark = Color(0xFF1D2024)
+val ChillerSidebarDark = Color(0xFF181B1F)
+val ChillerElevatedDark = Color(0xFF24282D)
+val ChillerBorderDark = Color(0xFF3B4148)
 
 @Composable
 fun ChillerTheme(darkTheme: Boolean = isSystemInDarkTheme(), content: @Composable () -> Unit) {
     val palette = if (darkTheme) ChillerPalette(
-        Color(0xFF1D1E1C), Color(0xFF181916), Color(0xFF252622), Color(0xFF34362F),
-        Color(0xFFE9EAE5), Color(0xFF9A9D92), Color(0xFF6D7166), Color(0xFF292B25),
-        Color(0xFF30332B), Color(0xFFA1B69D), Color(0xFF96B79C), Color(0xFFD69A91),
+        ChillerCanvasDark, ChillerSidebarDark, ChillerElevatedDark, ChillerBorderDark,
+        DarkInk, DarkMuted, Color(0xFF9AA2AB), Color(0xFF2D3238),
+        Color(0xFF343A41), DarkGreen, Color(0xFF72B7EF), Color(0xFF8BC5A3), Color(0xFFE19A91),
         Color(0xFF253026), Color(0xFF342725),
     ) else LocalChillerPalette.current
     val colors = if (darkTheme) darkColorScheme(

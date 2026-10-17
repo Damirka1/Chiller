@@ -18,7 +18,7 @@ class DesktopControllerTest {
         val store = JsonlEventStore(directory.resolve("sessions"))
         val message = AgentMessage("user", "Offline fixture")
         store.append("offline-fixture", "message", Json.encodeToJsonElement(AgentMessage.serializer(), message).jsonObject)
-        val controller = DesktopController(directory)
+        val controller = DesktopController(directory, initialCredential = null)
         try {
             controller.initialize()
             controller.selectSession("offline-fixture")

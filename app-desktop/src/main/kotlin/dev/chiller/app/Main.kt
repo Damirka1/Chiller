@@ -6,6 +6,7 @@ import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyShortcut
 import androidx.compose.ui.window.*
 import dev.chiller.app.di.DesktopController
+import dev.chiller.app.di.LocalCredentials
 import dev.chiller.app.ui.ChillerApp
 import dev.chiller.app.ui.DesktopAction
 import kotlinx.coroutines.launch
@@ -18,7 +19,7 @@ import javax.swing.JFileChooser
 fun main() = application {
     val scope = rememberCoroutineScope()
     val directory = remember { System.getenv("CHILLER_DATA_DIR")?.let(Path::of) ?: Path.of(System.getProperty("user.home"), ".chiller") }
-    val controller = remember { DesktopController(directory) }
+    val controller = remember { DesktopController(directory, if (java.lang.Boolean.getBoolean("chiller.offlinePreview")) null else LocalCredentials.load()) }
     val state by controller.state.collectAsState()
     val actions = remember { MutableSharedFlow<DesktopAction>(extraBufferCapacity = 16) }
     val mac = remember { System.getProperty("os.name").startsWith("Mac") }
