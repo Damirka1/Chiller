@@ -63,6 +63,14 @@ class LocalCredentialsTest {
         assertNull(LocalCredentials.load(emptyMap(), start = root.resolve("app-desktop")))
     }
 
+    @Test fun `named keys come from environment first then dotenv`() {
+        val root = directory.resolve("named").also { Files.createDirectories(it) }
+        Files.writeString(root.resolve("settings.gradle.kts"), "")
+        Files.writeString(root.resolve(".env"), "OPENAI_API_KEY=file-openai\nGROQ_API_KEY=file-groq\nUNRELATED=x")
+        val keys = LocalCredentials.loadNamed(listOf("OPENAI_API_KEY", "GROQ_API_KEY", "MISSING"), mapOf("OPENAI_API_KEY" to "env-openai"), root)
+        assertEquals(mapOf("OPENAI_API_KEY" to "env-openai", "GROQ_API_KEY" to "file-groq"), keys)
+    }
+
     private fun envFile(contents: String): Path = directory.resolve(".env").also {
         Files.writeString(it, contents)
     }

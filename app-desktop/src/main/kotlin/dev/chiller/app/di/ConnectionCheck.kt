@@ -51,7 +51,7 @@ class KtorConnectionChecker(
     override suspend fun check(baseUrl: String, model: String, key: String, thinking: Boolean): ConnectionCheckResult {
         val endpoint = safeEndpoint(baseUrl) ?: return ConnectionCheckResult(false, "Адрес провайдера недопустим или не поддерживается")
         if (model.isBlank()) return ConnectionCheckResult(false, "Укажите ID модели")
-        if (key.isBlank()) return ConnectionCheckResult(false, "Укажите API-ключ")
+        if (key.isBlank() && !isLoopback(baseUrl)) return ConnectionCheckResult(false, "Укажите API-ключ")
         val host = runCatching { URI(baseUrl.trim()).host.lowercase() }.getOrDefault("")
 
         val request = buildJsonObject {
@@ -73,7 +73,7 @@ class KtorConnectionChecker(
         return try {
             client.preparePost(endpoint) {
                 contentType(ContentType.Application.Json)
-                header(HttpHeaders.Authorization, "Bearer $key")
+                if (key.isNotBlank()) header(HttpHeaders.Authorization, "Bearer $key")
                 setBody(request.toString())
             }.execute { response ->
                 when (val status = response.status.value) {

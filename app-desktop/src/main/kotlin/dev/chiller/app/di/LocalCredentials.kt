@@ -25,6 +25,20 @@ object LocalCredentials {
     }
 
     /**
+     * Keys for the named variables (e.g. OPENAI_API_KEY) from the environment first, then from the same
+     * `.env` files as [load]. Values are never logged; blank values are ignored.
+     */
+    fun loadNamed(names: Collection<String>, environment: Map<String, String> = System.getenv(), start: Path = Path.of("").toAbsolutePath()): Map<String, String> {
+        val wanted = names.toSet()
+        val fromFiles = dotenvCandidates(start).asReversed().fold(mapOf<String, String>()) { acc, path ->
+            acc + (readBoundedUtf8(path.normalize())?.let { parse(it, wanted) } ?: emptyMap())
+        }
+        return wanted.mapNotNull { name ->
+            (environment[name]?.trim()?.takeIf { it.isNotEmpty() } ?: fromFiles[name]?.takeIf { it.isNotEmpty() })?.let { name to it }
+        }.toMap()
+    }
+
+    /**
      * `.env` in the working directory, then in the enclosing project root: the nearest ancestor (at most
      * four levels up) holding `settings.gradle.kts` or `.git`. `gradlew :app-desktop:run` and IDE runs
      * start in a module folder, so the root `.env` would otherwise be missed. Nothing above the root is read.
@@ -50,7 +64,7 @@ object LocalCredentials {
         }
     }
 
-    private fun parse(contents: String): Map<String, String> {
+    private fun parse(contents: String, names: Set<String> = setOf("API_TOKEN", "DEEPSEEK_API_KEY")): Map<String, String> {
         val parsed = linkedMapOf<String, String>()
         for (rawLine in contents.lineSequence()) {
             var line = rawLine.trim()
@@ -59,7 +73,7 @@ object LocalCredentials {
             val equals = line.indexOf('=')
             if (equals <= 0) continue
             val name = line.substring(0, equals).trim()
-            if (name != "API_TOKEN" && name != "DEEPSEEK_API_KEY") continue
+            if (name !in names) continue
             val rawValue = line.substring(equals + 1).trim()
             val value = parseValue(rawValue) ?: continue
             parsed.putIfAbsent(name, value.trim())
