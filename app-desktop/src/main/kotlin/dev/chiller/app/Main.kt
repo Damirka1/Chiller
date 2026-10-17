@@ -2,6 +2,8 @@ package dev.chiller.app
 
 import androidx.compose.runtime.*
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyShortcut
 import androidx.compose.ui.window.*
@@ -27,7 +29,10 @@ fun main() = application {
     LaunchedEffect(Unit) { controller.initialize() }
     Window(
         title = "Chiller",
-        state = rememberWindowState(width = 1280.dp, height = 860.dp),
+        state = rememberWindowState(
+            width = (if (java.lang.Boolean.getBoolean("chiller.offlinePreview")) System.getenv("CHILLER_PREVIEW_WIDTH")?.toIntOrNull()?.coerceIn(800, 1800) ?: 1280 else 1280).dp,
+            height = (if (java.lang.Boolean.getBoolean("chiller.offlinePreview")) System.getenv("CHILLER_PREVIEW_HEIGHT")?.toIntOrNull()?.coerceIn(600, 1200) ?: 860 else 860).dp,
+        ),
         onCloseRequest = { scope.launch { controller.close(); exitApplication() } },
     ) {
         val chooseWorkspace = {
@@ -54,33 +59,44 @@ fun main() = application {
                 Item("Боковая панель", onClick = { actions.tryEmit(DesktopAction.SIDEBAR) })
             }
         }
+        val platformDensity = LocalDensity.current
+        val previewFontScale = if (java.lang.Boolean.getBoolean("chiller.offlinePreview"))
+            System.getenv("CHILLER_PREVIEW_FONT_SCALE")?.toFloatOrNull()?.takeIf { it.isFinite() }?.coerceIn(1f, 2f) ?: platformDensity.fontScale
+            else platformDensity.fontScale
+        CompositionLocalProvider(LocalDensity provides Density(platformDensity.density, previewFontScale)) {
         ChillerApp(
             state = state.run, sessions = state.sessions, selectedSessionId = state.sessionId,
             workspacePath = state.settings.workspace, isDemo = !state.apiKeyConfigured,
             providerModel = state.settings.model, providerBaseUrl = state.settings.baseUrl,
             thinkingEnabled = state.settings.thinking, apiKeyConfigured = state.apiKeyConfigured,
-            onSend = { text, mode -> scope.launch { controller.send(text, mode) } },
+            onSend = { text, mode, requestId -> controller.send(text, mode, requestId) },
             onStop = { scope.launch { controller.stop() } },
             onNewSession = { scope.launch { controller.newSession() } },
             onSelectSession = { scope.launch { controller.selectSession(it) } },
             onChooseWorkspace = chooseWorkspace,
-            onConfigureProvider = { url, model, thinking, key -> scope.launch { controller.configure(url, model, thinking, key) } },
+            onConfigureProvider = { url, model, thinking, key -> controller.configure(url, model, thinking, key); controller.state.value.sessionId },
             onAnswerQuestion = controller::answer,
             onUndo = { scope.launch { controller.undo(it) } },
             onAllowProcessesChange = controller::allowProcesses, allowProcesses = state.allowProcesses,
             actions = actions,
+            preferences = state.uiPreferences, onPreferences = { scope.launch { controller.updateUiPreferences(it) } },
+            models = controller.configuredModels(), onSelectModel = controller::selectModel,
+            onRenameSession = controller::renameSession,
+            onExportSession = { id, format -> scope.launch { controller.prepareExport(format, id) } },
+            connection = state.connection, onCheckConnection = { controller.checkConnection() }, onCancelConnection = controller::cancelConnectionCheck,
             exportPreview = state.exportContent, exportFormat = state.exportFormat,
             onDismissExport = controller::dismissExport,
             onSaveExport = {
                 val extension = if (state.exportFormat == "json") "json" else "md"
                 val picker = FileDialog(window, "Сохранить экспорт", FileDialog.SAVE)
-                picker.file = "chiller-${state.sessionId.take(8)}.$extension"
+                picker.file = "chiller-${(state.exportSessionId ?: state.sessionId).take(8)}.$extension"
                 picker.isVisible = true
                 val path = picker.files.firstOrNull()?.toPath()
                 picker.dispose()
                 if (path != null) scope.launch { controller.saveExport(path) }
             },
         )
+        }
     }
 }
 

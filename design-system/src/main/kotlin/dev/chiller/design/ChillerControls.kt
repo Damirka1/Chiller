@@ -59,10 +59,10 @@ fun ChillerControl(
         style == ControlStyle.SELECTED -> c.selected
         hovered && enabled -> c.hover
         else -> Color.Transparent
-    }, tween(110))
+    }, tween(if (LocalChillerReducedMotion.current) 0 else 110))
     val foreground = if (style == ControlStyle.PRIMARY) c.canvas else c.text
     Row(
-        modifier.defaultMinSize(minHeight = 30.dp).clip(RoundedCornerShape(7.dp)).background(fill)
+        modifier.defaultMinSize(minHeight = if (LocalChillerCompact.current) 28.dp else 32.dp).clip(RoundedCornerShape(7.dp)).background(fill)
             .then(if (focused || style == ControlStyle.OUTLINE) Modifier.border(if (focused) 2.dp else 1.dp, if (focused) c.focus else c.border, RoundedCornerShape(7.dp)) else Modifier)
             .pointerHoverIcon(PointerIcon.Hand)
             .onFocusChanged { focused = it.isFocused }
@@ -84,7 +84,7 @@ fun ChillerIconButton(icon: ImageVector, label: String, onClick: () -> Unit, mod
     val hovered by interaction.collectIsHoveredAsState()
     val pressed by interaction.collectIsPressedAsState()
     var focused by remember { mutableStateOf(false) }
-    val fill by animateColorAsState(when { primary && enabled -> c.text; pressed -> c.selected; hovered && enabled -> c.hover; else -> Color.Transparent }, tween(100))
+    val fill by animateColorAsState(when { primary && enabled -> c.text; pressed -> c.selected; hovered && enabled -> c.hover; else -> Color.Transparent }, tween(if (LocalChillerReducedMotion.current) 0 else 100))
     Box(modifier.size(30.dp).clip(RoundedCornerShape(7.dp)).background(fill)
         .then(if (focused) Modifier.border(2.dp, c.focus, RoundedCornerShape(7.dp)) else Modifier)
         .pointerHoverIcon(PointerIcon.Hand)
@@ -98,7 +98,7 @@ fun ChillerIconButton(icon: ImageVector, label: String, onClick: () -> Unit, mod
 @Composable
 fun ChillerToggle(checked: Boolean, onChange: (Boolean) -> Unit, label: String, enabled: Boolean = true) {
     val c = LocalChillerPalette.current
-    val offset by animateDpAsState(if (checked) 14.dp else 2.dp, tween(140))
+    val offset by animateDpAsState(if (checked) 14.dp else 2.dp, tween(if (LocalChillerReducedMotion.current) 0 else 140))
     var focused by remember { mutableStateOf(false) }
     Box(Modifier.size(34.dp, 20.dp).clip(CircleShape).background(if (checked) c.text else c.border)
         .then(if (focused) Modifier.border(2.dp, c.focus, CircleShape) else Modifier)

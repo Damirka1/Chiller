@@ -51,6 +51,37 @@ class AgentCoordinatorTest {
         assertEquals(null, legacy.origin)
     }
 
+    @Test fun acceptedCallbackRunsOnceAfterUserMessageIsDurablyAppendedAndBeforeProvider() = runTest {
+        val events = MemoryEvents()
+        val provider = ScriptedProvider { _ -> flow {
+            emit(ModelEvent.Completed(AgentMessage("assistant", "done"), "stop"))
+        } }
+        val fixture = fixture(provider, eventStore = events, dispatcher = StandardTestDispatcher(testScheduler))
+        var accepted = 0
+        val job = fixture.coordinator.send("hello", ExecutionMode.PLAN) {
+            accepted++
+            assertEquals(1, events.userMessageAppends)
+            assertEquals(0, provider.calls)
+        }
+        advanceUntilIdle()
+        job.join()
+        assertEquals(1, accepted)
+        assertEquals(1, events.userMessageAppends)
+    }
+
+    @Test fun failedUserMessageAppendDoesNotAcceptOrCallProvider() = runTest {
+        val events = MemoryEvents().apply { failUserMessageAppend = true }
+        val provider = ScriptedProvider { error("provider must not be called") }
+        val fixture = fixture(provider, eventStore = events, dispatcher = StandardTestDispatcher(testScheduler))
+        var accepted = false
+        val job = fixture.coordinator.send("hello", ExecutionMode.PLAN) { accepted = true }
+        advanceUntilIdle()
+        job.join()
+        assertEquals(false, accepted)
+        assertEquals(0, events.userMessageAppends)
+        assertEquals(0, provider.calls)
+    }
+
     @Test fun restoredAssistantKeepsOriginalModelAfterCoordinatorChangesModel() = runTest {
         val events = MemoryEvents()
         val first = fixture(ScriptedProvider { _ -> flow {
@@ -66,6 +97,38 @@ class AgentCoordinatorTest {
         val restored = second.coordinator.state.value.messages.single { it.role == "assistant" }
         assertEquals(MessageOrigin(MessageOriginKind.MODEL, "model-A"), restored.origin)
         assertEquals(null, second.coordinator.state.value.activeModelId)
+    }
+
+    @Test fun restorePreservesFailedStatusAndErrorWithoutReplayingProvider() = runTest {
+        val events = MemoryEvents().apply {
+            append("session", "run.started", buildJsonObject { put("runId", "run-failed") })
+            append("session", "run.failed", buildJsonObject { put("runId", "run-failed"); put("message", "provider timed out") })
+        }
+        val provider = ScriptedProvider { error("restored run must not replay") }
+        val fixture = fixture(provider, eventStore = events, dispatcher = StandardTestDispatcher(testScheduler))
+
+        fixture.coordinator.restore()
+
+        assertEquals("failed", fixture.coordinator.state.value.status)
+        assertEquals("provider timed out", fixture.coordinator.state.value.error)
+        assertEquals(null, fixture.coordinator.state.value.activeModelId)
+        assertEquals(0, provider.calls)
+    }
+
+    @Test fun restorePreservesCancelledStatusWithoutReplayingProvider() = runTest {
+        val events = MemoryEvents().apply {
+            append("session", "run.started", buildJsonObject { put("runId", "run-cancelled") })
+            append("session", "run.cancelled", buildJsonObject { put("runId", "run-cancelled") })
+        }
+        val provider = ScriptedProvider { error("restored run must not replay") }
+        val fixture = fixture(provider, eventStore = events, dispatcher = StandardTestDispatcher(testScheduler))
+
+        fixture.coordinator.restore()
+
+        assertEquals("cancelled", fixture.coordinator.state.value.status)
+        assertEquals(null, fixture.coordinator.state.value.error)
+        assertEquals(null, fixture.coordinator.state.value.activeModelId)
+        assertEquals(0, provider.calls)
     }
 
     @Test fun planModeDoesNotExecuteAWriteCallReturnedByTheProvider() = runTest {
@@ -91,7 +154,8 @@ class AgentCoordinatorTest {
             }
         }
         val tools = RecordingTools()
-        val fixture = fixture(provider, tools, dispatcher = StandardTestDispatcher(testScheduler))
+        val events = MemoryEvents()
+        val fixture = fixture(provider, tools, events, StandardTestDispatcher(testScheduler))
         fixture.coordinator.send("read it", ExecutionMode.WORKSPACE_EDIT)
         advanceUntilIdle()
 
@@ -103,6 +167,12 @@ class AgentCoordinatorTest {
         assertEquals("tool", transcript[callIndex + 1].role)
         assertEquals("call-1", transcript[callIndex + 1].toolCallId)
         assertEquals("completed", fixture.coordinator.state.value.status)
+        assertEquals("call-1", fixture.coordinator.state.value.activities.single().toolCallId)
+
+        val restored = fixture(ScriptedProvider { error("restore must not call provider") }, eventStore = events,
+            dispatcher = StandardTestDispatcher(testScheduler))
+        restored.coordinator.restore()
+        assertEquals("call-1", restored.coordinator.state.value.activities.single().toolCallId)
     }
 
     @Test fun interruptedToolHistoryRejectsContinuationWithoutCallingProvider() = runTest {
@@ -110,6 +180,7 @@ class AgentCoordinatorTest {
         val events = MemoryEvents().apply {
             append("session", "message", Json.encodeToJsonElement(AgentMessage("assistant", toolCalls = listOf(oldCall))).jsonObject)
             append("session", "tool.prepared", buildJsonObject { put("callId", oldCall.id); put("name", oldCall.name); put("arguments", buildJsonObject { put("path", "src/main.kt") }) })
+            append("session", "run.failed", buildJsonObject { put("runId", "run-old"); put("message", "old failure") })
         }
         val provider = ScriptedProvider { error("provider must not receive an incomplete tool group") }
         val tools = RecordingTools()
@@ -117,8 +188,10 @@ class AgentCoordinatorTest {
         fixture.coordinator.restore()
         assertEquals("interrupted", fixture.coordinator.state.value.status)
         assertTrue(fixture.coordinator.state.value.error.orEmpty().contains("outcome is unknown"))
-        fixture.coordinator.send("continue", ExecutionMode.WORKSPACE_EDIT)
+        var accepted = false
+        fixture.coordinator.send("continue", ExecutionMode.WORKSPACE_EDIT) { accepted = true }
         advanceUntilIdle()
+        assertEquals(false, accepted)
         assertEquals(0, provider.calls)
         assertTrue(tools.executed.isEmpty())
         assertEquals("failed", fixture.coordinator.state.value.status)
@@ -208,9 +281,15 @@ class AgentCoordinatorTest {
 
     private class MemoryEvents : EventStore {
         private val records = mutableListOf<StoredEvent>()
+        var failUserMessageAppend = false
+        var userMessageAppends = 0
         override suspend fun append(sessionId: String, type: String, payload: JsonObject): StoredEvent {
+            if (failUserMessageAppend && type == "message" && payload["role"]?.jsonPrimitive?.content == "user") {
+                error("synthetic user message persistence failure")
+            }
             val event = StoredEvent(sessionId = sessionId, seq = records.size.toLong() + 1, type = type, payload = payload)
             records += event
+            if (type == "message" && payload["role"]?.jsonPrimitive?.content == "user") userMessageAppends++
             return event
         }
         override suspend fun read(sessionId: String) = records.filter { it.sessionId == sessionId }

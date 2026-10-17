@@ -16,14 +16,19 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.*
+import java.time.Instant
+import java.util.LinkedHashMap
+import java.util.concurrent.atomic.AtomicLong
 import java.nio.file.Files
 import java.nio.file.Path
 
 @Serializable
-data class DesktopSettings(val baseUrl: String = "https://api.deepseek.com", val model: String = "deepseek-flash", val thinking: Boolean = false, val workspace: String? = null)
-data class DesktopState(val run: RunState = RunState(), val sessions: List<SessionInfo> = emptyList(), val sessionId: String = newId(), val settings: DesktopSettings = DesktopSettings(), val apiKeyConfigured: Boolean = false, val allowProcesses: Boolean = false, val exportContent: String? = null, val exportFormat: String = "markdown")
+data class DesktopSettings(val baseUrl: String = "https://api.deepseek.com", val model: String = "deepseek-flash", val thinking: Boolean = false, val workspace: String? = null, val rememberedModels: Map<String, List<String>> = emptyMap())
+data class SendReceipt(val accepted: Boolean, val sessionId: String, val clientRequestId: String, val reason: String? = null)
+data class ConnectionState(val status: String = "unverified", val message: String = "", val checkedAt: String? = null)
+data class DesktopState(val run: RunState = RunState(), val sessions: List<SessionInfo> = emptyList(), val sessionId: String = newId(), val settings: DesktopSettings = DesktopSettings(), val apiKeyConfigured: Boolean = false, val allowProcesses: Boolean = false, val exportContent: String? = null, val exportFormat: String = "markdown", val exportSessionId: String? = null, val uiPreferences: UiPreferences = UiPreferences(), val connection: ConnectionState = ConnectionState())
 
-class DesktopController(private val directory: Path, initialCredential: String? = LocalCredentials.load()) {
+class DesktopController(private val directory: Path, initialCredential: String? = LocalCredentials.load(), connectionChecker: ConnectionChecker? = null) {
     private val commands = Mutex()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
@@ -31,13 +36,21 @@ class DesktopController(private val directory: Path, initialCredential: String? 
     private val artifacts = LocalArtifactStore(directory.resolve("artifacts"))
     private val exporter = SessionExporter(events)
     private var credential: String? = initialCredential?.takeIf { it.isNotBlank() }
-    private val _state = MutableStateFlow(DesktopState(apiKeyConfigured = credential != null))
+    private val _state = MutableStateFlow(DesktopState(apiKeyConfigured = credential != null, connection = ConnectionState(if (credential == null) "missing" else "unverified", if (credential == null) "Не задан API-ключ" else "Подключение ещё не проверено")))
     val state: StateFlow<DesktopState> = _state.asStateFlow()
     private var coordinator: AgentCoordinator? = null
     private var processService: LocalProcessService? = null
     private var workspaceService: LocalWorkspace? = null
     private var observer: Job? = null
     private var questions = PendingQuestions()
+    private val preferencesStore = UiPreferencesStore(directory)
+    private val preferencesMutex = Mutex()
+    private val checker = connectionChecker ?: KtorConnectionChecker()
+    private var connectionCheckJob: Job? = null
+    private val connectionLifecycleLock = Any()
+    private val connectionRevision = AtomicLong(0)
+    private val sendReceipts = LinkedHashMap<String, SendReceipt>()
+    private val sendReceiptsLock = Any()
     private val http = HttpClient(CIO) {
         followRedirects = false
         install(HttpTimeout) { connectTimeoutMillis = 15_000; socketTimeoutMillis = 120_000; requestTimeoutMillis = 600_000 }
@@ -45,19 +58,87 @@ class DesktopController(private val directory: Path, initialCredential: String? 
 
     suspend fun initialize() {
         val file = directory.resolve("settings.json")
-        val settings = withContext(Dispatchers.IO) {
+        var settings = withContext(Dispatchers.IO) {
             runCatching { json.decodeFromString<DesktopSettings>(Files.readString(file)) }.getOrDefault(DesktopSettings())
         }
-        _state.update { it.copy(settings = settings, sessions = events.list()) }
+        if (!sameOrigin(settings.baseUrl, "https://api.deepseek.com")) credential = null
+        settings = rememberModel(settings, settings.baseUrl, settings.model)
+        _state.update { it.copy(settings = settings, sessions = events.list(), uiPreferences = preferencesStore.load(), apiKeyConfigured = credential != null, connection = connectionForUnverified()) }
+        saveSettings(settings)
     }
 
     suspend fun configure(url: String, model: String, thinking: Boolean, key: String?) = commands.withLock { configureLocked(url, model, thinking, key) }
     suspend fun chooseWorkspace(path: Path) = commands.withLock { chooseWorkspaceLocked(path) }
     suspend fun newSession() = commands.withLock { newSessionLocked() }
     suspend fun selectSession(id: String) = commands.withLock { selectSessionLocked(id) }
-    suspend fun send(text: String, mode: ExecutionMode) = commands.withLock { sendLocked(text, mode) }
+    suspend fun send(text: String, mode: ExecutionMode, clientRequestId: String = newId()): SendReceipt = commands.withLock {
+        cachedReceipt(clientRequestId)?.let { return@withLock it }
+        sendLocked(text, mode, clientRequestId).also(::rememberReceipt)
+    }
     suspend fun undo(id: String) = commands.withLock { undoLocked(id) }
-    suspend fun prepareExport(format: String) = commands.withLock { prepareExportLocked(format) }
+    suspend fun prepareExport(format: String, sessionId: String = state.value.sessionId) = commands.withLock { prepareExportLocked(format, sessionId) }
+
+    fun configuredModels(): List<String> {
+        val settings = state.value.settings
+        return (listOf(settings.model) + settings.rememberedModels[normalizeEndpoint(settings.baseUrl)].orEmpty()).distinct().take(20)
+    }
+
+    suspend fun selectModel(model: String): String? = commands.withLock {
+        val selected = model.trim()
+        if (busy() || selected.isEmpty() || selected.length > MAX_MODEL_LENGTH) return@withLock null
+        if (selected == _state.value.settings.model) return@withLock _state.value.sessionId
+        configureLocked(_state.value.settings.baseUrl, selected, _state.value.settings.thinking, null)
+        _state.value.sessionId
+    }
+
+    suspend fun updateUiPreferences(value: UiPreferences) = preferencesMutex.withLock {
+        preferencesStore.save(value)
+        _state.update { it.copy(uiPreferences = preferencesStore.load()) }
+    }
+
+    suspend fun renameSession(id: String, title: String): Boolean = commands.withLock {
+        val normalized = title.trim()
+        if (normalized.length !in 1..120) return@withLock false
+        try {
+            events.append(id, "session.renamed", buildJsonObject { put("title", normalized) })
+            _state.update { it.copy(sessions = events.list().map { session -> if (session.id == id) session.copy(title = normalized) else session }) }
+            true
+        } catch (_: Exception) { false }
+    }
+
+    fun checkConnection(): Job = synchronized(connectionLifecycleLock) {
+        val revision = connectionRevision.incrementAndGet()
+        connectionCheckJob?.cancel()
+        scope.launch(start = CoroutineStart.LAZY) {
+            val snapshot = commands.withLock {
+                if (revision != connectionRevision.get()) return@withLock null
+                val key = credential?.takeIf { it.isNotBlank() }
+                if (key == null) {
+                    _state.update { it.copy(connection = ConnectionState("missing", "Не задан API-ключ")) }
+                    null
+                } else {
+                    val profile = _state.value.settings
+                    _state.update { it.copy(connection = ConnectionState("checking", "Проверяется один запрос")) }
+                    profile to key
+                }
+            } ?: return@launch
+            val (profile, key) = snapshot
+            val result = try { checker.check(profile.baseUrl, profile.model, key, profile.thinking) }
+            catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { ConnectionCheckResult(false, "Network error or request timed out") }
+            commands.withLock {
+                if (revision == connectionRevision.get() && profile == _state.value.settings && key == credential) {
+                    val safeMessage = localizeConnectionMessage(result.message.replace(key, "[СКРЫТО]").take(240))
+                    _state.update { it.copy(connection = ConnectionState(if (result.success) "verified" else "failed", safeMessage, if (result.success) Instant.now().toString() else null)) }
+                }
+            }
+        }.also { connectionCheckJob = it; it.start() }
+    }
+
+    fun cancelConnectionCheck() = synchronized(connectionLifecycleLock) {
+        invalidateConnectionCheckLocked()
+        _state.update { it.copy(connection = connectionForUnverified()) }
+    }
 
     private fun busy() = coordinator?.isRunning == true || listOf(_state.value.run.status, coordinator?.state?.value?.status).any { it in setOf("preparing", "streaming", "executing") }
 
@@ -70,9 +151,16 @@ class DesktopController(private val directory: Path, initialCredential: String? 
         if (uri.scheme == "http" && uri.host !in setOf("localhost", "127.0.0.1", "::1")) {
             showError("Для удалённого провайдера требуется HTTPS. HTTP доступен только localhost."); return
         }
+        val oldSettings = _state.value.settings
+        val oldCredential = credential
+        val nextUrl = url.trimEnd('/')
         if (key != null) credential = key.takeIf { it.isNotBlank() }
-        val next = _state.value.settings.copy(baseUrl = url.trimEnd('/'), model = model.trim(), thinking = thinking)
-        _state.update { it.copy(settings = next, apiKeyConfigured = credential != null, sessionId = newId(), run = RunState()) }
+        else if (!sameOrigin(oldSettings.baseUrl, nextUrl)) credential = null
+        var next = oldSettings.copy(baseUrl = nextUrl, model = model.trim(), thinking = thinking)
+        next = rememberModel(next, next.baseUrl, next.model)
+        val profileChanged = oldSettings.baseUrl != next.baseUrl || oldSettings.model != next.model || oldSettings.thinking != next.thinking || oldCredential != credential
+        if (profileChanged) invalidateConnectionCheck()
+        _state.update { it.copy(settings = next, apiKeyConfigured = credential != null, sessionId = newId(), run = RunState(), connection = if (profileChanged) connectionForUnverified() else it.connection) }
         saveSettings(next)
         resetEngine()
     }
@@ -109,34 +197,53 @@ class DesktopController(private val directory: Path, initialCredential: String? 
         } catch (_: Exception) { showError("Сессию не удалось восстановить. Её данные сохранены для проверки.") }
     }
 
-    private suspend fun sendLocked(text: String, mode: ExecutionMode) {
-        if (busy()) return
+    private suspend fun sendLocked(text: String, mode: ExecutionMode, requestId: String): SendReceipt {
+        val session = _state.value.sessionId
+        fun rejected(reason: String) = SendReceipt(false, session, requestId, reason)
+        if (requestId.isBlank() || requestId.length > 100) return rejected("Недопустимый ID отправки")
+        if (text.isBlank()) return rejected("Сообщение пустое")
+        if (busy()) return rejected("Уже выполняется другая задача")
         if (credential == null) {
-            // Explicit offline preview never performs user-requested filesystem changes.
-            val reply = "Это offline-режим Chiller. Интерфейс готов к работе; подключите API в настройках, чтобы выполнять задачи в проекте. Ключ хранится только на время запуска."
             val user = AgentMessage("user", text)
-            val answer = AgentMessage("assistant", reply, origin = MessageOrigin(MessageOriginKind.OFFLINE))
-            for (message in listOf(user, answer)) events.append(_state.value.sessionId, "message", json.encodeToJsonElement(message).jsonObject)
-            val sessions = events.list()
-            _state.update { it.copy(run = it.run.copy(status = "completed", messages = it.run.messages + listOf(user, answer)), sessions = sessions) }
-            return
+            val answer = AgentMessage("assistant", "Это offline-режим Chiller. Интерфейс готов к работе; подключите API в настройках, чтобы выполнять задачи в проекте. Ключ хранится только на время запуска.", origin = MessageOrigin(MessageOriginKind.OFFLINE))
+            try { withContext(NonCancellable) { events.append(session, "message", json.encodeToJsonElement(AgentMessage.serializer(), user).jsonObject) } }
+            catch (_: Exception) { return rejected("Не удалось сохранить сообщение") }
+            val receipt = SendReceipt(true, session, requestId)
+            rememberReceipt(receipt)
+            _state.update { it.copy(run = it.run.copy(status = "preparing", messages = it.run.messages + user)) }
+            try {
+                events.append(session, "message", json.encodeToJsonElement(AgentMessage.serializer(), answer).jsonObject)
+                _state.update { it.copy(run = it.run.copy(status = "completed", messages = it.run.messages + answer), sessions = events.list()) }
+            } catch (_: Exception) {
+                _state.update { it.copy(run = it.run.copy(status = "failed", error = "Сообщение сохранено, но не удалось сохранить offline-ответ.")) }
+            }
+            return receipt
         }
-        if (_state.value.settings.workspace == null) { showError("Сначала выберите рабочую папку."); return }
-        try {
+        if (_state.value.settings.workspace == null) return rejected("Перед отправкой выберите рабочую папку")
+        return try {
             val engine = coordinator ?: buildEngine().also { it.restore() }
-            engine.send(text, mode, _state.value.allowProcesses).invokeOnCompletion { scope.launch { refreshSessions() } }
-        } catch (_: Exception) { showError("Не удалось начать задачу. Проверьте рабочую папку и настройки.") }
+            val accepted = CompletableDeferred<Boolean>()
+            val acceptedReceipt = SendReceipt(true, session, requestId)
+            val job = engine.send(text, mode, _state.value.allowProcesses) {
+                rememberReceipt(acceptedReceipt)
+                accepted.complete(true)
+            }
+            job.invokeOnCompletion { if (!accepted.isCompleted) accepted.complete(false); scope.launch { refreshSessions() } }
+            val wasAccepted = accepted.await()
+            if (wasAccepted) SendReceipt(true, session, requestId) else rejected("Задача не приняла сообщение")
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (_: Exception) { rejected("Не удалось начать задачу") }
     }
 
     suspend fun stop() { coordinator?.stop(); questions.cancel() }
-    private suspend fun prepareExportLocked(format: String) {
+    private suspend fun prepareExportLocked(format: String, sessionId: String) {
         if (busy()) return
         try {
-            val text = if (format == "json") exporter.json(_state.value.sessionId) else exporter.markdown(_state.value.sessionId)
-            _state.update { it.copy(exportContent = text, exportFormat = format) }
+            val text = if (format == "json") exporter.json(sessionId) else exporter.markdown(sessionId)
+            _state.update { it.copy(exportContent = text, exportFormat = format, exportSessionId = sessionId) }
         } catch (_: Exception) { showError("Не удалось подготовить экспорт сессии.") }
     }
-    fun dismissExport() { _state.update { it.copy(exportContent = null) } }
+    fun dismissExport() { _state.update { it.copy(exportContent = null, exportSessionId = null) } }
     suspend fun saveExport(path: Path) {
         val content = _state.value.exportContent ?: return
         try {
@@ -188,5 +295,66 @@ class DesktopController(private val directory: Path, initialCredential: String? 
     }
     private suspend fun refreshSessions() { val sessions = events.list(); _state.update { it.copy(sessions = sessions) } }
     private fun showError(message: String) { _state.update { it.copy(run = it.run.copy(status = "failed", error = message)) } }
-    suspend fun close() { resetEngine(); http.close(); credential = null; scope.cancel() }
+    private fun cachedReceipt(requestId: String): SendReceipt? = synchronized(sendReceiptsLock) { sendReceipts[requestId] }
+    private fun rememberReceipt(receipt: SendReceipt) = synchronized(sendReceiptsLock) {
+        sendReceipts[receipt.clientRequestId] = receipt
+        while (sendReceipts.size > 500) sendReceipts.remove(sendReceipts.keys.first())
+    }
+    private fun rememberModel(settings: DesktopSettings, endpoint: String, model: String): DesktopSettings {
+        val key = normalizeEndpoint(endpoint)
+        val models = LinkedHashMap<String, List<String>>()
+        settings.rememberedModels.entries.toList().takeLast(15).forEach { (savedEndpoint, savedModels) ->
+            models[normalizeEndpoint(savedEndpoint)] = savedModels.filter { it.isNotBlank() && it.length <= MAX_MODEL_LENGTH }.distinct().take(20)
+        }
+        val saved = (listOf(model) + models[key].orEmpty()).filter { it.isNotBlank() && it.length <= MAX_MODEL_LENGTH }.distinct().take(20)
+        models.remove(key); models[key] = saved
+        while (models.size > 16) models.remove(models.keys.first())
+        return settings.copy(rememberedModels = models)
+    }
+    private fun normalizeEndpoint(endpoint: String): String = runCatching {
+        val uri = java.net.URI(endpoint.trim()).normalize()
+        val scheme = uri.scheme.lowercase(); val host = uri.host.lowercase()
+        val port = if ((scheme == "https" && uri.port == 443) || (scheme == "http" && uri.port == 80)) -1 else uri.port
+        java.net.URI(scheme, null, host, port, uri.path.trimEnd('/'), null, null).toASCIIString().trimEnd('/')
+    }.getOrDefault(endpoint.trim().trimEnd('/').lowercase())
+    private fun sameOrigin(first: String, second: String): Boolean = runCatching {
+        val a = java.net.URI(first); val b = java.net.URI(second)
+        a.scheme.equals(b.scheme, true) && a.host.equals(b.host, true) && effectivePort(a) == effectivePort(b)
+    }.getOrDefault(false)
+    private fun effectivePort(uri: java.net.URI) = uri.port.takeIf { it >= 0 } ?: if (uri.scheme.equals("https", true)) 443 else 80
+    private fun connectionForUnverified() = if (credential == null) ConnectionState("missing", "Не задан API-ключ") else ConnectionState("unverified", "Подключение ещё не проверено")
+    private fun invalidateConnectionCheck() {
+        synchronized(connectionLifecycleLock) { invalidateConnectionCheckLocked() }
+    }
+    private fun invalidateConnectionCheckLocked() {
+        connectionRevision.incrementAndGet()
+        connectionCheckJob?.cancel()
+        connectionCheckJob = null
+    }
+    suspend fun close() {
+        val pendingCheck = synchronized(connectionLifecycleLock) {
+            val pending = connectionCheckJob
+            invalidateConnectionCheckLocked()
+            pending
+        }
+        pendingCheck?.cancelAndJoin()
+        resetEngine(); (checker as? AutoCloseable)?.close(); http.close(); credential = null; scope.cancel()
+    }
+
+    private fun localizeConnectionMessage(message: String): String = when {
+        message == "Connection and model access verified" || message == "verified" -> "Подключение и доступ к модели подтверждены"
+        message.startsWith("Authentication failed") -> "Провайдер отклонил API-ключ"
+        message.startsWith("Rate limit reached") -> "Провайдер ограничил частоту запросов"
+        message.startsWith("Model or endpoint not found") -> "Модель или адрес провайдера не найдены"
+        message.startsWith("Provider server error") -> "Ошибка сервера провайдера"
+        message.startsWith("Provider rejected the request") -> "Провайдер отклонил запрос"
+        message.startsWith("Network error") -> "Сетевая ошибка или истекло время ожидания"
+        message.startsWith("Invalid or unsupported endpoint") -> "Адрес провайдера недопустим или не поддерживается"
+        message == "Model ID is required" -> "Укажите ID модели"
+        message == "API key is required" -> "Укажите API-ключ"
+        message.isBlank() -> "Проверка подключения не выполнена"
+        else -> message
+    }
+
+    private companion object { const val MAX_MODEL_LENGTH = 200 }
 }

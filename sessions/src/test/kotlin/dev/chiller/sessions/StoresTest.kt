@@ -28,4 +28,18 @@ class StoresTest {
         assertFails { store.read("s2", a.id) }
         assertFails { store.put("../escape", "no") }
     }
+
+    @Test fun sessionListUsesLatestValidRenameAndFallsBackForInvalidTitlesAfterRestart() = runTest {
+        val root = Files.createTempDirectory("chiller-rename")
+        val store = JsonlEventStore(root)
+        store.append("renamed", "message", buildJsonObject { put("role", "user"); put("content", "Original prompt") })
+        store.append("renamed", "session.renamed", buildJsonObject { put("title", "  First title  ") })
+        store.append("renamed", "session.renamed", buildJsonObject { put("title", " ") })
+        store.append("renamed", "session.renamed", buildJsonObject { put("title", "x".repeat(121)) })
+        assertEquals("First title", JsonlEventStore(root).list().single { it.id == "renamed" }.title)
+
+        store.append("legacy", "message", buildJsonObject { put("role", "user"); put("content", "Legacy prompt") })
+        store.append("legacy", "session.renamed", buildJsonObject { put("title", "\n  ") })
+        assertEquals("Legacy prompt", JsonlEventStore(root).list().single { it.id == "legacy" }.title)
+    }
 }

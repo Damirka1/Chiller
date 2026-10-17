@@ -139,7 +139,7 @@ data class UserQuestion(val id: String = newId(), val question: String, val opti
 interface InteractionBroker { suspend fun ask(question: UserQuestion): String }
 
 @Serializable
-data class Activity(val id: String = newId(), val name: String, val target: String, val status: String, val output: String = "", val diff: String? = null)
+data class Activity(val id: String = newId(), val name: String, val target: String, val status: String, val output: String = "", val diff: String? = null, val toolCallId: String? = null)
 data class RunState(
     val status: String = "idle",
     val messages: List<AgentMessage> = emptyList(),

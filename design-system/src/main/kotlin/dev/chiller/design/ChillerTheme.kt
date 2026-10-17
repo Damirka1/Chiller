@@ -14,6 +14,9 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 
+val LocalChillerReducedMotion = staticCompositionLocalOf { false }
+val LocalChillerCompact = staticCompositionLocalOf { false }
+
 data class ChillerPalette(
     val canvas: Color, val sidebar: Color, val surface: Color, val border: Color,
     val text: Color, val muted: Color, val faint: Color, val hover: Color,
@@ -55,7 +58,7 @@ val ChillerElevatedDark = Color(0xFF24282D)
 val ChillerBorderDark = Color(0xFF3B4148)
 
 @Composable
-fun ChillerTheme(darkTheme: Boolean = isSystemInDarkTheme(), content: @Composable () -> Unit) {
+fun ChillerTheme(darkTheme: Boolean = isSystemInDarkTheme(), reducedMotion: Boolean = false, compact: Boolean = false, content: @Composable () -> Unit) {
     val palette = if (darkTheme) ChillerPalette(
         ChillerCanvasDark, ChillerSidebarDark, ChillerElevatedDark, ChillerBorderDark,
         DarkInk, DarkMuted, Color(0xFF9AA2AB), Color(0xFF2D3238),
@@ -77,7 +80,7 @@ fun ChillerTheme(darkTheme: Boolean = isSystemInDarkTheme(), content: @Composabl
         surfaceVariant = ChillerSidebarLight, onSurfaceVariant = Muted,
         outline = ChillerBorderLight, error = Color(0xFFB6453A),
     )
-    CompositionLocalProvider(LocalChillerPalette provides palette) {
+    CompositionLocalProvider(LocalChillerPalette provides palette, LocalChillerReducedMotion provides reducedMotion, LocalChillerCompact provides compact) {
         MaterialTheme(colorScheme = colors.copy(
             primary = palette.text, onPrimary = palette.canvas, primaryContainer = palette.selected, onPrimaryContainer = palette.text,
             secondaryContainer = palette.selected, onSecondaryContainer = palette.text,

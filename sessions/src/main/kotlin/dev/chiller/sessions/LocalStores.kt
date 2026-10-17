@@ -57,7 +57,12 @@ class JsonlEventStore(private val directory: Path) : EventStore {
             Files.list(directory).use { paths -> paths.filter { Files.isDirectory(it) }.map { path ->
                 val events = runCatching { readFile(path.resolve("events.jsonl")) }.getOrNull().orEmpty()
                 val first = events.firstOrNull { it.type == "message" && it.payload["role"]?.jsonPrimitive?.contentOrNull == "user" }
-                SessionInfo(path.fileName.toString(), first?.payload?.get("content")?.jsonPrimitive?.contentOrNull?.take(64) ?: "Новый диалог", events.lastOrNull()?.timestamp ?: "")
+                val renamed = events.asReversed().firstNotNullOfOrNull { event ->
+                    if (event.type != "session.renamed") return@firstNotNullOfOrNull null
+                    event.payload["title"]?.jsonPrimitive?.contentOrNull?.trim()?.takeIf { it.length in 1..120 }
+                }
+                val title = renamed ?: first?.payload?.get("content")?.jsonPrimitive?.contentOrNull?.take(64) ?: "Новый диалог"
+                SessionInfo(path.fileName.toString(), title, events.lastOrNull()?.timestamp ?: "")
             }.toList().sortedByDescending { it.updatedAt } }
         }
     }
