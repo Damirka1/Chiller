@@ -48,3 +48,8 @@ CHILLER_DATA_DIR=/tmp/chiller-new-ui-review ./app-desktop/build/compose/binaries
 
 Use a new/empty directory. Fixtures explicitly identify synthetic content and never apply their sample diffs.
 Preview supports CHILLER_PREVIEW_WIDTH/HEIGHT and CHILLER_PREVIEW_FONT_SCALE (1..2) for manual layout checks. These do not affect the regular Chiller build.
+
+
+### Readiness-fix native pass, 17 October
+
+Latest offline preview: full scripted demo with real tools/Python completed; explicit question answered; completed-demo transition; text composer and Send; light/dark draft survival; blank-model preset apply/catalog entry; restored Studio file list and expanded README diff verified in native UI. Screenshots: reports/local/fixes-ui (ignored). No remote requests or real Keychain operations. Narrow/font-scale/IME/VoiceOver acceptance remains outstanding.
