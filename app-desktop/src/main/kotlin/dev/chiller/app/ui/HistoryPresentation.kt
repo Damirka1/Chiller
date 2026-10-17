@@ -40,3 +40,26 @@ fun historySections(
         if (sorted.isEmpty()) null else HistorySection(title, sorted)
     }
 }
+
+/** Short age for a history row: «сейчас», «12 мин», «3 ч», «вчера», «5 дн», or a date. Empty when unparseable. */
+fun relativeAge(updatedAt: String, clock: Clock = Clock.systemUTC(), zoneId: ZoneId = ZoneId.systemDefault()): String {
+    val instant = runCatching { Instant.parse(updatedAt) }.getOrNull() ?: return ""
+    val now = Instant.now(clock)
+    val minutes = java.time.Duration.between(instant, now).toMinutes().coerceAtLeast(0)
+    val day = instant.atZone(zoneId).toLocalDate()
+    val today = LocalDate.now(clock.withZone(zoneId))
+    return when {
+        minutes < 1 -> "сейчас"
+        minutes < 60 -> "$minutes мин"
+        day == today -> "${minutes / 60} ч"
+        day == today.minusDays(1) -> "вчера"
+        day.isAfter(today.minusDays(7)) -> "${java.time.temporal.ChronoUnit.DAYS.between(day, today)} дн"
+        else -> "%02d.%02d".format(day.dayOfMonth, day.monthValue)
+    }
+}
+
+/** Case-insensitive title filter for the sidebar search. */
+fun filterSessions(sessions: List<SessionInfo>, query: String): List<SessionInfo> {
+    val q = query.trim()
+    return if (q.isEmpty()) sessions else sessions.filter { it.title.contains(q, ignoreCase = true) }
+}

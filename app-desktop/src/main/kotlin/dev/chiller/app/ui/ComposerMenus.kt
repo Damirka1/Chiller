@@ -63,13 +63,13 @@ private val PopoverShape = RoundedCornerShape(12.dp)
  * control that opened it. Must be called inside the anchor's own layout node.
  */
 @Composable
-internal fun ChillerPopover(onDismiss: () -> Unit, width: Dp, content: @Composable ColumnScope.() -> Unit) {
+internal fun ChillerPopover(onDismiss: () -> Unit, width: Dp, below: Boolean = false, alignEnd: Boolean = false, content: @Composable ColumnScope.() -> Unit) {
     val c = LocalChillerPalette.current
     val (gap, margin) = with(LocalDensity.current) { 8.dp.roundToPx() to 12.dp.roundToPx() }
     val reduced = LocalChillerReducedMotion.current
     val appear = remember { MutableTransitionState(reduced).apply { targetState = true } }
-    Popup(popupPositionProvider = remember(gap, margin) { AnchoredAbovePositionProvider(gap, margin) }, onDismissRequest = onDismiss, properties = PopupProperties(focusable = true)) {
-        AnimatedVisibility(appear, enter = fadeIn(tween(120)) + scaleIn(tween(140), initialScale = .96f, transformOrigin = TransformOrigin(0f, 1f))) {
+    Popup(popupPositionProvider = remember(gap, margin, below, alignEnd) { AnchoredAbovePositionProvider(gap, margin, below, alignEnd) }, onDismissRequest = onDismiss, properties = PopupProperties(focusable = true)) {
+        AnimatedVisibility(appear, enter = fadeIn(tween(120)) + scaleIn(tween(140), initialScale = .96f, transformOrigin = TransformOrigin(if (alignEnd) 1f else 0f, if (below) 0f else 1f))) {
             Column(
                 Modifier.padding(12.dp).width(width)
                     .shadow(18.dp, PopoverShape, ambientColor = Color.Black.copy(alpha = .10f), spotColor = Color.Black.copy(alpha = .16f))
@@ -84,12 +84,16 @@ internal fun ChillerPopover(onDismiss: () -> Unit, width: Dp, content: @Composab
  * The popover content carries a transparent [marginPx] border so its shadow is not clipped by the popup
  * window; positions compensate so the visible card, not the margin, sits [gapPx] from the anchor.
  */
-internal class AnchoredAbovePositionProvider(private val gapPx: Int, private val marginPx: Int) : PopupPositionProvider {
+internal class AnchoredAbovePositionProvider(
+    private val gapPx: Int, private val marginPx: Int, private val preferBelow: Boolean = false, private val alignEnd: Boolean = false,
+) : PopupPositionProvider {
     override fun calculatePosition(anchorBounds: IntRect, windowSize: IntSize, layoutDirection: LayoutDirection, popupContentSize: IntSize): IntOffset {
         val above = anchorBounds.top - gapPx - popupContentSize.height + marginPx
         val below = anchorBounds.bottom + gapPx - marginPx
-        val y = if (above + marginPx >= 0 || below + popupContentSize.height - marginPx > windowSize.height) above else below
-        val x = anchorBounds.left - marginPx
+        val fitsAbove = above + marginPx >= 0
+        val fitsBelow = below + popupContentSize.height - marginPx <= windowSize.height
+        val y = when { preferBelow -> if (fitsBelow || !fitsAbove) below else above; else -> if (fitsAbove || !fitsBelow) above else below }
+        val x = if (alignEnd) anchorBounds.right - popupContentSize.width + marginPx else anchorBounds.left - marginPx
         return IntOffset(
             x.coerceIn(-marginPx, (windowSize.width - popupContentSize.width + marginPx).coerceAtLeast(-marginPx)),
             y.coerceIn(-marginPx, (windowSize.height - popupContentSize.height + marginPx).coerceAtLeast(-marginPx)),

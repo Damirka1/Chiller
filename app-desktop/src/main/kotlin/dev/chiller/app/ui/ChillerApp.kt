@@ -148,6 +148,7 @@ fun ChillerApp(
     }
     LaunchedEffect(actions) { actions.collect { handleAction(it) } }
     val rootFocus = remember { FocusRequester() }
+    val sidebarSearch = remember { FocusRequester() }
     LaunchedEffect(Unit) { rootFocus.requestFocus() }
     ChillerTheme(darkTheme = dark, reducedMotion = reducedMotion, compact = compactDensity) {
         val c = LocalChillerPalette.current
@@ -155,6 +156,7 @@ fun ChillerApp(
             if (it.type == KeyEventType.KeyDown && (it.isMetaPressed || it.isCtrlPressed)) {
                 when (it.key) {
                     Key.Enter -> { handleAction(DesktopAction.SEND); true }
+                    Key.K -> { sidebar = true; runCatching { sidebarSearch.requestFocus() }; true }
                     else -> false
                 }
             } else false
@@ -162,7 +164,8 @@ fun ChillerApp(
             val showSidebar = sidebar && maxWidth >= 740.dp
             Row(Modifier.fillMaxSize()) {
                 if (showSidebar) Sidebar(sessions, selectedSessionId, workspacePath, apiKeyConfigured, !active, onNewSession, onSelectSession, onChooseWorkspace,
-                    onSettings = { settings = true }, onTheme = { updateView(view.copy(theme = if (dark) "light" else "dark")) }, onRename = { renameTarget = it }, onExport = onExportSession, connection = connection, width = 248f * density.fontScale.coerceIn(1f, 1.2f))
+                    onSettings = { settings = true }, onTheme = { updateView(view.copy(theme = if (dark) "light" else "dark")) }, onRename = { renameTarget = it }, onExport = onExportSession, connection = connection, width = 248f * density.fontScale.coerceIn(1f, 1.2f),
+                    running = active, modelName = friendlyModel(providerModel), searchFocus = sidebarSearch)
                 Box(Modifier.width(1.dp).fillMaxHeight().background(c.border.copy(alpha = .7f)))
                 BoxWithConstraints(Modifier.weight(1f).fillMaxHeight()) {
                     val compact = maxWidth < 860.dp || density.fontScale > 1.3f
@@ -235,58 +238,115 @@ fun ChillerApp(
 private fun Sidebar(
     sessions: List<SessionInfo>, selected: String?, workspace: String?, connected: Boolean, enabled: Boolean,
     onNew: () -> Unit, onSelect: (String) -> Unit, onChoose: () -> Unit, onSettings: () -> Unit, onTheme: () -> Unit, onRename: (SessionInfo) -> Unit, onExport: (String, String) -> Unit, connection: ConnectionState, width: Float,
+    running: Boolean, modelName: String, searchFocus: FocusRequester,
 ) {
     val c = LocalChillerPalette.current
+    var query by remember { mutableStateOf("") }
+    val shown = filterSessions(sessions, query)
     Column(Modifier.width(width.dp).fillMaxHeight().background(c.sidebar).padding(horizontal = 12.dp)) {
         Row(Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            ChillerMark(Modifier.size(23.dp)); Spacer(Modifier.width(9.dp))
+            ChillerMark(Modifier.size(23.dp), c.accent); Spacer(Modifier.width(9.dp))
             Text("Chiller", color = c.text, fontSize = 15.sp, fontWeight = FontWeight.Medium, letterSpacing = (-.4f).sp)
             Spacer(Modifier.weight(1f))
         }
         ChillerControl("Новый диалог", onNew, Modifier.fillMaxWidth(), icon = Icons.Outlined.Add, enabled = enabled, trailing = "⌘ N")
-        Spacer(Modifier.height(18.dp))
+        SidebarSearch(query, { query = it }, searchFocus)
+        Spacer(Modifier.height(12.dp))
         Text("Проект", color = c.muted, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp))
         Hint(workspace ?: "Открыть папку проекта") {
-            ChillerControl(workspace?.substringAfterLast('/') ?: "Открыть папку…", onChoose, Modifier.fillMaxWidth(), icon = Icons.Outlined.FolderOpen, style = if (workspace != null) ControlStyle.SELECTED else ControlStyle.QUIET, enabled = enabled)
+            ChillerControl(workspace?.substringAfterLast('/') ?: "Открыть папку…", onChoose, Modifier.fillMaxWidth(), icon = Icons.Outlined.FolderOpen, style = if (workspace != null) ControlStyle.SELECTED else ControlStyle.QUIET, enabled = enabled, trailing = if (workspace != null) "⌘ O" else null)
         }
-        Spacer(Modifier.height(18.dp))
+        Spacer(Modifier.height(14.dp))
         Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text("Недавние диалоги", color = c.muted, fontSize = 12.sp)
+            Text("Диалоги", color = c.muted, fontSize = 12.sp)
             Spacer(Modifier.weight(1f))
-            if (sessions.isNotEmpty()) Text("${sessions.size}", color = c.faint, fontSize = 10.sp)
+            if (sessions.isNotEmpty()) Text(if (query.isBlank()) "${sessions.size}" else "${shown.size} из ${sessions.size}", color = c.faint, fontSize = 10.sp)
         }
-        if (sessions.isEmpty()) Text("Здесь появятся ваши задачи", color = c.faint, fontSize = 11.sp, lineHeight = 18.sp, modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp))
-        LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            historySections(sessions).forEach { section ->
-                item(key = "section-${section.title}") { Text(section.title, color = c.muted, fontSize = 11.sp, modifier = Modifier.padding(start = 10.dp, top = 12.dp, bottom = 4.dp)) }
+        when {
+            sessions.isEmpty() -> Text("Здесь появятся ваши задачи", color = c.faint, fontSize = 11.sp, lineHeight = 18.sp, modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp))
+            shown.isEmpty() -> Text("Нет диалогов с «${query.trim()}»", color = c.faint, fontSize = 11.sp, lineHeight = 18.sp, modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp))
+        }
+        LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+            historySections(shown).forEach { section ->
+                item(key = "section-${section.title}") { Text(section.title, color = c.faint, fontSize = 11.sp, modifier = Modifier.padding(start = 10.dp, top = 12.dp, bottom = 4.dp)) }
                 items(section.sessions, key = { it.id }) { session ->
-                    var menu by remember(session.id) { mutableStateOf(false) }
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Box(Modifier.weight(1f)) { Hint(session.title) {
-                            ChillerControl(session.title.ifBlank { "Новый диалог" }, { onSelect(session.id) }, Modifier.fillMaxWidth(), icon = Icons.AutoMirrored.Outlined.Chat, style = if (session.id == selected) ControlStyle.SELECTED else ControlStyle.QUIET, enabled = enabled)
-                        } }
-                        Box {
-                            ChillerIconButton(Icons.Outlined.MoreHoriz, "Действия диалога", { menu = !menu }, enabled = enabled)
-                            if (menu) Popup(alignment = Alignment.TopEnd, onDismissRequest = { menu = false }, properties = PopupProperties(focusable = true)) {
-                                Column(Modifier.width(210.dp).background(c.surface).border(1.dp, c.border).padding(5.dp)) {
-                                    ChillerControl("Переименовать", { menu = false; onRename(session) }, Modifier.fillMaxWidth())
-                                    ChillerControl("Экспорт Markdown", { menu = false; onExport(session.id, "markdown") }, Modifier.fillMaxWidth())
-                                    ChillerControl("Экспорт JSON", { menu = false; onExport(session.id, "json") }, Modifier.fillMaxWidth())
-                                }
-                            }
-                        }
-                    }
+                    SessionRow(session, session.id == selected, running && session.id == selected, enabled, { onSelect(session.id) }, { onRename(session) }, { onExport(session.id, it) })
                 }
             }
         }
         Box(Modifier.fillMaxWidth().height(1.dp).background(c.border.copy(alpha = .75f)))
-        Row(Modifier.fillMaxWidth().padding(vertical = 11.dp, horizontal = 3.dp), verticalAlignment = Alignment.CenterVertically) {
-            ChillerIconButton(Icons.Outlined.Settings, "Настройки", onSettings, enabled = enabled)
-            Column(Modifier.weight(1f).padding(start = 6.dp)) {
-                Text("Настройки", color = c.text, fontSize = 12.sp, lineHeight = 18.sp)
-                Text(when (connection.status) { "verified" -> "Доступ к модели проверен"; "checking" -> "Проверка соединения…"; "failed" -> "Ошибка подключения"; else -> if (connected) "Ключ задан · не проверен" else "Подключить модель" }, color = c.muted, fontSize = 12.sp, lineHeight = 18.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        val (line, dot) = connectionSummary(connection, connected)
+        Row(Modifier.fillMaxWidth().padding(vertical = 10.dp, horizontal = 3.dp), verticalAlignment = Alignment.CenterVertically) {
+            HoverRow(onSettings, Modifier.weight(1f), enabled = enabled) {
+                Box(Modifier.size(8.dp).clip(CircleShape).background(dot))
+                Column(Modifier.weight(1f).padding(start = 10.dp)) {
+                    Text(modelName, color = c.text, fontSize = 12.sp, lineHeight = 17.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(line, color = c.muted, fontSize = 11.sp, lineHeight = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                Icon(Icons.Outlined.Settings, "Настройки", Modifier.size(15.dp), tint = c.faint)
             }
             ChillerIconButton(Icons.Outlined.Contrast, "Сменить тему", onTheme)
+        }
+    }
+}
+
+@Composable
+private fun SidebarSearch(query: String, onQuery: (String) -> Unit, focus: FocusRequester) {
+    val c = LocalChillerPalette.current
+    var focused by remember { mutableStateOf(false) }
+    Row(
+        Modifier.padding(top = 6.dp).fillMaxWidth().height(32.dp).clip(RoundedCornerShape(7.dp))
+            .background(if (focused) c.surface else c.hover.copy(alpha = .55f))
+            .border(1.dp, if (focused) c.border else androidx.compose.ui.graphics.Color.Transparent, RoundedCornerShape(7.dp)).padding(horizontal = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Icons.Outlined.Search, null, Modifier.size(14.dp), tint = c.faint)
+        Spacer(Modifier.width(8.dp))
+        BasicTextField(query, onQuery, singleLine = true,
+            textStyle = TextStyle(color = c.text, fontSize = 12.sp, lineHeight = 18.sp, letterSpacing = 0.sp), cursorBrush = SolidColor(c.text),
+            modifier = Modifier.weight(1f).focusRequester(focus).onFocusChanged { focused = it.isFocused }
+                .onPreviewKeyEvent { if (it.type == KeyEventType.KeyDown && it.key == Key.Escape && query.isNotEmpty()) { onQuery(""); true } else false }
+                .semantics { contentDescription = "Поиск диалогов" },
+            decorationBox = { inner -> Box { if (query.isEmpty()) Text("Поиск", color = c.faint, fontSize = 12.sp, lineHeight = 18.sp); inner() } },
+        )
+        if (query.isNotEmpty()) Icon(Icons.Outlined.Close, "Очистить поиск", Modifier.size(14.dp).clip(CircleShape).clickable { onQuery("") }, tint = c.faint)
+        else Text("⌘ K", color = c.faint, fontSize = 11.sp)
+    }
+}
+
+@Composable
+private fun SessionRow(session: SessionInfo, selected: Boolean, running: Boolean, enabled: Boolean, onSelect: () -> Unit, onRename: () -> Unit, onExport: (String) -> Unit) {
+    val c = LocalChillerPalette.current
+    var menu by remember(session.id) { mutableStateOf(false) }
+    var closedAt by remember { mutableStateOf(0L) }
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    Row(
+        Modifier.fillMaxWidth().height(34.dp).clip(RoundedCornerShape(7.dp))
+            .background(when { selected -> c.selected; hovered && enabled -> c.hover; else -> androidx.compose.ui.graphics.Color.Transparent })
+            .hoverable(interaction).pointerHoverIcon(PointerIcon.Hand)
+            .clickable(interactionSource = interaction, indication = null, enabled = enabled, role = Role.Button, onClick = onSelect)
+            .padding(start = 10.dp, end = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.size(15.dp), contentAlignment = Alignment.Center) {
+            if (running) Pulse(c.accent) else Icon(Icons.AutoMirrored.Outlined.Chat, null, Modifier.size(14.dp), tint = if (selected) c.muted else c.faint)
+        }
+        Spacer(Modifier.width(9.dp))
+        Text(session.title.ifBlank { "Новый диалог" }, color = c.text, fontSize = 12.sp, lineHeight = 18.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+        Box(Modifier.width(44.dp), contentAlignment = Alignment.CenterEnd) {
+            if (hovered || menu || selected) {
+                Box {
+                    ChillerIconButton(Icons.Outlined.MoreHoriz, "Действия диалога", { if (System.currentTimeMillis() - closedAt > 200) menu = !menu }, Modifier.size(26.dp), enabled = enabled)
+                    if (menu) ChillerPopover({ menu = false; closedAt = System.currentTimeMillis() }, 200.dp, below = true, alignEnd = true) {
+                        Spacer(Modifier.height(5.dp))
+                        MenuRow("Переименовать", { menu = false; onRename() }, icon = Icons.Outlined.Edit)
+                        MenuRow("Экспорт Markdown", { menu = false; onExport("markdown") }, icon = Icons.Outlined.Description)
+                        MenuRow("Экспорт JSON", { menu = false; onExport("json") }, icon = Icons.Outlined.DataObject)
+                        Spacer(Modifier.height(5.dp))
+                    }
+                }
+            } else Text(if (running) "идёт" else relativeAge(session.updatedAt), color = if (running) c.accent else c.faint, fontSize = 10.sp, lineHeight = 14.sp, maxLines = 1, modifier = Modifier.padding(end = 8.dp))
         }
     }
 }
