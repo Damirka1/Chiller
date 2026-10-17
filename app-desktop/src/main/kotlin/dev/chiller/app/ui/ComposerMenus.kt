@@ -161,7 +161,7 @@ internal fun ModelPickerContent(
     val discovered = catalog.models.map { it.id }
     val known = (listOf(model) + discovered + models).filter { it.isNotBlank() }.distinct().take(40)
     val query = filter.trim()
-    val shown = if (query.isEmpty()) known else known.filter { it.contains(query, true) || modelLabel(it).contains(query, true) }
+    val shown = if (query.isEmpty()) known else known.filter { id -> id.contains(query, true) || modelLabel(id).contains(query, true) || catalog.models.firstOrNull { it.id == id }?.displayName?.contains(query, true) == true }
     var highlight by remember { mutableStateOf(-1) }
     LaunchedEffect(query) { highlight = if (query.isEmpty()) -1 else 0 }
     val focus = remember { FocusRequester() }
@@ -200,7 +200,7 @@ internal fun ModelPickerContent(
         Column(Modifier.heightIn(max = 280.dp).verticalScroll(rememberScrollState())) {
             shown.forEachIndexed { index, id ->
                 MenuRow(
-                    modelLabel(id), { pick(id) }, subtitle = modelSubtitle(id, catalog), selected = id == model, highlighted = index == highlight,
+                    catalog.models.firstOrNull { it.id == id }?.displayName?.takeIf { it.isNotBlank() } ?: modelLabel(id), { pick(id) }, subtitle = modelSubtitle(id, catalog), selected = id == model, highlighted = index == highlight,
                     tag = if (id != model && id !in discovered) "вручную" else null,
                 )
             }
@@ -251,7 +251,7 @@ internal fun catalogLine(catalog: ModelCatalogState, configured: Boolean): Strin
 internal fun modelSubtitle(id: String, catalog: ModelCatalogState): String? {
     val model = catalog.models.firstOrNull { it.id == id }
     val parts = buildList {
-        if (modelLabel(id) != id) add(id)
+        if (modelLabel(id) != id || !model?.displayName.isNullOrBlank()) add(id)
         model?.contextWindow?.let { add("контекст ${formatTokens(it)}") }
         model?.maxOutputTokens?.let { add("вывод ${formatTokens(it)}") }
     }

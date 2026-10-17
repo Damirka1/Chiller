@@ -3,7 +3,7 @@ package dev.chiller.app.ui
 import dev.chiller.contracts.*
 
 fun modelLabel(id: String): String = when (id) {
-    "deepseek-flash" -> "DeepSeek Flash"
+    "deepseek-flash" -> "DeepSeek V4.1 Flash"
     else -> id.substringAfterLast('/').ifBlank { id }
 }
 

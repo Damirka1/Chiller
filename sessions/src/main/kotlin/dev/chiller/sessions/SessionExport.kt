@@ -176,7 +176,7 @@ class SessionExporter(private val store: EventStore) {
         return when (origin.string("kind")?.uppercase()) {
             "MODEL" -> {
                 val modelId = origin.string("modelId")?.takeIf(String::isNotBlank) ?: return "Assistant"
-                val author = if (modelId == "deepseek-flash") "DeepSeek Flash" else modelId
+                val author = if (modelId == "deepseek-flash") "DeepSeek V4.1 Flash" else modelId
                 "Assistant — $author"
             }
             "OFFLINE" -> "Assistant — Chiller · offline"

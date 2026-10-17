@@ -166,7 +166,7 @@ fun ChillerApp(
             Row(Modifier.fillMaxSize()) {
                 if (showSidebar) Sidebar(sessions, selectedSessionId, workspacePath, apiKeyConfigured, !active, onNewSession, onSelectSession, onChooseWorkspace,
                     onSettings = { settings = true }, onTheme = { updateView(view.copy(theme = if (dark) "light" else "dark")) }, onRename = { renameTarget = it }, onExport = onExportSession, connection = connection, width = 248f * density.fontScale.coerceIn(1f, 1.2f),
-                    running = active, modelName = friendlyModel(providerModel), searchFocus = sidebarSearch)
+                    running = active, searchFocus = sidebarSearch)
                 Box(Modifier.width(1.dp).fillMaxHeight().background(c.border.copy(alpha = .7f)))
                 BoxWithConstraints(Modifier.weight(1f).fillMaxHeight()) {
                     val compact = maxWidth < 860.dp || density.fontScale > 1.3f
@@ -239,7 +239,7 @@ fun ChillerApp(
 private fun Sidebar(
     sessions: List<SessionInfo>, selected: String?, workspace: String?, connected: Boolean, enabled: Boolean,
     onNew: () -> Unit, onSelect: (String) -> Unit, onChoose: () -> Unit, onSettings: () -> Unit, onTheme: () -> Unit, onRename: (SessionInfo) -> Unit, onExport: (String, String) -> Unit, connection: ConnectionState, width: Float,
-    running: Boolean, modelName: String, searchFocus: FocusRequester,
+    running: Boolean, searchFocus: FocusRequester,
 ) {
     val c = LocalChillerPalette.current
     var query by remember { mutableStateOf("") }
@@ -279,12 +279,15 @@ private fun Sidebar(
         val (line, dot) = connectionSummary(connection, connected)
         Row(Modifier.fillMaxWidth().padding(vertical = 10.dp, horizontal = 3.dp), verticalAlignment = Alignment.CenterVertically) {
             HoverRow(onSettings, Modifier.weight(1f), enabled = enabled) {
-                Box(Modifier.size(8.dp).clip(CircleShape).background(dot))
+                Icon(Icons.Outlined.Settings, null, Modifier.size(16.dp), tint = c.muted)
                 Column(Modifier.weight(1f).padding(start = 10.dp)) {
-                    Text(modelName, color = c.text, fontSize = 12.sp, lineHeight = 17.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text(line, color = c.muted, fontSize = 11.sp, lineHeight = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text("Настройки", color = c.text, fontSize = 12.sp, lineHeight = 17.sp, maxLines = 1)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(Modifier.size(6.dp).clip(CircleShape).background(dot))
+                        Spacer(Modifier.width(6.dp))
+                        Text(line, color = c.muted, fontSize = 11.sp, lineHeight = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
                 }
-                Icon(Icons.Outlined.Settings, "Настройки", Modifier.size(15.dp), tint = c.faint)
             }
             ChillerIconButton(Icons.Outlined.Contrast, "Сменить тему", onTheme)
         }

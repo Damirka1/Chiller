@@ -68,7 +68,7 @@ class SessionExportTest {
             event(5, "message", buildJsonObject { put("role", "assistant"); put("content", "legacy") }),
         ))
         val markdown = SessionExporter(store).markdown("s")
-        assertContains(markdown, "### Assistant — DeepSeek Flash")
+        assertContains(markdown, "### Assistant — DeepSeek V4.1 Flash")
         assertContains(markdown, "### Assistant — other-model:26b")
         assertContains(markdown, "### Assistant — Chiller · offline")
         assertContains(markdown, "### Assistant — Chiller")
