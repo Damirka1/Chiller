@@ -61,11 +61,11 @@ internal fun StartScreen(
         contentAlignment = Alignment.Center,
     ) {
         Column(
-            Modifier.widthIn(max = 640.dp).fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 32.dp, vertical = 24.dp),
+            Modifier.widthIn(max = 640.dp).fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 32.dp, vertical = 16.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            ChillerMark(Modifier.size(34.dp), c.accent)
-            Spacer(Modifier.height(20.dp))
+            ChillerMark(Modifier.size(if (workspacePath == null) 34.dp else 28.dp), c.accent)
+            Spacer(Modifier.height(if (workspacePath == null) 20.dp else 14.dp))
             if (workspacePath == null) {
                 Text("Что будем создавать?", fontSize = 26.sp, lineHeight = 34.sp, letterSpacing = (-.6).sp, fontWeight = FontWeight.Medium, color = c.text, textAlign = TextAlign.Center)
                 Spacer(Modifier.height(8.dp))
@@ -81,11 +81,11 @@ internal fun StartScreen(
                 }
             } else {
                 val name = Path.of(workspacePath).fileName?.toString() ?: workspacePath
-                Text("Что сделаем в $name?", fontSize = 26.sp, lineHeight = 34.sp, letterSpacing = (-.6).sp, fontWeight = FontWeight.Medium, color = c.text, textAlign = TextAlign.Center, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                Spacer(Modifier.height(22.dp))
+                Text("Что сделаем в $name?", fontSize = 24.sp, lineHeight = 32.sp, letterSpacing = (-.6).sp, fontWeight = FontWeight.Medium, color = c.text, textAlign = TextAlign.Center, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Spacer(Modifier.height(18.dp))
                 val overview by produceState<ProjectOverview?>(null, workspacePath) { value = withContext(Dispatchers.IO) { runCatching { inspectProject(Path.of(workspacePath)) }.getOrNull() } }
                 ProjectCard(workspacePath, overview, modelName, connectionLine, connectionColor, onOpenFolder)
-                Spacer(Modifier.height(22.dp))
+                Spacer(Modifier.height(18.dp))
                 SectionLabel("С чего начать")
                 val tasks = overview?.let(::starters) ?: starters(ProjectOverview(name, workspacePath, null, emptyList(), null, 0))
                 tasks.chunked(2).forEach { pair ->
@@ -141,7 +141,7 @@ private fun RecentProjectRow(path: String, onClick: () -> Unit) {
 private fun ProjectCard(path: String, overview: ProjectOverview?, modelName: String, connectionLine: String, connectionColor: Color, onChange: () -> Unit) {
     val c = LocalChillerPalette.current
     val shape = RoundedCornerShape(12.dp)
-    Column(Modifier.fillMaxWidth().clip(shape).background(c.sidebar.copy(alpha = .6f)).border(1.dp, c.border, shape).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    Column(Modifier.fillMaxWidth().clip(shape).background(c.sidebar.copy(alpha = .6f)).border(1.dp, c.border, shape).padding(horizontal = 16.dp, vertical = 14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(34.dp).clip(RoundedCornerShape(9.dp)).background(c.accent.copy(alpha = .12f)), contentAlignment = Alignment.Center) {
                 Icon(Icons.Outlined.FolderOpen, null, Modifier.size(17.dp), tint = c.accent)
@@ -162,13 +162,9 @@ private fun ProjectCard(path: String, overview: ProjectOverview?, modelName: Str
                     Fact(Icons.Outlined.Description, overview.files?.let { "$it ${plural(it, "файл", "файла", "файлов")}" } ?: "больше ${overview.limit} файлов")
                 }
             }
-        }
-        Box(Modifier.fillMaxWidth().height(1.dp).background(c.border))
-        Row(verticalAlignment = Alignment.CenterVertically) {
+            Spacer(Modifier.weight(1f))
             Box(Modifier.size(7.dp).clip(RoundedCornerShape(50)).background(connectionColor))
-            Spacer(Modifier.width(8.dp))
-            Text(modelName, color = c.text, fontSize = 12.sp, lineHeight = 18.sp)
-            Text(" · $connectionLine", color = c.muted, fontSize = 12.sp, lineHeight = 18.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text("$modelName · $connectionLine", color = c.muted, fontSize = 11.sp, lineHeight = 16.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
 }
@@ -193,13 +189,13 @@ private fun StarterCard(starter: Starter, modifier: Modifier, onClick: () -> Uni
         modifier.height(IntrinsicSize.Min).clip(shape).background(if (hovered) c.hover else c.surface).border(1.dp, if (hovered) c.muted.copy(alpha = .35f) else c.border, shape)
             .hoverable(interaction).pointerHoverIcon(PointerIcon.Hand)
             .clickable(interactionSource = interaction, indication = null, role = Role.Button, onClick = onClick)
-            .padding(horizontal = 14.dp, vertical = 11.dp),
+            .padding(horizontal = 14.dp, vertical = 9.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(starter.title, color = c.text, fontSize = 13.sp, lineHeight = 19.sp, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
             if (starter.needsEdits) Icon(Icons.Outlined.Edit, "Нужен режим изменений", Modifier.size(13.dp), tint = c.faint)
         }
-        Text(starter.detail, color = c.muted, fontSize = 12.sp, lineHeight = 17.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        Text(starter.detail, color = c.muted, fontSize = 12.sp, lineHeight = 17.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 

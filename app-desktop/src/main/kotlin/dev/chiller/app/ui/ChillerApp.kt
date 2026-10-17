@@ -504,7 +504,7 @@ private fun Conversation(state: RunState, reduced: Boolean, onAnswer: (String) -
     val scope = rememberCoroutineScope()
     var follow by remember { mutableStateOf(true) }
     LaunchedEffect(scroll) { snapshotFlow { !scroll.canScrollForward || scroll.layoutInfo.visibleItemsInfo.lastOrNull()?.index == scroll.layoutInfo.totalItemsCount - 1 }.collect { follow = it } }
-    LaunchedEffect(state.messages.size, state.streamingText, state.activities, state.question) {
+    LaunchedEffect(state.messages.size, state.streamingText, state.activities, state.question, state.status) {
         if (follow && scroll.layoutInfo.totalItemsCount > 0) { if (reduced) scroll.scrollToItem(scroll.layoutInfo.totalItemsCount - 1) else scroll.animateScrollToItem(scroll.layoutInfo.totalItemsCount - 1) }
     }
     Box(modifier, contentAlignment = Alignment.TopCenter) {
@@ -798,10 +798,10 @@ internal fun formatCheckTime(value: String?): String = runCatching {
 internal fun connectionSummary(connection: ConnectionState, configured: Boolean): Pair<String, androidx.compose.ui.graphics.Color> {
     val c = LocalChillerPalette.current
     return when (connection.status) {
-        "verified" -> "подключение проверено" to c.positive
-        "checking" -> "проверяю подключение…" to c.muted
+        "verified" -> "подключено" to c.positive
+        "checking" -> "проверяю…" to c.muted
         "failed" -> "ошибка подключения" to c.negative
-        else -> if (configured) "ключ задан, не проверено" to c.faint else "ключ API не задан" to c.negative
+        else -> if (configured) "не проверено" to c.faint else "нет ключа API" to c.negative
     }
 }
 
