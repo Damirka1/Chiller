@@ -59,6 +59,24 @@ class DesktopControllerTest {
         try { restarted.initialize(); assertNull(restarted.state.value.settings.workspace) } finally { restarted.close() }
     }
 
+    @Test fun `keys stay with their endpoint and loopback servers need none`() = runBlocking {
+        val controller = DesktopController(directory, initialCredential = "deepseek-key", namedKeys = mapOf("OPENAI_API_KEY" to "openai-key"))
+        try {
+            controller.initialize()
+            assertTrue(controller.state.value.apiKeyConfigured)
+            controller.configure("https://api.openai.com/v1", "some-model", false, null)
+            assertTrue(controller.state.value.apiKeyConfigured, "OpenAI key from the environment applies to its own origin")
+            controller.configure("https://api.groq.com/openai/v1", "m", false, null)
+            assertFalse(controller.state.value.apiKeyConfigured, "no key is carried to another origin")
+            controller.configure("http://localhost:11434/v1", "gemma", false, null)
+            assertTrue(controller.state.value.apiKeyConfigured, "loopback works without a key")
+            assertEquals("unverified", controller.state.value.connection.status)
+            controller.configure("https://api.deepseek.com", "deepseek-flash", false, null)
+            assertTrue(controller.state.value.apiKeyConfigured, "returning restores the endpoint's key")
+            assertEquals(setOf("https://api.deepseek.com:443", "https://api.openai.com:443"), controller.keyedOrigins())
+        } finally { controller.close() }
+    }
+
     @Test fun `offline send acknowledges durable user message and deduplicates request id`() = runBlocking {
         val controller = DesktopController(directory, initialCredential = null)
         try {

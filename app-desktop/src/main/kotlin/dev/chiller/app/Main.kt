@@ -25,7 +25,8 @@ import javax.swing.JFileChooser
 fun main() = application {
     val scope = rememberCoroutineScope()
     val directory = remember { System.getenv("CHILLER_DATA_DIR")?.let(Path::of) ?: Path.of(System.getProperty("user.home"), ".chiller") }
-    val controller = remember { DesktopController(directory, if (java.lang.Boolean.getBoolean("chiller.offlinePreview")) null else LocalCredentials.load()) }
+    val controller = remember { DesktopController(directory, if (java.lang.Boolean.getBoolean("chiller.offlinePreview")) null else LocalCredentials.load(),
+        namedKeys = if (java.lang.Boolean.getBoolean("chiller.offlinePreview")) emptyMap() else LocalCredentials.loadNamed(dev.chiller.app.di.ProviderPresets.keyVariables)) }
     val state by controller.state.collectAsState()
     val actions = remember { MutableSharedFlow<DesktopAction>(extraBufferCapacity = 16) }
     val mac = remember { System.getProperty("os.name").startsWith("Mac") }
@@ -47,6 +48,8 @@ fun main() = application {
             window.rootPane.putClientProperty("apple.awt.windowTitleVisible", false)
         }
         val titleBar = remember(mac) { if (!mac) null else TitleBarSpec(dragArea = { modifier -> WindowDraggableArea(modifier) { androidx.compose.foundation.layout.Box(androidx.compose.ui.Modifier.fillMaxSize()) } }) }
+        var demoCount by remember { mutableStateOf(controller.demoProjectCount()) }
+        LaunchedEffect(state.sessionId) { demoCount = controller.demoProjectCount() }
         val chooseWorkspace = {
             chooseDirectory(window, state.settings.workspace, mac)?.let { path -> scope.launch { controller.chooseWorkspace(path) } }
             Unit
@@ -94,6 +97,20 @@ fun main() = application {
             onStartDemo = { scope.launch { controller.startDemo() } },
             onCloseWorkspace = { scope.launch { controller.closeWorkspace() } },
             subagents = state.subagents, onCancelSubagent = { id -> scope.launch { controller.cancelSubagent(id) } },
+            settingsData = dev.chiller.app.ui.SettingsData(
+                state.settings.baseUrl, state.settings.model, state.settings.thinking, state.apiKeyConfigured,
+                keySources = controller.keySources(), connection = state.connection, catalog = state.catalog, allowProcesses = state.allowProcesses,
+                agent = state.settings.agent, recent = state.settings.recentWorkspaces, dataDir = controller.dataDirectory().toString(), demoCount = demoCount,
+                version = dev.chiller.app.di.BuildInfo.version, build = BuildStamp.value, commit = dev.chiller.app.di.BuildInfo.commit,
+                runtime = dev.chiller.app.di.BuildInfo.runtime, os = dev.chiller.app.di.BuildInfo.os,
+            ),
+            settingsActions = dev.chiller.app.ui.SettingsActions(
+                agent = { options -> scope.launch { controller.updateAgentOptions(options) } },
+                removeRecent = { path -> scope.launch { controller.removeRecentWorkspace(path) } },
+                openPath = { path -> runCatching { java.io.File(path).also { it.mkdirs() }.let(java.awt.Desktop.getDesktop()::open) } },
+                openUrl = { url -> runCatching { java.awt.Desktop.getDesktop().browse(java.net.URI(url)) } },
+                deleteDemos = { scope.launch { controller.deleteDemoProjects(); demoCount = controller.demoProjectCount() } },
+            ),
             titleBar = titleBar, buildStamp = BuildStamp.value,
             onOpenTrace = {
                 val trace = controller.tracePath(state.sessionId).toFile()

@@ -25,10 +25,35 @@ compose.desktop {
             val preview = providers.gradleProperty("chillerPreview").isPresent
             packageName = if (preview) "ChillerPreview" else "Chiller"
             macOS.bundleID = if (preview) "dev.chiller.preview" else "dev.chiller.app"
-            packageVersion = "1.0.0"
+            packageVersion = project.version.toString()
+            targetFormats(org.jetbrains.compose.desktop.application.dsl.TargetFormat.Dmg, org.jetbrains.compose.desktop.application.dsl.TargetFormat.Msi)
+            windows {
+                menuGroup = "Chiller"
+                // Stable upgrade code so a newer MSI replaces an older install.
+                upgradeUuid = "6b1f3c2e-8a4d-4f8e-9c1a-3d2b7e5f9a10"
+                shortcut = true
+                dirChooser = true
+            }
             includeAllModules = true
         }
     }
 }
 // Run from the repository root so the root .env and relative paths resolve as in the README.
 tasks.withType<JavaExec>().matching { it.name == "run" }.configureEach { workingDir = rootProject.projectDir }
+
+// Version and build metadata shown in Settings → About. The commit comes from CI when available.
+val versionResources = layout.buildDirectory.dir("generated/version")
+val writeVersion by tasks.registering {
+    val version = project.version.toString()
+    val commit = providers.environmentVariable("GITHUB_SHA").orElse("local")
+    inputs.property("version", version)
+    inputs.property("commit", commit)
+    outputs.dir(versionResources)
+    doLast {
+        val file = versionResources.get().file("chiller-version.properties").asFile
+        file.parentFile.mkdirs()
+        file.writeText("version=$version\ncommit=${commit.get().take(12)}\n")
+    }
+}
+sourceSets.named("main") { resources.srcDir(versionResources) }
+tasks.named("processResources") { dependsOn(writeVersion) }

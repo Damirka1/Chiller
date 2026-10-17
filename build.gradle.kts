@@ -7,7 +7,10 @@ plugins {
     id("org.jetbrains.compose") version "1.10.3" apply false
 }
 
-allprojects { group = "dev.chiller"; version = "0.1.0-alpha" }
+// One version for the app, jars and installers. CI release builds pass -PchillerVersion from the git tag.
+val chillerVersion = providers.gradleProperty("chillerVersion").get()
+require(Regex("""^[1-9]\d*\.\d+\.\d+$""").matches(chillerVersion)) { "chillerVersion must be MAJOR.MINOR.PATCH with MAJOR > 0 (installer rule): $chillerVersion" }
+allprojects { group = "dev.chiller"; version = chillerVersion }
 subprojects {
     apply(plugin = "org.jetbrains.kotlin.jvm")
     apply(plugin = "org.jetbrains.kotlin.plugin.serialization")

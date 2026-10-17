@@ -26,7 +26,18 @@ import java.nio.file.Path
 import java.nio.file.StandardCopyOption
 
 @Serializable
-data class DesktopSettings(val baseUrl: String = "https://api.deepseek.com", val model: String = "deepseek-flash", val thinking: Boolean = false, val workspace: String? = null, val rememberedModels: Map<String, List<String>> = emptyMap(), val recentWorkspaces: List<String> = emptyList())
+data class DesktopSettings(val baseUrl: String = "https://api.deepseek.com", val model: String = "deepseek-flash", val thinking: Boolean = false, val workspace: String? = null, val rememberedModels: Map<String, List<String>> = emptyMap(), val recentWorkspaces: List<String> = emptyList(), val agent: AgentOptions = AgentOptions())
+
+/** How the agent runs; applied from the next dialog. Bounded so a typo cannot start an unbounded run. */
+@Serializable
+data class AgentOptions(
+    val maxRounds: Int = 24,
+    val maxOutputTokens: Int = 4096,
+    val subagents: Boolean = true,
+    val projectInstructions: Boolean = true,
+) {
+    fun sanitized() = copy(maxRounds = maxRounds.coerceIn(4, 60), maxOutputTokens = maxOutputTokens.coerceIn(1024, 16_384))
+}
 data class SendReceipt(val accepted: Boolean, val sessionId: String, val clientRequestId: String, val reason: String? = null)
 data class ConnectionState(val status: String = "unverified", val message: String = "", val checkedAt: String? = null)
 data class ModelCatalogState(
@@ -38,7 +49,11 @@ data class ModelCatalogState(
 )
 data class DesktopState(val run: RunState = RunState(), val sessions: List<SessionInfo> = emptyList(), val sessionId: String = newId(), val settings: DesktopSettings = DesktopSettings(), val apiKeyConfigured: Boolean = false, val allowProcesses: Boolean = false, val exportContent: String? = null, val exportFormat: String = "markdown", val exportSessionId: String? = null, val uiPreferences: UiPreferences = UiPreferences(), val connection: ConnectionState = ConnectionState(), val catalog: ModelCatalogState = ModelCatalogState(), val sessionWorkspaces: Map<String, String> = emptyMap(), val subagents: List<SubagentSnapshot> = emptyList())
 
-class DesktopController(private val directory: Path, initialCredential: String? = LocalCredentials.load(), connectionChecker: ConnectionChecker? = null, catalogClient: ModelCatalogClient? = null) {
+class DesktopController(
+    private val directory: Path, initialCredential: String? = LocalCredentials.load(), connectionChecker: ConnectionChecker? = null, catalogClient: ModelCatalogClient? = null,
+    /** Keys found in the environment or .env by variable name (OPENAI_API_KEY, …); mapped to their presets' origins. */
+    namedKeys: Map<String, String> = emptyMap(),
+) {
     private val commands = Mutex()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
@@ -53,8 +68,22 @@ class DesktopController(private val directory: Path, initialCredential: String? 
 
     /** The project the user chose (persisted), as opposed to a folder shown for a selected or demo dialog. */
     private var savedWorkspace: String? = null
-    private var credential: String? = initialCredential?.takeIf { it.isNotBlank() }
-    private val _state = MutableStateFlow(DesktopState(apiKeyConfigured = credential != null, connection = ConnectionState(if (credential == null) "missing" else "unverified", if (credential == null) "Не задан API-ключ" else "Подключение ещё не проверено")))
+    /** Keys per endpoint origin: a key is only ever sent to the origin it belongs to. In memory only. */
+    private val credentials = java.util.concurrent.ConcurrentHashMap<String, String>().apply {
+        ProviderPresets.all.forEach { preset -> preset.keyVariables.firstNotNullOfOrNull { namedKeys[it] }?.let { key -> originOf(preset.baseUrl)?.let { put(it, key) } } }
+        initialCredential?.takeIf { it.isNotBlank() }?.let { key -> originOf("https://api.deepseek.com")?.let { put(it, key) } }
+    }
+    private val envOrigins: Set<String> = credentials.keys.toSet()
+    private var credential: String?
+        get() = originOf(currentBaseUrl())?.let { credentials[it] }
+        set(value) { originOf(currentBaseUrl())?.let { origin -> if (value.isNullOrBlank()) credentials.remove(origin) else credentials[origin] = value } }
+    private fun currentBaseUrl(): String = _state.value.settings.baseUrl
+    /** A loopback endpoint (Ollama, LM Studio, vLLM) runs without a key. */
+    private fun keyless(url: String = currentBaseUrl()) = isLoopback(url)
+    private fun ready() = credential != null || keyless()
+    private val _state = (originOf(DesktopSettings().baseUrl)?.let { credentials[it] } != null).let { hasKey ->
+        MutableStateFlow(DesktopState(apiKeyConfigured = hasKey, connection = ConnectionState(if (hasKey) "unverified" else "missing", if (hasKey) "Подключение ещё не проверено" else "Не задан API-ключ")))
+    }
     val state: StateFlow<DesktopState> = _state.asStateFlow()
     private var coordinator: AgentCoordinator? = null
     private var processService: LocalProcessService? = null
@@ -84,13 +113,13 @@ class DesktopController(private val directory: Path, initialCredential: String? 
         var settings = withContext(Dispatchers.IO) {
             runCatching { json.decodeFromString<DesktopSettings>(Files.readString(file)) }.getOrDefault(DesktopSettings())
         }
-        if (!sameOrigin(settings.baseUrl, "https://api.deepseek.com")) credential = null
         settings = rememberModel(settings, settings.baseUrl, settings.model)
         // A demo folder must never come back as the project on the next launch.
         if (settings.workspace?.let(::isDemoFolder) == true) settings = settings.copy(workspace = null)
         savedWorkspace = settings.workspace
         refreshSessions()
-        _state.update { it.copy(settings = settings, uiPreferences = preferencesStore.load(), apiKeyConfigured = credential != null, connection = connectionForUnverified()) }
+        _state.update { it.copy(settings = settings, uiPreferences = preferencesStore.load()) }
+        _state.update { it.copy(apiKeyConfigured = ready(), connection = connectionForUnverified()) }
         saveSettings(settings)
     }
 
@@ -196,7 +225,7 @@ class DesktopController(private val directory: Path, initialCredential: String? 
         scope.launch(start = CoroutineStart.LAZY) {
             val snapshot = commands.withLock {
                 if (revision != connectionRevision.get()) return@withLock null
-                val key = credential?.takeIf { it.isNotBlank() }
+                val key = credential?.takeIf { it.isNotBlank() } ?: if (keyless()) "" else null
                 if (key == null) {
                     _state.update { it.copy(connection = ConnectionState("missing", "Не задан API-ключ")) }
                     null
@@ -211,8 +240,8 @@ class DesktopController(private val directory: Path, initialCredential: String? 
             catch (cancelled: CancellationException) { throw cancelled }
             catch (_: Exception) { ConnectionCheckResult(false, "Network error or request timed out") }
             commands.withLock {
-                if (revision == connectionRevision.get() && profile == _state.value.settings && key == credential) {
-                    val safeMessage = localizeConnectionMessage(result.message.replace(key, "[СКРЫТО]").take(240))
+                if (revision == connectionRevision.get() && profile == _state.value.settings && key == (credential ?: "")) {
+                    val safeMessage = localizeConnectionMessage((if (key.isEmpty()) result.message else result.message.replace(key, "[СКРЫТО]")).take(240))
                     _state.update { it.copy(connection = ConnectionState(if (result.success) "verified" else "failed", safeMessage, if (result.success) Instant.now().toString() else null)) }
                 }
             }
@@ -238,14 +267,16 @@ class DesktopController(private val directory: Path, initialCredential: String? 
         val oldSettings = _state.value.settings
         val oldCredential = credential
         val nextUrl = url.trimEnd('/')
-        if (key != null) credential = key.takeIf { it.isNotBlank() }
-        else if (!sameOrigin(oldSettings.baseUrl, nextUrl)) credential = null
+        // Keys belong to origins: switching endpoints picks that endpoint's own key (or none), never carries one over.
+        originOf(nextUrl)?.let { origin -> if (key != null) { if (key.isBlank()) credentials.remove(origin) else credentials[origin] = key } }
         var next = oldSettings.copy(baseUrl = nextUrl, model = model.trim(), thinking = thinking)
         next = rememberModel(next, next.baseUrl, next.model)
-        val profileChanged = oldSettings.baseUrl != next.baseUrl || oldSettings.model != next.model || oldSettings.thinking != next.thinking || oldCredential != credential
+        val nextCredential = originOf(nextUrl)?.let { credentials[it] }
+        val profileChanged = oldSettings.baseUrl != next.baseUrl || oldSettings.model != next.model || oldSettings.thinking != next.thinking || oldCredential != nextCredential
         if (profileChanged) invalidateConnectionCheck()
-        if (oldSettings.baseUrl != next.baseUrl || oldCredential != credential) invalidateCatalog()
-        _state.update { it.copy(settings = next, apiKeyConfigured = credential != null, sessionId = newId(), run = RunState(), connection = if (profileChanged) connectionForUnverified() else it.connection) }
+        if (oldSettings.baseUrl != next.baseUrl || oldCredential != nextCredential) invalidateCatalog()
+        _state.update { it.copy(settings = next, sessionId = newId(), run = RunState()) }
+        _state.update { it.copy(apiKeyConfigured = ready(), connection = if (profileChanged) connectionForUnverified() else it.connection) }
         saveSettings(next)
         resetEngine()
     }
@@ -313,7 +344,7 @@ class DesktopController(private val directory: Path, initialCredential: String? 
         if (text.isBlank()) return rejected("Сообщение пустое")
         if (busy()) return rejected("Уже выполняется другая задача")
         if (events.findEarly(session, "session.demo") != null) return rejected("Это демо-диалог: в нём отвечает сценарий, а не модель. Начните новый диалог.")
-        if (credential == null) {
+        if (!ready()) {
             val user = AgentMessage("user", text)
             val answer = AgentMessage("assistant", "Это offline-режим Chiller. Интерфейс готов к работе; подключите API в настройках, чтобы выполнять задачи в проекте. Ключ хранится только на время запуска.", origin = MessageOrigin(MessageOriginKind.OFFLINE))
             try { withContext(NonCancellable) { events.append(session, "message", json.encodeToJsonElement(AgentMessage.serializer(), user).jsonObject) } }
@@ -399,6 +430,7 @@ class DesktopController(private val directory: Path, initialCredential: String? 
 
     private suspend fun buildEngine(providerOverride: LlmProvider? = null, modelOverride: String? = null): AgentCoordinator {
         val s = _state.value
+        val options = s.settings.agent.sanitized()
         val root = Path.of(s.settings.workspace ?: throw IllegalStateException("Choose workspace"))
         val workspace = LocalWorkspace(root, events, artifacts, s.sessionId)
         workspace.recoverPending()
@@ -408,15 +440,18 @@ class DesktopController(private val directory: Path, initialCredential: String? 
         val builtin = BuiltinTools(workspace, processes, artifacts, questions)
         val profile = if (java.net.URI(s.settings.baseUrl).host == "api.deepseek.com")
             ChatCompletionsProfile.deepSeekFlash(s.settings.baseUrl, s.settings.model)
-        else ChatCompletionsProfile("generic", s.settings.baseUrl, s.settings.model)
-        val provider = providerOverride ?: ChatCompletionsProvider(http, profile) { credential }
+        else ChatCompletionsProfile("generic", s.settings.baseUrl, s.settings.model, requiresApiKey = !keyless(s.settings.baseUrl))
+        // The engine's provider is bound to its own endpoint's key, read at request time.
+        val engineOrigin = originOf(s.settings.baseUrl)
+        val provider = providerOverride ?: ChatCompletionsProvider(http, profile) { engineOrigin?.let { credentials[it] } }
         // Children use the same provider and model, read-only tools and the plain executor (no delegation).
         val supervisor = SubagentSupervisor(provider, builtin, events, s.sessionId, modelOverride ?: s.settings.model, scope)
         subagentService = supervisor
-        val tools = SubagentTools(builtin, supervisor)
+        val tools: ToolExecutor = if (options.subagents) SubagentTools(builtin, supervisor) else builtin
         // Read once per engine: an edit to AGENTS.md applies from the next dialog.
-        val instructions = withContext(Dispatchers.IO) { ProjectInstructions.load(root) }
-        val engine = AgentCoordinator(provider, tools, events, processes, s.sessionId, modelOverride ?: s.settings.model, s.settings.thinking, projectInstructions = instructions?.text, traces = traceSink(s.sessionId), subagents = supervisor, scope = scope)
+        val instructions = if (options.projectInstructions) withContext(Dispatchers.IO) { ProjectInstructions.load(root) } else null
+        val engine = AgentCoordinator(provider, tools, events, processes, s.sessionId, modelOverride ?: s.settings.model, s.settings.thinking, maxRounds = options.maxRounds, maxOutputTokens = options.maxOutputTokens,
+            projectInstructions = instructions?.text, traces = traceSink(s.sessionId), subagents = supervisor.takeIf { options.subagents }, scope = scope)
         coordinator = engine
         if (instructions != null) events.append(s.sessionId, "context.instructions", buildJsonObject {
             put("sources", JsonArray(instructions.sources.map(::JsonPrimitive))); put("truncated", instructions.truncated)
@@ -482,7 +517,41 @@ class DesktopController(private val directory: Path, initialCredential: String? 
         a.scheme.equals(b.scheme, true) && a.host.equals(b.host, true) && effectivePort(a) == effectivePort(b)
     }.getOrDefault(false)
     private fun effectivePort(uri: java.net.URI) = uri.port.takeIf { it >= 0 } ?: if (uri.scheme.equals("https", true)) 443 else 80
-    private fun connectionForUnverified() = if (credential == null) ConnectionState("missing", "Не задан API-ключ") else ConnectionState("unverified", "Подключение ещё не проверено")
+    private fun connectionForUnverified() = if (!ready()) ConnectionState("missing", "Не задан API-ключ") else ConnectionState("unverified", if (credential == null) "Локальный сервер без ключа · не проверено" else "Подключение ещё не проверено")
+
+    suspend fun updateAgentOptions(options: AgentOptions) = commands.withLock {
+        val settings = _state.value.settings.copy(agent = options.sanitized())
+        _state.update { it.copy(settings = settings) }
+        saveSettings(settings)
+    }
+
+    suspend fun removeRecentWorkspace(path: String) = commands.withLock {
+        val settings = _state.value.settings.let { it.copy(recentWorkspaces = it.recentWorkspaces - path) }
+        _state.update { it.copy(settings = settings) }
+        saveSettings(settings)
+    }
+
+    /** Deletes the app's own throwaway demo projects, except the one shown right now. Returns how many were removed. */
+    suspend fun deleteDemoProjects(): Int = commands.withLock {
+        if (busy()) return@withLock 0
+        val current = _state.value.settings.workspace
+        withContext(Dispatchers.IO) {
+            val demo = directory.resolve("demo")
+            if (!Files.isDirectory(demo)) return@withContext 0
+            Files.list(demo).use { it.toList() }.filter { run -> current == null || !Path.of(current).startsWith(run.toRealPath()) }.count { run ->
+                runCatching { Files.walk(run).use { paths -> paths.sorted(Comparator.reverseOrder()).forEach(Files::delete) } }.isSuccess
+            }
+        }
+    }
+
+    fun dataDirectory(): Path = directory
+    fun demoProjectCount(): Int = runCatching { Files.list(directory.resolve("demo")).use { it.count().toInt() } }.getOrDefault(0)
+
+    /** Where each endpoint's key came from: "env" (environment or .env) or "ui" (typed in settings). */
+    fun keySources(): Map<String, String> = credentials.keys.associateWith { if (it in envOrigins) "env" else "ui" }
+
+    /** Which endpoints have a key in memory; never the keys themselves. */
+    fun keyedOrigins(): Set<String> = credentials.keys.toSet()
     private fun invalidateConnectionCheck() {
         synchronized(connectionLifecycleLock) { invalidateConnectionCheckLocked() }
     }
@@ -499,7 +568,7 @@ class DesktopController(private val directory: Path, initialCredential: String? 
         }
         pendingCheck?.cancelAndJoin()
         synchronized(catalogLifecycleLock) { catalogRevision.incrementAndGet(); catalogJob?.cancel(); catalogJob = null }
-        resetEngine(); (checker as? AutoCloseable)?.close(); http.close(); credential = null; scope.cancel()
+        resetEngine(); (checker as? AutoCloseable)?.close(); http.close(); credentials.clear(); scope.cancel()
     }
 
     private fun localizeConnectionMessage(message: String): String = when {

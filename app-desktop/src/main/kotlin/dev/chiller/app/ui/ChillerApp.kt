@@ -110,6 +110,9 @@ fun ChillerApp(
     onStartDemo: (() -> Unit)? = null,
     onCloseWorkspace: () -> Unit = {},
     subagents: List<SubagentSnapshot> = emptyList(), onCancelSubagent: (String) -> Unit = {},
+    /** Full settings page content and actions; null builds a basic page from the parameters above. */
+    settingsData: SettingsData? = null, settingsActions: SettingsActions? = null,
+    openSettingsOnStart: String? = null,
     onOpenTrace: (() -> Unit)? = null,
     /** macOS full-window content: the native title bar is transparent and the traffic lights float over the app. */
     titleBar: TitleBarSpec? = null,
@@ -131,7 +134,7 @@ fun ChillerApp(
     var renameTarget by remember { mutableStateOf<SessionInfo?>(null) }
     var selectedActivityId by remember { mutableStateOf<String?>(null) }
     var sidebar by remember { mutableStateOf(true) }
-    var settings by remember { mutableStateOf(false) }
+    var settings by remember { mutableStateOf(openSettingsOnStart != null) }
     val drafts = remember { mutableStateMapOf<String, String>() }
     val draftKey = selectedSessionId ?: "new"
     val draft = drafts[draftKey].orEmpty()
@@ -204,6 +207,21 @@ fun ChillerApp(
                             onCompactChanges = { showCompactChanges = !showCompactChanges },
                         )
                         RunProgressBar(active)
+                        if (settings && !active) {
+                            val data = (settingsData ?: SettingsData(providerBaseUrl, providerModel, thinkingEnabled, apiKeyConfigured, connection = connection, catalog = catalog, allowProcesses = allowProcesses))
+                                .copy(preferences = view)
+                            val base = settingsActions ?: SettingsActions()
+                            SettingsPage(data, SettingsActions(
+                                applyConnection = { url, model, thinking, key ->
+                                    val oldDraft = draft
+                                    scope.launch { onConfigureProvider(url, model, thinking, key)?.let { id -> drafts.putIfAbsent(id, oldDraft) } }
+                                },
+                                checkConnection = onCheckConnection, cancelCheck = onCancelConnection, refreshModels = onRefreshModels,
+                                preferences = updateView, allowProcesses = onAllowProcessesChange, agent = base.agent,
+                                removeRecent = base.removeRecent, openPath = base.openPath, openUrl = base.openUrl, deleteDemos = base.deleteDemos,
+                                close = { settings = false },
+                            ), Modifier.weight(1f).fillMaxWidth(), initial = openSettingsOnStart)
+                        } else
                         Row(Modifier.weight(1f).fillMaxWidth()) {
                             if (!(compact && layout == WorkspaceLayout.STUDIO && showCompactChanges)) {
                                 Column(Modifier.weight(1f).fillMaxHeight()) {
@@ -254,15 +272,6 @@ fun ChillerApp(
                     }
                 }
             }
-        }
-        if (settings && !active) Settings(providerBaseUrl, providerModel, thinkingEnabled, apiKeyConfigured, allowProcesses, buildStamp,
-            view, connection, onCheckConnection, onCancelConnection, { settings = false }) { url, model, thinking, key, allow, nextView ->
-            onAllowProcessesChange(allow); updateView(nextView)
-            if (url != providerBaseUrl || model != providerModel || thinking != thinkingEnabled || key != null) {
-                val oldDraft = draft
-                scope.launch { onConfigureProvider(url, model, thinking, key)?.let { id -> drafts.putIfAbsent(id, oldDraft) } }
-            }
-            settings = false
         }
         renameTarget?.let { target -> RenameDialog(target, { renameTarget = null }) { title ->
             scope.launch { if (onRenameSession(target.id, title)) renameTarget = null }
@@ -774,76 +783,6 @@ private fun Question(question: UserQuestion, onAnswer: (String) -> Unit, canAnsw
 }
 
 @Composable
-private fun Settings(url: String, model: String, thinking: Boolean, configured: Boolean, allow: Boolean, buildStamp: String?,
-    preferences: UiPreferences, connection: ConnectionState, onCheck: () -> Unit, onCancelCheck: () -> Unit,
-    onDismiss: () -> Unit, onSave: (String, String, Boolean, String?, Boolean, UiPreferences) -> Unit) {
-    val c = LocalChillerPalette.current
-    var page by remember { mutableStateOf("Модели") }
-    var nextUrl by remember { mutableStateOf(url) }
-    var nextModel by remember { mutableStateOf(model) }
-    var nextThinking by remember { mutableStateOf(thinking) }
-    var key by remember { mutableStateOf("") }
-    var clear by remember { mutableStateOf(false) }
-    var nextAllow by remember { mutableStateOf(allow) }
-    var nextView by remember { mutableStateOf(preferences) }
-    val changed = nextUrl.trim() != url || nextModel.trim() != model || nextThinking != thinking || key.isNotEmpty() || clear
-    val dialogFocus = remember { FocusRequester() }
-    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        LaunchedEffect(Unit) { dialogFocus.requestFocus() }
-        Column(Modifier.widthIn(max = 540.dp).fillMaxWidth().heightIn(max = 700.dp).focusRequester(dialogFocus).onPreviewKeyEvent {
-            if (it.type == KeyEventType.KeyDown && it.key == Key.Escape) { onDismiss(); true } else false
-        }.focusable().clip(RoundedCornerShape(13.dp)).background(c.surface).border(1.dp, c.border, RoundedCornerShape(13.dp)).verticalScroll(rememberScrollState()).padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text("Настройки", color = c.text, fontSize = 20.sp)
-                Spacer(Modifier.weight(1f)); ChillerIconButton(Icons.Outlined.Close, "Закрыть настройки", onDismiss)
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                listOf("Модели", "Внешний вид", "Разрешения").forEach { name -> ChillerControl(name, { page = name }, style = if (page == name) ControlStyle.SELECTED else ControlStyle.QUIET) }
-            }
-            when (page) {
-                "Модели" -> {
-                    ChillerField(nextUrl, { nextUrl = it }, "Адрес API", "https://api.deepseek.com")
-                    ChillerField(nextModel, { nextModel = it }, "Модель", "deepseek-flash")
-                    ChillerField(key, { key = it }, if (configured) "API-ключ · задан" else "API-ключ", if (configured) "Пустое поле сохраняет текущий ключ" else "Введите ключ", secret = true)
-                    Text("UI-ключ хранится до выхода. .env / API_TOKEN читается при запуске из папки проекта.", color = c.muted, fontSize = 12.sp, lineHeight = 18.sp)
-                    if (configured) ChillerControl(if (clear) "Ключ будет удалён" else "Удалить ключ из памяти", { clear = !clear })
-                    SettingRow("Рассуждения модели", "Поддержка зависит от провайдера", nextThinking) { nextThinking = it }
-                    val connectionText = when (connection.status) {
-                        "missing" -> "Ключ не задан"
-                        "checking" -> "Проверка соединения…"
-                        "verified" -> "Доступ к модели проверен · ${formatCheckTime(connection.checkedAt)}"
-                        "failed" -> connection.message
-                        else -> "Ключ задан · соединение не проверено"
-                    }
-                    Text(if (changed) "Примените изменения перед проверкой" else connectionText, color = if (connection.status == "failed" && !changed) c.negative else c.muted, fontSize = 12.sp, lineHeight = 18.sp)
-                    Text("Проверка отправляет один запрос до 128 выходных токенов, без файлов и инструментов. Проверяет доступ, а не все возможности модели.", color = c.muted, fontSize = 11.sp, lineHeight = 17.sp)
-                    if (connection.status == "checking") ChillerControl("Отменить проверку", onCancelCheck, style = ControlStyle.OUTLINE)
-                    else ChillerControl("Проверить подключение", onCheck, style = ControlStyle.OUTLINE, enabled = configured && !changed)
-                }
-                "Внешний вид" -> {
-                    Text("Тема", color = c.muted, fontSize = 13.sp)
-                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        listOf("system" to "Системная", "light" to "Светлая", "dark" to "Тёмная").forEach { (id, label) -> ChillerControl(label, { nextView = nextView.copy(theme = id) }, style = if (nextView.theme == id) ControlStyle.SELECTED else ControlStyle.QUIET) }
-                    }
-                    Text("Плотность", color = c.muted, fontSize = 13.sp)
-                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        listOf("normal" to "Обычная", "compact" to "Компактная").forEach { (id, label) -> ChillerControl(label, { nextView = nextView.copy(density = id) }, style = if (nextView.density == id) ControlStyle.SELECTED else ControlStyle.QUIET) }
-                    }
-                    SettingRow("Уменьшить движение", "Без пространственных переходов", nextView.reducedMotion) { nextView = nextView.copy(reducedMotion = it) }
-                }
-                else -> SettingRow("Разрешить команды", "Процессы доступны в режиме изменений. Это не OS sandbox.", nextAllow) { nextAllow = it }
-            }
-            Row(Modifier.fillMaxWidth().padding(top = 4.dp), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
-                buildStamp?.let { Text("Сборка $it", color = c.faint, fontSize = 11.sp, modifier = Modifier.weight(1f)) }
-                ChillerControl("Отмена", onDismiss)
-                Spacer(Modifier.width(8.dp))
-                ChillerControl("Применить", { onSave(nextUrl.trim(), nextModel.trim(), nextThinking, if (clear) "" else key.takeIf { it.isNotBlank() }, nextAllow, nextView); key = "" }, style = ControlStyle.PRIMARY, enabled = nextUrl.isNotBlank() && nextModel.isNotBlank())
-            }
-        }
-    }
-}
-
-@Composable
 private fun RenameDialog(session: SessionInfo, onDismiss: () -> Unit, onSave: (String) -> Unit) {
     val c = LocalChillerPalette.current
     var title by remember(session.id) { mutableStateOf(session.title) }
@@ -880,14 +819,6 @@ private fun ExportPreview(content: String, format: String, onDismiss: () -> Unit
     }
 }
 
-@Composable
-private fun SettingRow(title: String, detail: String, value: Boolean, onChange: (Boolean) -> Unit) {
-    val c = LocalChillerPalette.current
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Column(Modifier.weight(1f)) { Text(title, color = c.text, fontSize = 12.sp); Text(detail, color = c.faint, fontSize = 11.sp, lineHeight = 17.sp) }
-        ChillerToggle(value, onChange, title)
-    }
-}
 
 internal fun formatCheckTime(value: String?): String = runCatching {
     java.time.Instant.parse(value).atZone(java.time.ZoneId.systemDefault()).format(java.time.format.DateTimeFormatter.ofPattern("dd.MM HH:mm"))
