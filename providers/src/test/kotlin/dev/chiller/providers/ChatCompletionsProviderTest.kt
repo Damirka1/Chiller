@@ -4,6 +4,8 @@ import com.sun.net.httpserver.HttpServer
 import dev.chiller.contracts.AgentMessage
 import dev.chiller.contracts.ModelEvent
 import dev.chiller.contracts.ModelRequest
+import dev.chiller.contracts.MessageOrigin
+import dev.chiller.contracts.MessageOriginKind
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.flow.toList
 import kotlinx.serialization.json.Json
@@ -119,13 +121,16 @@ class ChatCompletionsProviderTest {
         val first = invoke(server, listOf(AgentMessage("user", "hello")), thinking = true, stopServer = false)
         val firstMessage = (first.last() as ModelEvent.Completed).message
         assertEquals("r1", firstMessage.replay["reasoning_content"]?.jsonPrimitive?.content)
-        val second = invoke(server, listOf(AgentMessage("assistant", "answer", replay = firstMessage.replay)), thinking = true, stopServer = false)
+        val second = invoke(server, listOf(AgentMessage("assistant", "answer", replay = firstMessage.replay,
+            origin = MessageOrigin(MessageOriginKind.MODEL, "private-local-model-id"))), thinking = true, stopServer = false)
         assertIs<ModelEvent.Completed>(second.last())
         server.stop(0)
         val secondRequest = Json.parseToJsonElement(seen.last()).jsonObject
         val sentMessage = secondRequest["messages"]!!.toString()
         assertTrue("reasoning_content" in sentMessage)
         assertTrue("r1" in sentMessage)
+        assertTrue("origin" !in sentMessage)
+        assertTrue("private-local-model-id" !in sentMessage)
     }
 
     private fun toolChunk(index: Int, id: String?, name: String?, arguments: String, finishReason: String? = null): String {

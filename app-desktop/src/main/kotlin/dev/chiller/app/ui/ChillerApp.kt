@@ -299,7 +299,7 @@ private fun Conversation(state: RunState, reduced: Boolean, onAnswer: (String) -
                     activityOffset += calls
                     item(key = "message-$index") {
                         Column(Modifier.widthIn(max = 760.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                            if (!message.content.isNullOrBlank()) Message(message.role, message.content!!)
+                            if (!message.content.isNullOrBlank()) Message(message)
                             activities.forEach { ToolRow(it, reduced, onUndo, canUndo) }
                         }
                     }
@@ -314,7 +314,7 @@ private fun Conversation(state: RunState, reduced: Boolean, onAnswer: (String) -
                     if (open) Text(state.reasoning, color = c.muted, fontSize = 12.sp, lineHeight = 20.sp, modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp))
                 }
             }
-            if (state.streamingText.isNotBlank()) item(key = "stream") { Message("assistant", state.streamingText) }
+            if (state.streamingText.isNotBlank()) item(key = "stream") { Message(AgentMessage("assistant", state.streamingText, origin = state.activeModelId?.let { MessageOrigin(MessageOriginKind.MODEL, it) })) }
             state.question?.let { q -> item(key = "question-${q.id}") { Question(q, onAnswer, state.status != "interrupted") } }
             state.error?.let { error -> item(key = "error") { Row(Modifier.fillMaxWidth().padding(8.dp), horizontalArrangement = Arrangement.spacedBy(9.dp)) {
                 Icon(Icons.Outlined.ErrorOutline, null, Modifier.size(16.dp), tint = c.negative)
@@ -326,14 +326,32 @@ private fun Conversation(state: RunState, reduced: Boolean, onAnswer: (String) -
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun Message(role: String, content: String) {
+private fun Hint(text: String, content: @Composable () -> Unit) {
+    val c = LocalChillerPalette.current
+    TooltipArea(tooltip = { Text(text, color = c.text, fontSize = 12.sp, modifier = Modifier.clip(RoundedCornerShape(6.dp)).background(c.sidebar).border(1.dp, c.border, RoundedCornerShape(6.dp)).padding(8.dp)) }, content = content)
+}
+
+@Composable
+private fun Message(message: AgentMessage) {
+    val role = message.role
+    val content = message.content.orEmpty()
+    val clipboard = LocalClipboardManager.current
+    var copied by remember(content) { mutableStateOf(false) }
+    LaunchedEffect(copied) { if (copied) { kotlinx.coroutines.delay(1600); copied = false } }
     val c = LocalChillerPalette.current
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(13.dp)) {
         if (role == "assistant") ChillerMark(Modifier.padding(top = 1.dp).size(21.dp), c.accent)
         else Box(Modifier.size(21.dp).clip(CircleShape).background(c.selected), contentAlignment = Alignment.Center) { Text("В", color = c.muted, fontSize = 10.sp) }
         Column(Modifier.weight(1f)) {
-            Text(if (role == "assistant") "Chiller" else "Вы", color = c.muted, fontSize = 11.sp, lineHeight = 16.sp, modifier = Modifier.padding(bottom = 5.dp))
+            Row(Modifier.fillMaxWidth().padding(bottom = 5.dp), verticalAlignment = Alignment.CenterVertically) {
+                Hint(message.origin?.modelId ?: authorLabel(message)) {
+                    Text(authorLabel(message), color = c.muted, fontWeight = FontWeight.Medium, fontSize = 12.sp, lineHeight = 18.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 320.dp))
+                }
+                Spacer(Modifier.weight(1f))
+                if (role == "assistant") ChillerIconButton(if (copied) Icons.Outlined.Check else Icons.Outlined.ContentCopy, if (copied) "Скопировано" else "Копировать ответ", { clipboard.setText(AnnotatedString(content)); copied = true })
+            }
             SelectionContainer {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     val segments = content.split("```")

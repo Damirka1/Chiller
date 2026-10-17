@@ -115,7 +115,7 @@ class DesktopController(private val directory: Path, initialCredential: String? 
             // Explicit offline preview never performs user-requested filesystem changes.
             val reply = "Это offline-режим Chiller. Интерфейс готов к работе; подключите API в настройках, чтобы выполнять задачи в проекте. Ключ хранится только на время запуска."
             val user = AgentMessage("user", text)
-            val answer = AgentMessage("assistant", reply)
+            val answer = AgentMessage("assistant", reply, origin = MessageOrigin(MessageOriginKind.OFFLINE))
             for (message in listOf(user, answer)) events.append(_state.value.sessionId, "message", json.encodeToJsonElement(message).jsonObject)
             val sessions = events.list()
             _state.update { it.copy(run = it.run.copy(status = "completed", messages = it.run.messages + listOf(user, answer)), sessions = sessions) }

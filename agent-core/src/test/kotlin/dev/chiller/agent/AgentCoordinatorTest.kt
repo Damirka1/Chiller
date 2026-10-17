@@ -45,6 +45,29 @@ class AgentCoordinatorTest {
         assertEquals("completed", fixture.coordinator.state.value.status)
     }
 
+    @Test fun legacyMessageJsonWithoutOriginStillDecodes() {
+        val legacy = Json.decodeFromString<AgentMessage>("""{"role":"assistant","content":"old reply"}""")
+        assertEquals("old reply", legacy.content)
+        assertEquals(null, legacy.origin)
+    }
+
+    @Test fun restoredAssistantKeepsOriginalModelAfterCoordinatorChangesModel() = runTest {
+        val events = MemoryEvents()
+        val first = fixture(ScriptedProvider { _ -> flow {
+            emit(ModelEvent.Completed(AgentMessage("assistant", "answer from A"), "stop"))
+        } }, eventStore = events, dispatcher = StandardTestDispatcher(testScheduler), model = "model-A")
+        first.coordinator.send("question", ExecutionMode.PLAN)
+        advanceUntilIdle()
+        assertEquals(null, first.coordinator.state.value.activeModelId)
+
+        val second = fixture(ScriptedProvider { error("restore must not call provider") }, eventStore = events,
+            dispatcher = StandardTestDispatcher(testScheduler), model = "model-B")
+        second.coordinator.restore()
+        val restored = second.coordinator.state.value.messages.single { it.role == "assistant" }
+        assertEquals(MessageOrigin(MessageOriginKind.MODEL, "model-A"), restored.origin)
+        assertEquals(null, second.coordinator.state.value.activeModelId)
+    }
+
     @Test fun planModeDoesNotExecuteAWriteCallReturnedByTheProvider() = runTest {
         val tools = RecordingTools()
         val forbidden = ToolCall("write-in-plan", "write", "{}")
@@ -151,10 +174,11 @@ class AgentCoordinatorTest {
         tools: RecordingTools = RecordingTools(),
         eventStore: MemoryEvents = MemoryEvents(),
         dispatcher: kotlinx.coroutines.CoroutineDispatcher = StandardTestDispatcher(),
+        model: String = "model",
     ): Fixture {
         val scope = CoroutineScope(SupervisorJob() + dispatcher)
         val processes = RecordingProcesses()
-        return Fixture(AgentCoordinator(provider, tools, eventStore, processes, "session", "model", scope = scope), processes)
+        return Fixture(AgentCoordinator(provider, tools, eventStore, processes, "session", model, scope = scope), processes)
     }
 
     private data class Fixture(val coordinator: AgentCoordinator, val processes: RecordingProcesses)

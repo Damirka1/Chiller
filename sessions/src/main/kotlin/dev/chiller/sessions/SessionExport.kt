@@ -113,7 +113,7 @@ class SessionExporter(private val store: EventStore) {
     private fun StringBuilder.appendMessage(event: StoredEvent) {
         val payload = event.payload
         val role = payload.string("role") ?: "message"
-        appendLine("### ${roleTitle(role)}")
+        appendLine("### ${messageTitle(payload, role)}")
         appendLine()
         val content = payload.string("content")
         if (content != null && content.isNotEmpty()) {
@@ -168,6 +168,21 @@ class SessionExporter(private val store: EventStore) {
         "assistant" -> "Assistant"
         "tool" -> "Tool result"
         else -> role.replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() }
+    }
+
+    private fun messageTitle(payload: JsonObject, role: String): String {
+        if (!role.equals("assistant", ignoreCase = true)) return roleTitle(role)
+        val origin = payload["origin"] as? JsonObject ?: return "Assistant"
+        return when (origin.string("kind")?.uppercase()) {
+            "MODEL" -> {
+                val modelId = origin.string("modelId")?.takeIf(String::isNotBlank) ?: return "Assistant"
+                val author = if (modelId == "deepseek-flash") "DeepSeek Flash" else modelId
+                "Assistant — $author"
+            }
+            "OFFLINE" -> "Assistant — Chiller · offline"
+            "APPLICATION" -> "Assistant — Chiller"
+            else -> "Assistant"
+        }
     }
 
     private fun isSensitiveKey(key: String): Boolean = secretKeys.containsMatchIn(key.replace(Regex("([a-z])([A-Z])"), "$1_$2"))

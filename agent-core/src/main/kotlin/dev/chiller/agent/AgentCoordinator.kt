@@ -77,6 +77,7 @@ class AgentCoordinator(
             status = if (interrupted) "interrupted" else "idle",
             error = recoveryMessage,
             question = pendingQuestion,
+            activeModelId = null,
         )
     }
 
@@ -92,12 +93,12 @@ class AgentCoordinator(
                     withContext(NonCancellable) {
                         processes.stopRun(id)
                         events.append(sessionId, "run.cancelled", buildJsonObject { put("runId", id) })
-                        _state.update { it.copy(status = "cancelled", streamingText = "") }
+                        _state.update { it.copy(status = "cancelled", streamingText = "", activeModelId = null) }
                     }
                     throw cancelled
                 } catch (error: Exception) {
                     val safe = error.message?.take(400) ?: error.javaClass.simpleName
-                    _state.update { it.copy(status = "failed", error = safe, streamingText = "") }
+                    _state.update { it.copy(status = "failed", error = safe, streamingText = "", activeModelId = null) }
                     events.append(sessionId, "run.failed", buildJsonObject { put("runId", id); put("message", safe) })
                 } finally { runId = null }
             }
@@ -129,7 +130,7 @@ class AgentCoordinator(
     }
 
     private suspend fun run(text: String, mode: ExecutionMode, allowProcesses: Boolean, id: String) {
-        _state.update { it.copy(status = "preparing", error = null, reasoning = "", streamingText = "") }
+        _state.update { it.copy(status = "preparing", error = null, reasoning = "", streamingText = "", activeModelId = model) }
         // An interrupted tool group cannot be silently sent back as if it completed.
         val previous = _state.value.messages
         if (unresolvedToolCalls(previous).isNotEmpty()) throw IllegalStateException("Предыдущая операция прервана. Начните новый диалог; неизвестные действия не повторяются.")
@@ -170,11 +171,11 @@ class AgentCoordinator(
                 }
             }
             val response = completion ?: throw IllegalStateException("Stream interrupted before completion; no tool was executed")
-            appendMessage(response)
+            appendMessage(response.copy(origin = MessageOrigin(MessageOriginKind.MODEL, model)))
             _state.update { it.copy(streamingText = "") }
             if (response.toolCalls.isEmpty()) {
                 events.append(sessionId, "run.completed", buildJsonObject { put("runId", id) })
-                _state.update { it.copy(status = "completed") }
+                _state.update { it.copy(status = "completed", activeModelId = null) }
                 return
             }
             require(response.toolCalls.size <= 16) { "Too many tool calls" }

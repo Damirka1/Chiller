@@ -14,12 +14,19 @@ fun now(): String = Instant.now().toString()
 data class ToolCall(val id: String, val name: String, val arguments: String)
 
 @Serializable
+enum class MessageOriginKind { MODEL, APPLICATION, OFFLINE }
+
+@Serializable
+data class MessageOrigin(val kind: MessageOriginKind, val modelId: String? = null)
+
+@Serializable
 data class AgentMessage(
     val role: String,
     val content: String? = null,
     val toolCalls: List<ToolCall> = emptyList(),
     val toolCallId: String? = null,
     val replay: JsonObject = JsonObject(emptyMap()),
+    val origin: MessageOrigin? = null,
 )
 
 @Serializable
@@ -144,4 +151,5 @@ data class RunState(
     val contextEstimatedTokens: Int? = null,
     val droppedContextMessages: Int = 0,
     val modelRounds: Int = 0,
+    val activeModelId: String? = null,
 )

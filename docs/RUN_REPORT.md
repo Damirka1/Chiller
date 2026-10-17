@@ -94,3 +94,7 @@ All three workers completed their assigned source/test changes. Coordinator owns
 ## Planning checkpoint — message authors and UI finishing
 
 User requested a more detailed implementation plan suitable for a smaller model. Added docs/UI_FINISHING_RUNBOOK.md: six stages with concrete file ownership, proposed backward-compatible metadata contracts, prerequisites, steps, tests and acceptance checks. Includes model authorship/export, tool-call activity mapping/grouping, send acknowledgment/drafts, model selector, history rename/export, Studio/preferences, connection states/probe and keyboard/accessibility. Contains a bounded ready-to-use prompt for stage I. This checkpoint changes documentation only; none of these newly planned tasks are claimed implemented. No builds/live calls required or executed for this documentation change.
+
+## UI finishing — stage I
+
+M1/M2 implemented: backward-compatible stored message origin, run model telemetry with terminal reset, historical/streaming author labels and full-answer Copy, origin-aware Markdown/JSON export. Offline and legacy labels remain distinct. Provider wire excludes local metadata and preserves replay. Targeted agent-core/providers/sessions/app-desktop tests passed after correcting a cross-module Kotlin smart-cast compile error. Sessions export was rechecked after worker handoff. No live calls. Independent UI preferences helper prepared but not integrated yet; subsequent stages remain in progress.

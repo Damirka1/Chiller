@@ -59,6 +59,32 @@ class SessionExportTest {
         assertEquals("artifact-before", root.getValue("artifactRefs").jsonArray.single().jsonObject.getValue("artifactId").jsonPrimitive.content)
     }
 
+    @Test fun markdownUsesStoredAssistantOriginAndKeepsLegacyFallback() = runTest {
+        val store = MemoryEvents(listOf(
+            assistant(1, "deepseek-flash", "MODEL"),
+            assistant(2, "other-model:26b", "MODEL"),
+            assistant(3, null, "OFFLINE"),
+            assistant(4, null, "APPLICATION"),
+            event(5, "message", buildJsonObject { put("role", "assistant"); put("content", "legacy") }),
+        ))
+        val markdown = SessionExporter(store).markdown("s")
+        assertContains(markdown, "### Assistant — DeepSeek Flash")
+        assertContains(markdown, "### Assistant — other-model:26b")
+        assertContains(markdown, "### Assistant — Chiller · offline")
+        assertContains(markdown, "### Assistant — Chiller")
+        assertContains(markdown, "### Assistant\n")
+    }
+
+    @Test fun jsonPreservesOriginWhileExcludingReplay() = runTest {
+        val exported = SessionExporter(MemoryEvents(listOf(assistant(1, "deepseek-flash", "MODEL")))).json("s")
+        val payload = Json.parseToJsonElement(exported).jsonObject
+            .getValue("events").jsonArray.single().jsonObject.getValue("payload").jsonObject
+        assertEquals("MODEL", payload.getValue("origin").jsonObject.getValue("kind").jsonPrimitive.content)
+        assertEquals("deepseek-flash", payload.getValue("origin").jsonObject.getValue("modelId").jsonPrimitive.content)
+        assertFalse("replay" in payload)
+        assertFalse("synthetic private reasoning" in exported)
+    }
+
     @Test fun commonAssignmentSyntaxIsRedactedWithoutChangingUnrelatedCode() = runTest {
         val store = MemoryEvents(listOf(event(1, "message", buildJsonObject {
             put("role", "user")
@@ -73,6 +99,16 @@ class SessionExportTest {
     private fun event(seq: Long, type: String, payload: JsonObject) = StoredEvent(
         sessionId = "s", seq = seq, timestamp = "2026-10-17T00:00:00Z", type = type, payload = payload,
     )
+
+    private fun assistant(seq: Long, modelId: String?, kind: String) = event(seq, "message", buildJsonObject {
+        put("role", "assistant")
+        put("content", "reply $seq")
+        put("origin", buildJsonObject {
+            put("kind", kind)
+            if (modelId != null) put("modelId", modelId)
+        })
+        put("replay", "synthetic private reasoning")
+    })
 
     private class MemoryEvents(private val events: List<StoredEvent>) : EventStore {
         override suspend fun append(sessionId: String, type: String, payload: JsonObject): StoredEvent = error("unused")
