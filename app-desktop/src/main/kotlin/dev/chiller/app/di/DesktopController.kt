@@ -21,6 +21,7 @@ import java.util.LinkedHashMap
 import java.util.concurrent.atomic.AtomicLong
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.StandardCopyOption
 
 @Serializable
 data class DesktopSettings(val baseUrl: String = "https://api.deepseek.com", val model: String = "deepseek-flash", val thinking: Boolean = false, val workspace: String? = null, val rememberedModels: Map<String, List<String>> = emptyMap())
@@ -276,7 +277,7 @@ class DesktopController(private val directory: Path, initialCredential: String? 
             ChatCompletionsProfile.deepSeekFlash(s.settings.baseUrl, s.settings.model)
         else ChatCompletionsProfile("generic", s.settings.baseUrl, s.settings.model)
         val provider = ChatCompletionsProvider(http, profile) { credential }
-        val engine = AgentCoordinator(provider, tools, events, processes, s.sessionId, s.settings.model, s.settings.thinking, scope)
+        val engine = AgentCoordinator(provider, tools, events, processes, s.sessionId, s.settings.model, s.settings.thinking, scope = scope)
         coordinator = engine
         if (events.read(s.sessionId).none { it.type == "session.workspace" })
             events.append(s.sessionId, "session.workspace", buildJsonObject { put("root", workspace.root) })
@@ -291,7 +292,13 @@ class DesktopController(private val directory: Path, initialCredential: String? 
     }
     private suspend fun saveSettings(settings: DesktopSettings) = withContext(Dispatchers.IO) {
         Files.createDirectories(directory)
-        Files.writeString(directory.resolve("settings.json"), json.encodeToString(settings))
+        val target = directory.resolve("settings.json")
+        val temp = Files.createTempFile(directory, "settings", ".tmp")
+        try {
+            Files.writeString(temp, json.encodeToString(settings))
+            runCatching { Files.move(temp, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE) }
+                .onFailure { Files.move(temp, target, StandardCopyOption.REPLACE_EXISTING) }
+        } finally { Files.deleteIfExists(temp) }
     }
     private suspend fun refreshSessions() { val sessions = events.list(); _state.update { it.copy(sessions = sessions) } }
     private fun showError(message: String) { _state.update { it.copy(run = it.run.copy(status = "failed", error = message)) } }

@@ -28,6 +28,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
+import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -35,6 +36,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlin.math.cos
@@ -47,6 +49,8 @@ fun ChillerControl(
     label: String, onClick: () -> Unit, modifier: Modifier = Modifier,
     icon: ImageVector? = null, style: ControlStyle = ControlStyle.QUIET,
     enabled: Boolean = true, trailing: String? = null,
+    /** Keeps [trailing] right after the label instead of pinning it to the far edge, so the control stays content-sized. */
+    inlineTrailing: Boolean = false,
 ) {
     val c = LocalChillerPalette.current
     val interaction = remember { MutableInteractionSource() }
@@ -68,12 +72,36 @@ fun ChillerControl(
             .onFocusChanged { focused = it.isFocused }
             .clickable(interactionSource = interaction, indication = null, enabled = enabled, role = Role.Button, onClick = onClick)
             .padding(horizontal = 10.dp, vertical = 5.dp),
-        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp),
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(if (inlineTrailing && trailing != null) 5.dp else 7.dp),
     ) {
         icon?.let { Icon(it, null, Modifier.size(15.dp), tint = foreground.copy(alpha = if (enabled) .85f else .35f)) }
-        Text(label, color = foreground.copy(alpha = if (enabled) 1f else .35f), fontSize = 12.sp, lineHeight = 18.sp, letterSpacing = 0.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
-            modifier = if (trailing != null) Modifier.weight(1f) else Modifier)
-        trailing?.let { Text(it, fontSize = 11.sp, lineHeight = 16.sp, letterSpacing = 0.sp, color = if (style == ControlStyle.PRIMARY) c.canvas.copy(alpha = .5f) else c.faint) }
+        if (inlineTrailing && trailing != null) {
+            InlineTrailingLabel(label, trailing, foreground, if (style == ControlStyle.PRIMARY) c.canvas.copy(alpha = .5f) else c.faint, enabled)
+        } else {
+            Text(label, color = foreground.copy(alpha = if (enabled) 1f else .35f), fontSize = 12.sp, lineHeight = 18.sp, letterSpacing = 0.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                modifier = if (trailing != null) Modifier.weight(1f) else Modifier)
+            trailing?.let { Text(it, fontSize = 11.sp, lineHeight = 16.sp, letterSpacing = 0.sp, color = if (style == ControlStyle.PRIMARY) c.canvas.copy(alpha = .5f) else c.faint) }
+        }
+    }
+}
+
+/** Measures the chevron first so a truncated label never pushes it out of the control. */
+@Composable
+private fun InlineTrailingLabel(label: String, trailing: String, color: Color, trailingColor: Color, enabled: Boolean) {
+    Layout(
+        content = {
+            Text(label, color = color.copy(alpha = if (enabled) 1f else .35f), fontSize = 12.sp, lineHeight = 18.sp, letterSpacing = 0.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(trailing, fontSize = 11.sp, lineHeight = 16.sp, letterSpacing = 0.sp, color = trailingColor)
+        }
+    ) { measurables, constraints ->
+        val gap = 5.dp.roundToPx()
+        val trailingPlaceable = measurables[1].measure(Constraints())
+        val labelPlaceable = measurables[0].measure(Constraints(maxWidth = (constraints.maxWidth - trailingPlaceable.width - gap).coerceAtLeast(0)))
+        val height = maxOf(labelPlaceable.height, trailingPlaceable.height)
+        layout(labelPlaceable.width + gap + trailingPlaceable.width, height) {
+            labelPlaceable.placeRelative(0, (height - labelPlaceable.height) / 2)
+            trailingPlaceable.placeRelative(labelPlaceable.width + gap, (height - trailingPlaceable.height) / 2)
+        }
     }
 }
 

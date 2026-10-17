@@ -40,12 +40,14 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
+import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -112,6 +114,7 @@ fun ChillerApp(
     val inspectorResize = rememberDraggableState { delta -> view = view.copy(inspectorWidth = (inspectorWidth - with(density) { delta.toDp() }).value.coerceIn(280f, 480f)) }
     val active = pendingSend || state.status in setOf("preparing", "streaming", "executing")
     val empty = state.messages.none { it.role in setOf("user", "assistant") } && state.activities.isEmpty() && state.error == null
+    val contextNote = state.contextEstimatedTokens?.let { tokens -> "≈ $tokens токенов${if (state.droppedContextMessages > 0) " · контекст сокращён" else ""}" }
     val send = {
         if (draft.isNotBlank() && !active && !pendingSend && !composing) {
             val sentKey = draftKey; val sentText = draft; val requestId = newId()
@@ -155,7 +158,7 @@ fun ChillerApp(
             val showSidebar = sidebar && maxWidth >= 740.dp
             Row(Modifier.fillMaxSize()) {
                 if (showSidebar) Sidebar(sessions, selectedSessionId, workspacePath, apiKeyConfigured, !active, onNewSession, onSelectSession, onChooseWorkspace,
-                    onSettings = { settings = true }, onTheme = { updateView(view.copy(theme = if (dark) "light" else "dark")) }, onRename = { renameTarget = it }, onExport = onExportSession, connection = connection, width = 248f * density.fontScale.coerceIn(1f, 1.6f))
+                    onSettings = { settings = true }, onTheme = { updateView(view.copy(theme = if (dark) "light" else "dark")) }, onRename = { renameTarget = it }, onExport = onExportSession, connection = connection, width = 248f * density.fontScale.coerceIn(1f, 1.2f))
                 Box(Modifier.width(1.dp).fillMaxHeight().background(c.border.copy(alpha = .7f)))
                 BoxWithConstraints(Modifier.weight(1f).fillMaxHeight()) {
                     val compact = maxWidth < 860.dp || density.fontScale > 1.3f
@@ -188,25 +191,20 @@ fun ChillerApp(
                                     } else {
                                         Conversation(state, reducedMotion, onAnswerQuestion, onUndo, !active, { text -> updateDraft(text); sendError = null }, Modifier.weight(1f).fillMaxWidth())
                                     }
-                                    Box(Modifier.fillMaxWidth().padding(horizontal = if (compact) 20.dp else 32.dp).padding(bottom = 22.dp, top = 8.dp), contentAlignment = Alignment.Center) {
-                                        Column(Modifier.widthIn(max = 760.dp).fillMaxWidth()) {
-                                            Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                                                ChillerControl(workspacePath?.substringAfterLast('/') ?: "Выбрать проект", onChooseWorkspace, icon = Icons.Outlined.FolderOpen, enabled = !active)
-                                                Spacer(Modifier.weight(1f))
-                                                state.contextEstimatedTokens?.let { tokens -> Text("≈ $tokens токенов${if (state.droppedContextMessages > 0) " · контекст сокращён" else ""}", color = c.muted, fontSize = 11.sp) }
-                                            }
-                                            sendError?.let { Text(it, color = c.negative, fontSize = 12.sp, modifier = Modifier.padding(8.dp)) }
+                                    Box(Modifier.fillMaxWidth().padding(horizontal = if (compact) 20.dp else 32.dp).padding(top = 6.dp, bottom = 18.dp), contentAlignment = Alignment.Center) {
+                                        Column(Modifier.widthIn(max = 760.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                            sendError?.let { Text(it, color = c.negative, fontSize = 12.sp, lineHeight = 18.sp) }
                                             Composer(draft, updateDraft, mode, { mode = it }, providerModel, active, send, onStop, allowProcesses, onAllowProcessesChange, { settings = true }, Modifier.fillMaxWidth(), apiKeyConfigured, models, { selected ->
                                                 val oldDraft = draft
                                                 scope.launch { onSelectModel(selected)?.let { id -> drafts.putIfAbsent(id, oldDraft) } }
-                                            }, { composing = it }, pendingSend, ((maxWidth.value - 260f) / 2f).coerceIn(100f, 240f))
+                                            }, { composing = it }, pendingSend, contextNote)
                                         }
                                     }
                                 }
                             }
                             AnimatedVisibility(
                                 visible = layout == WorkspaceLayout.STUDIO && (!compact || showCompactChanges),
-                                enter = if (reducedMotion) EnterTransition.None else expandHorizontally(tween(220)) + fadeIn(tween(160)),
+                                enter = if (reducedMotion) EnterTransition.None else expandHorizontally(tween(160)) + fadeIn(tween(160)),
                                 exit = if (reducedMotion) ExitTransition.None else shrinkHorizontally(tween(180)) + fadeOut(tween(110)),
                             ) {
                                 Row(if (compact) Modifier.fillMaxSize() else Modifier.width(inspectorWidth).fillMaxHeight()) {
@@ -250,7 +248,9 @@ private fun Sidebar(
         ChillerControl("Новый диалог", onNew, Modifier.fillMaxWidth(), icon = Icons.Outlined.Add, enabled = enabled, trailing = "⌘ N")
         Spacer(Modifier.height(18.dp))
         Text("Проект", color = c.muted, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp))
-        ChillerControl(workspace?.substringAfterLast('/') ?: "Открыть папку…", onChoose, Modifier.fillMaxWidth(), icon = Icons.Outlined.FolderOpen, style = if (workspace != null) ControlStyle.SELECTED else ControlStyle.QUIET, enabled = enabled)
+        Hint(workspace ?: "Открыть папку проекта") {
+            ChillerControl(workspace?.substringAfterLast('/') ?: "Открыть папку…", onChoose, Modifier.fillMaxWidth(), icon = Icons.Outlined.FolderOpen, style = if (workspace != null) ControlStyle.SELECTED else ControlStyle.QUIET, enabled = enabled)
+        }
         Spacer(Modifier.height(18.dp))
         Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
             Text("Недавние диалоги", color = c.muted, fontSize = 12.sp)
@@ -296,13 +296,15 @@ private fun Sidebar(
 @Composable
 private fun Toolbar(title: String?, workspace: String?, layout: WorkspaceLayout, active: Boolean, status: String, onLayout: (WorkspaceLayout) -> Unit, onSidebar: () -> Unit, onSettings: () -> Unit, canConfigure: Boolean, compact: Boolean, compactChanges: Boolean, onCompactChanges: () -> Unit) {
     val c = LocalChillerPalette.current
-    Row(Modifier.fillMaxWidth().height(48.dp).padding(horizontal = 15.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(horizontal = 15.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
         ChillerIconButton(Icons.Outlined.VerticalSplit, "Боковая панель", onSidebar)
         Spacer(Modifier.width(10.dp))
-        Text(workspace?.substringAfterLast('/') ?: "Chiller", color = c.muted, fontSize = 12.sp)
-        Text(" / ", color = c.faint, fontSize = 12.sp)
-        Text(title?.take(44) ?: "Новый диалог", color = c.text, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-        if (active) { Text(statusLabel(status), color = c.muted, fontSize = 11.sp, modifier = Modifier.padding(end = 12.dp)) }
+        Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+            Text(workspace?.substringAfterLast('/') ?: "Chiller", color = c.muted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 140.dp))
+            Text(" / ", color = c.faint, fontSize = 12.sp)
+            Text(title?.take(44) ?: "Новый диалог", color = c.text, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+        }
+        if (active) { Text(statusLabel(status), color = c.muted, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 120.dp).padding(end = 12.dp)) }
         Row(Modifier.clip(RoundedCornerShape(7.dp)).background(c.sidebar).padding(2.dp), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
             ChillerControl("Focus", { onLayout(WorkspaceLayout.FOCUS) }, style = if (layout == WorkspaceLayout.FOCUS) ControlStyle.SELECTED else ControlStyle.QUIET)
             ChillerControl("Studio", { onLayout(WorkspaceLayout.STUDIO) }, style = if (layout == WorkspaceLayout.STUDIO) ControlStyle.SELECTED else ControlStyle.QUIET)
@@ -317,49 +319,99 @@ private fun Toolbar(title: String?, workspace: String?, layout: WorkspaceLayout,
 }
 
 @Composable
-private fun Composer(draft: String, onDraft: (String) -> Unit, mode: ExecutionMode, onMode: (ExecutionMode) -> Unit, model: String, running: Boolean, onSend: () -> Unit, onStop: () -> Unit, allowProcesses: Boolean, onAllow: (Boolean) -> Unit, onSettings: () -> Unit, modifier: Modifier, configured: Boolean, models: List<String>, onModel: (String) -> Unit, onComposition: (Boolean) -> Unit, pending: Boolean, modelMaxWidth: Float) {
+private fun Composer(draft: String, onDraft: (String) -> Unit, mode: ExecutionMode, onMode: (ExecutionMode) -> Unit, model: String, running: Boolean, onSend: () -> Unit, onStop: () -> Unit, allowProcesses: Boolean, onAllow: (Boolean) -> Unit, onSettings: () -> Unit, modifier: Modifier, configured: Boolean, models: List<String>, onModel: (String) -> Unit, onComposition: (Boolean) -> Unit, pending: Boolean, contextNote: String?) {
     val c = LocalChillerPalette.current
     var focused by remember { mutableStateOf(false) }
-    var menu by remember { mutableStateOf(false) }
-    var modelMenu by remember { mutableStateOf(false) }
     var field by remember { mutableStateOf(TextFieldValue(draft)) }
     LaunchedEffect(draft) { if (field.text != draft) { field = TextFieldValue(draft, TextRange(draft.length)); onComposition(false) } }
-    Column(modifier.shadow(3.dp, RoundedCornerShape(18.dp), ambientColor = c.text.copy(alpha = .04f), spotColor = c.text.copy(alpha = .04f)).clip(RoundedCornerShape(18.dp)).background(c.surface).border(1.dp, if (focused) c.muted.copy(alpha = .55f) else c.border, RoundedCornerShape(18.dp)).padding(12.dp)) {
+    // Empty block: 26 dp text + 20 dp vertical padding + 6 dp gap + 32 dp toolbar = 84 dp. The text area grows to 144 dp
+    // (a ~200 dp block at normal type) and then scrolls; the block grows only with the toolbar at larger type.
+    val fieldMaxHeight = 144.dp
+    val shape = RoundedCornerShape(16.dp)
+    val borderColor by animateColorAsState(if (focused) c.muted.copy(alpha = .55f) else c.border, tween(if (LocalChillerReducedMotion.current) 0 else 120))
+    Column(modifier.shadow(3.dp, shape, ambientColor = c.text.copy(alpha = .04f), spotColor = c.text.copy(alpha = .04f)).clip(shape).background(c.surface).border(1.dp, borderColor, shape).padding(horizontal = 12.dp, vertical = 10.dp)) {
         BasicTextField(field, { field = it; onDraft(it.text); onComposition(it.composition != null) },
-            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp, max = 164.dp).onFocusChanged { focused = it.isFocused }.verticalScroll(rememberScrollState()).padding(horizontal = 2.dp, vertical = 2.dp),
+            modifier = Modifier.fillMaxWidth().heightIn(min = 26.dp, max = fieldMaxHeight).onFocusChanged { focused = it.isFocused }.verticalScroll(rememberScrollState()),
             textStyle = TextStyle(color = c.text, fontSize = 14.sp, lineHeight = 22.sp, letterSpacing = 0.sp), cursorBrush = SolidColor(c.text),
-            decorationBox = { field -> Box { if (draft.isEmpty()) Text("Напишите задачу…", color = c.faint, fontSize = 14.sp, lineHeight = 22.sp); field() } },
+            decorationBox = { inner -> Box { if (draft.isEmpty()) Text("Напишите задачу…", color = c.faint, fontSize = 14.sp, lineHeight = 22.sp); inner() } },
         )
-        Spacer(Modifier.height(10.dp))
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Spacer(Modifier.height(6.dp))
+        ComposerToolbar(mode, onMode, model, models, configured, running, pending, draft.isNotBlank(), contextNote, allowProcesses, onAllow, onSettings, onModel, onSend, onStop)
+    }
+}
+
+@Composable
+private fun ComposerToolbar(
+    mode: ExecutionMode, onMode: (ExecutionMode) -> Unit, model: String, models: List<String>, configured: Boolean, running: Boolean,
+    pending: Boolean, draftNotEmpty: Boolean, contextNote: String?, allowProcesses: Boolean, onAllow: (Boolean) -> Unit,
+    onSettings: () -> Unit, onModel: (String) -> Unit, onSend: () -> Unit, onStop: () -> Unit,
+) {
+    val c = LocalChillerPalette.current
+    var modeMenu by remember { mutableStateOf(false) }
+    var modelMenu by remember { mutableStateOf(false) }
+    // At larger type the model label needs proportionally more room before the toolbar is allowed to wrap.
+    val fontScale = LocalDensity.current.fontScale
+    val minModelWidth = (104f * fontScale.coerceIn(1f, 2f)).dp
+    val modeMenuWidth = (210f * fontScale.coerceIn(1f, 1.5f)).dp
+    val modelMenuWidth = (250f * fontScale.coerceIn(1f, 1.4f)).dp
+    Layout(
+        content = {
             Box {
-                ChillerControl(if (mode == ExecutionMode.PLAN) "План" else "Изменения", { menu = !menu }, icon = if (mode == ExecutionMode.PLAN) Icons.Outlined.Lightbulb else Icons.Outlined.Edit, enabled = !running)
-                if (menu) Popup(alignment = Alignment.BottomStart, onDismissRequest = { menu = false }, properties = PopupProperties(focusable = true)) {
-                    Column(Modifier.width(210.dp).clip(RoundedCornerShape(9.dp)).background(c.surface).border(1.dp, c.border, RoundedCornerShape(9.dp)).padding(5.dp)) {
-                        ChillerControl("План · только чтение", { onMode(ExecutionMode.PLAN); menu = false }, Modifier.fillMaxWidth(), icon = Icons.Outlined.Lightbulb)
-                        ChillerControl("Изменения в проекте", { onMode(ExecutionMode.WORKSPACE_EDIT); menu = false }, Modifier.fillMaxWidth(), icon = Icons.Outlined.Edit)
+                ChillerControl(if (mode == ExecutionMode.PLAN) "План" else "Изменения", { modeMenu = !modeMenu }, icon = if (mode == ExecutionMode.PLAN) Icons.Outlined.Lightbulb else Icons.Outlined.Edit, enabled = !running)
+                if (modeMenu) Popup(alignment = Alignment.BottomStart, onDismissRequest = { modeMenu = false }, properties = PopupProperties(focusable = true)) {
+                    Column(Modifier.width(modeMenuWidth).clip(RoundedCornerShape(9.dp)).background(c.surface).border(1.dp, c.border, RoundedCornerShape(9.dp)).padding(5.dp)) {
+                        ChillerControl("План · только чтение", { onMode(ExecutionMode.PLAN); modeMenu = false }, Modifier.fillMaxWidth(), icon = Icons.Outlined.Lightbulb, style = if (mode == ExecutionMode.PLAN) ControlStyle.SELECTED else ControlStyle.QUIET)
+                        ChillerControl("Изменения в проекте", { onMode(ExecutionMode.WORKSPACE_EDIT); modeMenu = false }, Modifier.fillMaxWidth(), icon = Icons.Outlined.Edit, style = if (mode == ExecutionMode.WORKSPACE_EDIT) ControlStyle.SELECTED else ControlStyle.QUIET)
+                        if (mode == ExecutionMode.WORKSPACE_EDIT) {
+                            Box(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 5.dp).height(1.dp).background(c.border))
+                            Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Text("Команды процессов", color = c.muted, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                                ChillerToggle(allowProcesses, { onAllow(it) }, "Команды процессов", enabled = !running)
+                            }
+                        }
                     }
                 }
             }
-            Spacer(Modifier.weight(1f))
-            Spacer(Modifier.width(8.dp))
             Box {
-                Hint(model) { ChillerControl(friendlyModel(model), { modelMenu = !modelMenu }, Modifier.widthIn(max = modelMaxWidth.dp), enabled = !running, trailing = "⌄") }
+                Hint(contextNote?.let { "$model\n$it" } ?: model) {
+                    ChillerControl(friendlyModel(model), { modelMenu = !modelMenu }, enabled = !running, trailing = "⌄", inlineTrailing = true)
+                }
                 if (modelMenu) Popup(alignment = Alignment.BottomEnd, onDismissRequest = { modelMenu = false }, properties = PopupProperties(focusable = true)) {
-                    Column(Modifier.width(250.dp).clip(RoundedCornerShape(9.dp)).background(c.surface).border(1.dp, c.border, RoundedCornerShape(9.dp)).padding(8.dp)) {
+                    Column(Modifier.width(modelMenuWidth).clip(RoundedCornerShape(9.dp)).background(c.surface).border(1.dp, c.border, RoundedCornerShape(9.dp)).padding(8.dp)) {
                         Text(if (configured) "Ключ задан · возможности не проверены" else "Ключ не задан", color = c.muted, fontSize = 11.sp, modifier = Modifier.padding(6.dp))
+                        contextNote?.let { Text(it, color = c.muted, fontSize = 11.sp, modifier = Modifier.padding(start = 6.dp, end = 6.dp, bottom = 2.dp)) }
                         (listOf(model) + models).distinct().forEach { id -> Hint(id) { ChillerControl(modelLabel(id), { modelMenu = false; if (id != model) onModel(id) }, Modifier.fillMaxWidth(), icon = if (id == model) Icons.Outlined.Check else null) } }
                         Text("Смена модели создаёт новый диалог", color = c.muted, fontSize = 11.sp, modifier = Modifier.padding(6.dp))
                         ChillerControl("Настройки моделей", { modelMenu = false; onSettings() }, Modifier.fillMaxWidth(), icon = Icons.Outlined.Tune)
                     }
                 }
             }
-            Spacer(Modifier.width(6.dp))
-            if (mode == ExecutionMode.WORKSPACE_EDIT) {
-                ChillerIconButton(Icons.Outlined.Terminal, if (allowProcesses) "Команды разрешены" else "Команды выключены", { onAllow(!allowProcesses) }, enabled = !running, primary = allowProcesses)
-                Spacer(Modifier.width(8.dp))
+            ChillerIconButton(if (running && !pending) Icons.Outlined.Stop else Icons.Outlined.ArrowUpward, if (pending) "Сохранение сообщения" else if (running) "Остановить" else "Отправить", if (running && !pending) onStop else onSend, enabled = !pending && (running || draftNotEmpty), primary = true)
+        },
+        modifier = Modifier.fillMaxWidth()
+    ) { measurables, constraints ->
+        val gap = 8.dp.roundToPx()
+        val width = if (constraints.hasBoundedWidth) constraints.maxWidth else constraints.minWidth
+        val leading = measurables[0].measure(Constraints())
+        val trailing = measurables[2].measure(Constraints())
+        val singleLine = (width - leading.width - trailing.width - gap * 2).coerceAtLeast(0)
+        val wrapped = singleLine < minModelWidth.roundToPx()
+        val modelControl = measurables[1].measure(Constraints(maxWidth = if (wrapped) (width - leading.width - gap).coerceAtLeast(0) else singleLine))
+        if (wrapped) {
+            val line = maxOf(leading.height, modelControl.height)
+            val rowGap = 6.dp.roundToPx()
+            layout(width, line + rowGap + trailing.height) {
+                leading.placeRelative(0, (line - leading.height) / 2)
+                modelControl.placeRelative(leading.width + gap, (line - modelControl.height) / 2)
+                trailing.placeRelative(width - trailing.width, line + rowGap)
             }
-            ChillerIconButton(if (running && !pending) Icons.Outlined.Stop else Icons.Outlined.ArrowUpward, if (pending) "Сохранение сообщения" else if (running) "Остановить" else "Отправить", if (running && !pending) onStop else onSend, enabled = !pending && (running || draft.isNotBlank()), primary = true)
+        } else {
+            val height = maxOf(leading.height, modelControl.height, trailing.height)
+            layout(width, height) {
+                leading.placeRelative(0, (height - leading.height) / 2)
+                modelControl.placeRelative(leading.width + gap, (height - modelControl.height) / 2)
+                trailing.placeRelative(width - trailing.width, (height - trailing.height) / 2)
+            }
         }
     }
 }
