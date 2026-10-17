@@ -242,6 +242,76 @@ class AgentCoordinatorTest {
         assertEquals("cancelled", fixture.coordinator.state.value.status)
     }
 
+    @Test fun consecutiveReadCallsStartTogetherAndKeepCallOrder() = runTest {
+        val gate = CompletableDeferred<Unit>()
+        val started = mutableListOf<String>()
+        val tools = RecordingTools().apply {
+            onExecute = { call ->
+                started += call.id
+                if (started.size == 2) gate.complete(Unit)
+                gate.await()
+            }
+        }
+        val reads = listOf(
+            ToolCall("read-a", "read", "{\"path\":\"a.kt\"}"),
+            ToolCall("read-b", "read", "{\"path\":\"b.kt\"}"),
+        )
+        val provider = ScriptedProvider { request ->
+            val round = request.messages.count { it.role == "tool" }
+            flow {
+                if (round == 0) emit(ModelEvent.Completed(AgentMessage("assistant", toolCalls = reads), "tool_calls"))
+                else emit(ModelEvent.Completed(AgentMessage("assistant", "done"), "stop"))
+            }
+        }
+        val fixture = fixture(provider, tools, dispatcher = StandardTestDispatcher(testScheduler))
+        fixture.coordinator.send("read both", ExecutionMode.WORKSPACE_EDIT)
+        advanceUntilIdle()
+
+        assertEquals(setOf("read-a", "read-b"), started.toSet(), "both reads must be in flight at the same time")
+        val state = fixture.coordinator.state.value
+        assertEquals("completed", state.status)
+        assertEquals(listOf("read-a", "read-b"), state.messages.filter { it.role == "tool" }.map { it.toolCallId })
+    }
+
+    @Test fun providerUsageIsSumsAcrossRoundsAndSummaryIsJournaled() = runTest {
+        val call = ToolCall("call-1", "read", "{}")
+        var round = 0
+        val provider = ScriptedProvider { _ -> flow {
+            emit(ModelEvent.Usage(TokenUsage(promptTokens = 100, completionTokens = 20, cachedPromptTokens = 60)))
+            if (round++ == 0) emit(ModelEvent.Completed(AgentMessage("assistant", toolCalls = listOf(call)), "tool_calls"))
+            else emit(ModelEvent.Completed(AgentMessage("assistant", "done"), "stop"))
+        } }
+        val events = MemoryEvents()
+        val fixture = fixture(provider, RecordingTools(), events, StandardTestDispatcher(testScheduler))
+        fixture.coordinator.send("count", ExecutionMode.WORKSPACE_EDIT)
+        advanceUntilIdle()
+
+        val usage = fixture.coordinator.state.value.usage
+        assertEquals(200L, usage.promptTokens)
+        assertEquals(40L, usage.completionTokens)
+        assertEquals(120L, usage.cachedPromptTokens)
+        assertEquals(1, fixture.coordinator.state.value.toolCalls)
+        val summary = events.records.last { it.type == "run.summary" }.payload
+        assertEquals("completed", summary["status"]?.jsonPrimitive?.content)
+        assertEquals(2, summary["rounds"]?.jsonPrimitive?.int)
+        assertEquals(1, summary["toolCalls"]?.jsonPrimitive?.int)
+        assertEquals(200L, summary["promptTokens"]?.jsonPrimitive?.long)
+    }
+
+    @Test fun roundLimitIsConfigurableAndReported() = runTest {
+        val provider = ScriptedProvider { _ -> flow {
+            emit(ModelEvent.Completed(AgentMessage("assistant", toolCalls = listOf(ToolCall(newId(), "read", "{}"))), "tool_calls"))
+        } }
+        val scope = CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler))
+        val coordinator = AgentCoordinator(provider, RecordingTools(), MemoryEvents(), RecordingProcesses(), "session", "model", maxRounds = 2, scope = scope)
+        coordinator.send("loop", ExecutionMode.WORKSPACE_EDIT)
+        advanceUntilIdle()
+
+        assertEquals("failed", coordinator.state.value.status)
+        assertTrue(coordinator.state.value.error.orEmpty().contains("лимит 2"))
+        assertEquals(2, provider.calls)
+    }
+
     private fun fixture(
         provider: ScriptedProvider,
         tools: RecordingTools = RecordingTools(),
@@ -273,14 +343,16 @@ class AgentCoordinatorTest {
             ToolSpec("process", "process", JsonObject(emptyMap()), ToolEffect.PROCESS),
         )
         val executed = mutableListOf<ToolCall>()
+        var onExecute: suspend (ToolCall) -> Unit = {}
         override suspend fun execute(call: ToolCall, context: ToolContext): ToolResult {
-            executed += call
+            onExecute(call)
+            synchronized(executed) { executed += call }
             return ToolResult(true, buildJsonObject { put("ok", true) })
         }
     }
 
     private class MemoryEvents : EventStore {
-        private val records = mutableListOf<StoredEvent>()
+        val records = mutableListOf<StoredEvent>()
         var failUserMessageAppend = false
         var userMessageAppends = 0
         override suspend fun append(sessionId: String, type: String, payload: JsonObject): StoredEvent {

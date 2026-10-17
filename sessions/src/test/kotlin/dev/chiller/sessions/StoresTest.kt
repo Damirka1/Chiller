@@ -15,8 +15,29 @@ class StoresTest {
         store.append("s1", "run.completed", buildJsonObject {})
         assertEquals(listOf(0L, 1L), JsonlEventStore(root).read("s1").map { it.seq })
     }
-    @Test fun corruptInteriorIsNotSkipped() = runTest {
-        val root = Files.createTempDirectory("chiller-session")
+    @Test fun appendsStayDenseWithoutReparsingHistory() = runTest {
+        val root = Files.createTempDirectory("chiller-append")
+        val store = JsonlEventStore(root)
+        repeat(200) { store.append("s1", "message", buildJsonObject { put("n", it) }) }
+        val reopened = JsonlEventStore(root).read("s1")
+        assertEquals(200, reopened.size)
+        assertEquals((0L until 200L).toList(), reopened.map { it.seq })
+        // Cached tail still continues from the last durable record.
+        assertEquals(200L, store.append("s1", "run.completed", buildJsonObject {}).seq)
+    }
+
+    @Test fun listingReflectsRenamesOfTheSameLength() = runTest {
+        val root = Files.createTempDirectory("chiller-list")
+        val store = JsonlEventStore(root)
+        store.append("s", "message", buildJsonObject { put("role", "user"); put("content", "Prompt") })
+        assertEquals("Prompt", store.list().single().title)
+        store.append("s", "session.renamed", buildJsonObject { put("title", "First") })
+        assertEquals("First", store.list().single().title)
+        store.append("s", "session.renamed", buildJsonObject { put("title", "Other") })
+        assertEquals("Other", store.list().single().title)
+    }
+
+    @Test fun corruptInteriorIsNotSkipped() = runTest {        val root = Files.createTempDirectory("chiller-session")
         Files.createDirectories(root.resolve("s1"))
         Files.writeString(root.resolve("s1/events.jsonl"), "invalid\n")
         assertFailsWith<IllegalStateException> { JsonlEventStore(root).read("s1") }

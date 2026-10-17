@@ -80,4 +80,37 @@ class ContextPlannerTest {
 
         assertFailsWith<ContextLimitException> { planner.select(messages) }
     }
+
+    @Test fun oldLargeToolResultsArePrunedUnderPressureButPairsStayIntact() {
+        val messages = mutableListOf(AgentMessage("system", "system"), AgentMessage("user", "inspect the project"))
+        repeat(8) { index ->
+            val call = ToolCall("call-$index", "read", "{}")
+            messages += AgentMessage("assistant", toolCalls = listOf(call))
+            messages += AgentMessage("tool", "x".repeat(800), toolCallId = "call-$index")
+        }
+        val planner = ContextPlanner(maxCharacters = 8_000, outputReserveCharacters = 1_000)
+
+        val selected = planner.select(messages)
+
+        assertEquals(2, selected.prunedResults)
+        val tools = selected.messages.filter { it.role == "tool" }
+        assertEquals(8, tools.size)
+        assertEquals(listOf("call-0", "call-1"), tools.take(2).map { it.toolCallId })
+        assertTrue(tools.take(2).all { it.content.orEmpty().contains("pruned") })
+        assertTrue(tools.drop(2).all { it.content.orEmpty().length == 800 })
+        assertEquals(0, selected.droppedMessages)
+    }
+
+    @Test fun shortSessionKeepsToolResultsVerbatim() {
+        val messages = mutableListOf(AgentMessage("system", "system"), AgentMessage("user", "inspect"))
+        repeat(3) { index ->
+            messages += AgentMessage("assistant", toolCalls = listOf(ToolCall("call-$index", "read", "{}")))
+            messages += AgentMessage("tool", "x".repeat(800), toolCallId = "call-$index")
+        }
+
+        val selected = ContextPlanner(maxCharacters = 8_000, outputReserveCharacters = 1_000).select(messages)
+
+        assertEquals(0, selected.prunedResults)
+        assertTrue(selected.messages.filter { it.role == "tool" }.all { it.content.orEmpty().length == 800 })
+    }
 }

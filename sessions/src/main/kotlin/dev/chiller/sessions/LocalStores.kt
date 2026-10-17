@@ -22,16 +22,24 @@ private fun safeId(id: String): String {
 
 class JsonlEventStore(private val directory: Path) : EventStore {
     private val mutex = Mutex()
+    private data class Tail(val size: Long, val seq: Long)
+    private data class IndexEntry(val size: Long, val modified: Long, val info: SessionInfo)
+    // Sized-validated per-session tail so append does not re-parse the whole journal (O(n) per append).
+    private val tails = HashMap<String, Tail>()
+    // Listing cache; every local append invalidates its own entry.
+    private val index = HashMap<String, IndexEntry>()
     init { Files.createDirectories(directory) }
 
     override suspend fun append(sessionId: String, type: String, payload: JsonObject): StoredEvent = mutex.withLock {
         withContext(Dispatchers.IO) {
             val file = file(sessionId)
             Files.createDirectories(file.parent)
-            val history = readFile(file)
-            val event = StoredEvent(sessionId = sessionId, seq = (history.lastOrNull()?.seq ?: -1) + 1, type = type, payload = payload)
+            val size = if (Files.exists(file)) Files.size(file) else 0L
+            val cached = tails[sessionId]?.takeIf { it.size == size }
+            val lastSeq = cached?.seq ?: (readFile(file).lastOrNull()?.seq ?: -1L)
+            val event = StoredEvent(sessionId = sessionId, seq = lastSeq + 1, type = type, payload = payload)
             // Remove an incomplete final record before appending a new, complete one.
-            if (Files.exists(file)) {
+            if (Files.exists(file) && cached == null) {
                 val bytes = Files.readAllBytes(file)
                 if (bytes.isNotEmpty() && bytes.last() != 10.toByte()) {
                     val boundary = bytes.indexOfLast { it == 10.toByte() } + 1
@@ -44,27 +52,54 @@ class JsonlEventStore(private val directory: Path) : EventStore {
                 while (buffer.hasRemaining()) channel.write(buffer)
                 channel.force(true)
             }
+            tails[sessionId] = Tail(Files.size(file), event.seq)
+            index.remove(sessionId)
             event
         }
     }
 
     override suspend fun read(sessionId: String): List<StoredEvent> = mutex.withLock {
-        withContext(Dispatchers.IO) { readFile(file(sessionId)) }
+        withContext(Dispatchers.IO) {
+            val file = file(sessionId)
+            val events = readFile(file)
+            if (events.isNotEmpty() && endsWithNewline(file)) tails[sessionId] = Tail(Files.size(file), events.last().seq)
+            else tails.remove(sessionId) // A torn tail must never be trusted by the next append.
+            events
+        }
     }
+
+    private fun endsWithNewline(file: Path): Boolean = runCatching {
+        val size = Files.size(file)
+        if (size <= 0L) false else FileChannel.open(file, READ).use { channel ->
+            val buffer = ByteBuffer.allocate(1)
+            channel.read(buffer, size - 1)
+            buffer.get(0) == 10.toByte()
+        }
+    }.getOrDefault(false)
 
     override suspend fun list(): List<SessionInfo> = mutex.withLock {
         withContext(Dispatchers.IO) {
-            Files.list(directory).use { paths -> paths.filter { Files.isDirectory(it) }.map { path ->
-                val events = runCatching { readFile(path.resolve("events.jsonl")) }.getOrNull().orEmpty()
-                val first = events.firstOrNull { it.type == "message" && it.payload["role"]?.jsonPrimitive?.contentOrNull == "user" }
-                val renamed = events.asReversed().firstNotNullOfOrNull { event ->
-                    if (event.type != "session.renamed") return@firstNotNullOfOrNull null
-                    event.payload["title"]?.jsonPrimitive?.contentOrNull?.trim()?.takeIf { it.length in 1..120 }
-                }
-                val title = renamed ?: first?.payload?.get("content")?.jsonPrimitive?.contentOrNull?.take(64) ?: "Новый диалог"
-                SessionInfo(path.fileName.toString(), title, events.lastOrNull()?.timestamp ?: "")
-            }.toList().sortedByDescending { it.updatedAt } }
+            val ids = Files.list(directory).use { paths -> paths.filter { Files.isDirectory(it) }.map { it.fileName.toString() }.toList() }
+            ids.map { id -> cachedInfo(id) }.sortedByDescending { it.updatedAt }
         }
+    }
+
+    /** Session listing is recomputed only when the journal file actually changed. */
+    private fun cachedInfo(id: String): SessionInfo {
+        val file = file(id)
+        val size = runCatching { Files.size(file) }.getOrDefault(0L)
+        val modified = runCatching { Files.getLastModifiedTime(file).toMillis() }.getOrDefault(0L)
+        index[id]?.let { entry -> if (entry.size == size && entry.modified == modified) return entry.info }
+        val events = runCatching { readFile(file) }.getOrNull().orEmpty()
+        val first = events.firstOrNull { it.type == "message" && it.payload["role"]?.jsonPrimitive?.contentOrNull == "user" }
+        val renamed = events.asReversed().firstNotNullOfOrNull { event ->
+            if (event.type != "session.renamed") return@firstNotNullOfOrNull null
+            event.payload["title"]?.jsonPrimitive?.contentOrNull?.trim()?.takeIf { it.length in 1..120 }
+        }
+        val title = renamed ?: first?.payload?.get("content")?.jsonPrimitive?.contentOrNull?.take(64) ?: "Новый диалог"
+        val info = SessionInfo(id, title, events.lastOrNull()?.timestamp ?: "")
+        index[id] = IndexEntry(size, modified, info)
+        return info
     }
 
     private fun file(id: String) = directory.resolve(safeId(id)).resolve("events.jsonl")

@@ -8,6 +8,7 @@ data class ContextSelection(
     val droppedMessages: Int,
     val estimatedTokens: Int,
     val estimateOnly: Boolean = true,
+    val prunedResults: Int = 0,
 )
 
 class ContextLimitException(message: String) : IllegalArgumentException(message)
@@ -15,15 +16,22 @@ class ContextLimitException(message: String) : IllegalArgumentException(message)
 /**
  * Keeps system instructions and the newest contiguous history that fits the configured
  * character allowance. User turns and their assistant/tool exchanges are indivisible.
+ * Old, large tool results are replaced with a short stub once the context is under
+ * pressure, which is much cheaper than dropping a whole turn that still holds the goal.
  */
 class ContextPlanner(
     private val maxCharacters: Int = 96_000,
     private val outputReserveCharacters: Int = 16_000,
+    private val pruneThreshold: Double = 0.6,
+    private val keepToolResults: Int = 6,
+    private val pruneAboveCharacters: Int = 600,
 ) {
     init {
         require(maxCharacters > 0) { "maxCharacters must be positive" }
         require(outputReserveCharacters >= 0) { "outputReserveCharacters cannot be negative" }
         require(outputReserveCharacters < maxCharacters) { "output reserve must be smaller than the total character budget" }
+        require(pruneThreshold in 0.0..1.0) { "pruneThreshold must be within 0..1" }
+        require(keepToolResults >= 0) { "keepToolResults cannot be negative" }
     }
 
     fun select(messages: List<AgentMessage>): ContextSelection {
@@ -62,10 +70,23 @@ class ContextPlanner(
 
         val keepIndices = HashSet<Int>()
         groups.forEachIndexed { index, group -> if (keep[index]) keepIndices.addAll(group.indices) }
-        val selected = messages.filterIndexed { index, message -> message.role == "system" || keepIndices.contains(index) }
+        var selected = messages.filterIndexed { index, message -> message.role == "system" || keepIndices.contains(index) }
         val dropped = messages.size - selected.size
-        val estimatedTokens = ((used + 3L) / 4L).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
-        return ContextSelection(selected, dropped, estimatedTokens)
+
+        var pruned = 0
+        if (used.toDouble() > budget * pruneThreshold) {
+            val toolPositions = selected.indices.filter { selected[it].role == "tool" && (selected[it].content?.length ?: 0) > pruneAboveCharacters }
+            val candidates = toolPositions.dropLast(keepToolResults)
+            if (candidates.isNotEmpty()) {
+                val mutable = selected.toMutableList()
+                candidates.forEach { position -> mutable[position] = mutable[position].copy(content = PRUNED_RESULT) }
+                selected = mutable
+                pruned = candidates.size
+            }
+        }
+
+        val estimatedTokens = ((selected.sumOf(::messageCharacters) + 3L) / 4L).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+        return ContextSelection(selected, dropped, estimatedTokens, prunedResults = pruned)
     }
 
     private fun splitIntoGroups(messages: List<AgentMessage>): List<TurnGroup> {
@@ -77,7 +98,7 @@ class ContextPlanner(
             if (current.isNotEmpty()) {
                 val groupMessages = current.map(messages::get)
                 val paired = hasCompleteToolPairs(groupMessages)
-                val finalMessage = groupMessages.lastOrNull { it.role != "system" }
+                val finalMessage = groupMessages.lastOrNull()
                 groups += TurnGroup(
                     indices = current.toList(),
                     toolPairsComplete = paired,
@@ -123,4 +144,8 @@ class ContextPlanner(
         val complete: Boolean,
         val toolPairsComplete: Boolean,
     )
+
+    private companion object {
+        const val PRUNED_RESULT = """{"ok":true,"pruned":true,"note":"Older tool result omitted to free context. Re-run the tool if you need the data."}"""
+    }
 }
