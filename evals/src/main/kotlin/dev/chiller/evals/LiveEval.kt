@@ -46,6 +46,7 @@ data class EvalResult(
     val rounds: Int, val toolCalls: Int, val failedToolCalls: Int, val toolErrors: Map<String, Int>, val toolsUsed: List<String>,
     val durationMs: Long, val promptTokens: Long?, val completionTokens: Long?, val cachedPromptTokens: Long?, val finalAnswer: String,
     val subagents: Int = 0, val subagentsCompleted: Int = 0,
+    val loss: LossMetrics = LossMetrics(),
 )
 
 @Serializable
@@ -58,6 +59,9 @@ data class EvalSummary(
     val promptTokens: Long?,
     val completionTokens: Long?,
     val cachedPromptTokens: Long?,
+    val repeatedReads: Int = 0,
+    val failedEdits: Int = 0,
+    val toolOutputChars: Long = 0,
 )
 
 @Serializable
@@ -99,8 +103,8 @@ fun main() = runBlocking {
     val outDir = Path.of("reports/local/evals/$stamp-${model.replace(Regex("[^A-Za-z0-9._-]"), "_")}-${resolved.id}").toAbsolutePath()
     println("=== CHILLER LIVE EVAL · $model · profile ${resolved.id} · ${tasks.size} task(s) × $repeats · maxRounds=$maxRounds maxOutput=$maxOutput thinking=$thinking ===")
     val report = runEvalSuite(SuiteSpec(baseUrl, model, { key }, profileId, tasks.map { it.id }.toSet(), repeats, maxRounds, maxOutput, thinking, outDir = outDir)) { result ->
-        println("%-20s #%d %s  rounds=%-2d tools=%-2d errors=%-2d %5.1fs  %s".format(result.task, result.attempt, if (result.passed) "PASS" else "FAIL",
-            result.rounds, result.toolCalls, result.failedToolCalls, result.durationMs / 1000.0, result.verdict.take(90)))
+        println("%-20s #%d %s  rounds=%-2d tools=%-2d errors=%-2d reread=%-2d badEdits=%-2d out=%4dk %5.1fs  %s".format(result.task, result.attempt, if (result.passed) "PASS" else "FAIL",
+            result.rounds, result.toolCalls, result.failedToolCalls, result.loss.repeatedReads, result.loss.failedEdits, result.loss.toolOutputChars / 1000, result.durationMs / 1000.0, result.verdict.take(80)))
     }
     val passed = report.results.count { it.passed }
     println("PASSED $passed/${report.results.size} (${if (report.results.isEmpty()) 0 else passed * 100 / report.results.size}%) · report: ${outDir.resolve("report.md")}")
@@ -165,6 +169,7 @@ internal suspend fun runTask(task: EvalTask, attempt: Int, provider: ChatComplet
             state.modelRounds, state.toolCalls, state.failedToolCalls, errors, state.activities.map { it.name }.distinct(),
             (System.nanoTime() - started) / 1_000_000, state.usage.promptTokens, state.usage.completionTokens, state.usage.cachedPromptTokens, answer.take(1500),
             subagents = helpers.size, subagentsCompleted = helpers.count { it.status == dev.chiller.contracts.SubagentStatus.COMPLETED },
+            loss = lossMetrics(state.messages, state.activities),
         )
     }
 }
@@ -179,10 +184,12 @@ internal fun renderMarkdown(report: EvalReport): String = buildString {
     appendLine("**Passed ${passed}/${results.size}** · rounds ${results.sumOf { it.rounds }} · tool calls ${results.sumOf { it.toolCalls }} (failed ${results.sumOf { it.failedToolCalls }}) · " +
         "time ${"%.1f".format(results.sumOf { it.durationMs } / 1000.0)} s · prompt ${results.sumOf { it.promptTokens ?: 0 }} · completion ${results.sumOf { it.completionTokens ?: 0 }} · cached ${results.sumOf { it.cachedPromptTokens ?: 0 }} tokens")
     appendLine()
-    appendLine("| Task | # | Result | Rounds | Tools (failed) | Helpers | Time, s | Prompt / completion tok. | Verdict |")
-    appendLine("|---|---|---|---|---|---|---|---|---|")
+    appendLine("Losses: repeated reads ${results.sumOf { it.loss.repeatedReads }} · failed edits ${results.sumOf { it.loss.failedEdits }} · tool output sent ${results.sumOf { it.loss.toolOutputChars } / 1000}k chars")
+    appendLine()
+    appendLine("| Task | # | Result | Rounds | Tools (failed) | Re-reads | Failed edits | Tool output, k chars | Helpers | Time, s | Prompt / completion tok. | Verdict |")
+    appendLine("|---|---|---|---|---|---|---|---|---|---|---|---|")
     results.forEach { r ->
-        appendLine("| ${r.task} | ${r.attempt} | ${if (r.passed) "PASS" else "FAIL"} | ${r.rounds} | ${r.toolCalls} (${r.failedToolCalls}) | ${if (r.subagents > 0) "${r.subagentsCompleted}/${r.subagents}" else "—"} | ${"%.1f".format(r.durationMs / 1000.0)} | ${r.promptTokens ?: "—"} / ${r.completionTokens ?: "—"} | ${r.verdict.replace("|", "\\|").take(120)} |")
+        appendLine("| ${r.task} | ${r.attempt} | ${if (r.passed) "PASS" else "FAIL"} | ${r.rounds} | ${r.toolCalls} (${r.failedToolCalls}) | ${r.loss.repeatedReads} | ${r.loss.failedEdits} | ${"%.1f".format(r.loss.toolOutputChars / 1000.0)} | ${if (r.subagents > 0) "${r.subagentsCompleted}/${r.subagents}" else "—"} | ${"%.1f".format(r.durationMs / 1000.0)} | ${r.promptTokens ?: "—"} / ${r.completionTokens ?: "—"} | ${r.verdict.replace("|", "\\|").take(120)} |")
     }
     appendLine()
     appendLine("## Per-task aggregate")

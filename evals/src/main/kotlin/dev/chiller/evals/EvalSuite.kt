@@ -80,6 +80,9 @@ fun summarize(results: List<EvalResult>): List<EvalSummary> = results.groupBy { 
         promptTokens = attempts.takeIf { rows -> rows.all { it.promptTokens != null } }?.sumOf { it.promptTokens!! },
         completionTokens = attempts.takeIf { rows -> rows.all { it.completionTokens != null } }?.sumOf { it.completionTokens!! },
         cachedPromptTokens = attempts.takeIf { rows -> rows.all { it.cachedPromptTokens != null } }?.sumOf { it.cachedPromptTokens!! },
+        repeatedReads = attempts.sumOf { it.loss.repeatedReads },
+        failedEdits = attempts.sumOf { it.loss.failedEdits },
+        toolOutputChars = attempts.sumOf { it.loss.toolOutputChars },
     )
 }
 

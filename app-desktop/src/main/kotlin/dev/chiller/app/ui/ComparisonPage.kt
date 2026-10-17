@@ -181,7 +181,8 @@ private fun ResultsTable(sides: List<ComparisonSide>, taskIds: List<String>, res
             summaries.forEach { s ->
                 Column(Modifier.weight(1f).padding(horizontal = 6.dp)) {
                     Text(if (s.runs == 0) "—" else "${s.passed}/${s.runs} · ${(s.passRate * 100).toInt()}%", color = if (s.runs > 0 && s.passed == s.runs) c.positive else c.text, fontSize = 15.sp, fontWeight = FontWeight.Medium)
-                    if (s.runs > 0) Text(listOfNotNull("%.1f с".format(s.seconds), s.prompt?.let { "${compactTokens(it)} → ${compactTokens(s.completion)} ток." }, "раундов ${"%.1f".format(s.avgRounds)}", s.toolErrors.takeIf { it > 0 }?.let { "ошибок инстр. $it" }).joinToString(" · "),
+                    if (s.runs > 0) Text(listOfNotNull("%.1f с".format(s.seconds), s.prompt?.let { "${compactTokens(it)} → ${compactTokens(s.completion)} ток." }, "раундов ${"%.1f".format(s.avgRounds)}", s.toolErrors.takeIf { it > 0 }?.let { "ошибок инстр. $it" }, s.repeatedReads.takeIf { it > 0 }?.let { "повторных чтений $it" },
+                        s.failedEdits.takeIf { it > 0 }?.let { "неудачных правок $it" }, "вывод инстр. ${compactTokens(s.toolOutputChars)} симв.").joinToString(" · "),
                         color = c.faint, fontSize = 11.sp, lineHeight = 15.sp)
                 }
             }
@@ -244,7 +245,8 @@ private fun History(history: List<ComparisonRecord>, actions: ComparisonActions)
     }
 }
 
-private data class SideSummary(val runs: Int, val passed: Int, val seconds: Double, val prompt: Long?, val completion: Long?, val avgRounds: Double, val toolErrors: Int) {
+private data class SideSummary(val runs: Int, val passed: Int, val seconds: Double, val prompt: Long?, val completion: Long?, val avgRounds: Double, val toolErrors: Int,
+    val repeatedReads: Int = 0, val failedEdits: Int = 0, val toolOutputChars: Long = 0) {
     val passRate: Double get() = if (runs == 0) 0.0 else passed.toDouble() / runs
 }
 
@@ -254,6 +256,7 @@ private fun summary(rows: List<EvalResult>) = SideSummary(
     completion = rows.takeIf { r -> r.isNotEmpty() && r.all { it.completionTokens != null } }?.sumOf { it.completionTokens!! },
     avgRounds = if (rows.isEmpty()) 0.0 else rows.sumOf { it.rounds }.toDouble() / rows.size,
     toolErrors = rows.sumOf { it.failedToolCalls },
+    repeatedReads = rows.sumOf { it.loss.repeatedReads }, failedEdits = rows.sumOf { it.loss.failedEdits }, toolOutputChars = rows.sumOf { it.loss.toolOutputChars },
 )
 
 private fun formatStamp(stamp: String) = runCatching { "${stamp.substring(6, 8)}.${stamp.substring(4, 6)} ${stamp.substring(9, 11)}:${stamp.substring(11, 13)}" }.getOrDefault(stamp)
