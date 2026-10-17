@@ -108,6 +108,7 @@ fun ChillerApp(
     recentWorkspaces: List<String> = emptyList(), onOpenWorkspace: (String) -> Unit = {},
     sessionWorkspaces: Map<String, String> = emptyMap(),
     onStartDemo: (() -> Unit)? = null,
+    onCloseWorkspace: () -> Unit = {},
     onOpenTrace: (() -> Unit)? = null,
     /** macOS full-window content: the native title bar is transparent and the traffic lights float over the app. */
     titleBar: TitleBarSpec? = null,
@@ -189,7 +190,7 @@ fun ChillerApp(
             Row(Modifier.fillMaxSize()) {
                 if (showSidebar) Sidebar(sessions, selectedSessionId, workspacePath, apiKeyConfigured, !active, onNewSession, onSelectSession, onChooseWorkspace,
                     onSettings = { settings = true }, onTheme = { updateView(view.copy(theme = if (dark) "light" else "dark")) }, onRename = { renameTarget = it }, onExport = onExportSession, connection = connection, width = 248f * density.fontScale.coerceIn(1f, 1.2f),
-                    running = active, searchFocus = sidebarSearch, titleBar = titleBar)
+                    running = active, searchFocus = sidebarSearch, titleBar = titleBar, onClose = { if (!active) onCloseWorkspace() })
                 Box(Modifier.width(1.dp).fillMaxHeight().background(c.border.copy(alpha = .7f)))
                 BoxWithConstraints(Modifier.weight(1f).fillMaxHeight()) {
                     val compact = maxWidth < 860.dp || density.fontScale > 1.3f
@@ -215,6 +216,7 @@ fun ChillerApp(
                                             modifier = Modifier.weight(1f).fillMaxWidth(),
                                             resume = resume, onResume = { if (!active) onSelectSession(it) },
                                             onDemo = onStartDemo?.let { start -> { if (!active) start() } },
+                                            onCloseProject = { if (!active) onCloseWorkspace() },
                                             connection = when {
                                                 connection.status == "verified" -> null
                                                 !apiKeyConfigured -> ConnectionPrompt("Добавить ключ") { settings = true }
@@ -272,7 +274,7 @@ fun ChillerApp(
 private fun Sidebar(
     sessions: List<SessionInfo>, selected: String?, workspace: String?, connected: Boolean, enabled: Boolean,
     onNew: () -> Unit, onSelect: (String) -> Unit, onChoose: () -> Unit, onSettings: () -> Unit, onTheme: () -> Unit, onRename: (SessionInfo) -> Unit, onExport: (String, String) -> Unit, connection: ConnectionState, width: Float,
-    running: Boolean, searchFocus: FocusRequester, titleBar: TitleBarSpec?,
+    running: Boolean, searchFocus: FocusRequester, titleBar: TitleBarSpec?, onClose: () -> Unit,
 ) {
     val c = LocalChillerPalette.current
     var query by remember { mutableStateOf("") }
@@ -293,8 +295,13 @@ private fun Sidebar(
         } else {
             Text("Проект", color = c.muted, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp))
             val branch by produceState<String?>(null, workspace) { value = withContext(Dispatchers.IO) { gitBranch(java.nio.file.Path.of(workspace)) } }
-            Hint(homeRelative(workspace)) {
-                ChillerControl(workspace.substringAfterLast('/'), onChoose, Modifier.fillMaxWidth(), icon = Icons.Outlined.FolderOpen, style = ControlStyle.SELECTED, enabled = enabled, trailing = branch)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.weight(1f)) {
+                    Hint(homeRelative(workspace)) {
+                        ChillerControl(workspace.substringAfterLast('/'), onChoose, Modifier.fillMaxWidth(), icon = Icons.Outlined.FolderOpen, style = ControlStyle.SELECTED, enabled = enabled, trailing = branch)
+                    }
+                }
+                ChillerIconButton(Icons.Outlined.Close, "Закрыть проект", onClose, Modifier.padding(start = 2.dp).size(28.dp), enabled = enabled)
             }
         }
         Spacer(Modifier.height(14.dp))

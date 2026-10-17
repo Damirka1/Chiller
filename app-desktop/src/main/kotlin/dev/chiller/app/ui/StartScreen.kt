@@ -54,6 +54,7 @@ internal fun StartScreen(
     onOpenFolder: () -> Unit, onOpenPath: (String) -> Unit, onStarter: (Starter) -> Unit, modifier: Modifier = Modifier,
     resume: ResumeItem? = null, onResume: (String) -> Unit = {}, connection: ConnectionPrompt? = null,
     onDemo: (() -> Unit)? = null,
+    onCloseProject: () -> Unit = {},
 ) {
     val c = LocalChillerPalette.current
     var dropping by remember { mutableStateOf(false) }
@@ -113,7 +114,7 @@ internal fun StartScreen(
                 Text("Что сделаем в $name?", fontSize = 24.sp, lineHeight = 32.sp, letterSpacing = (-.6).sp, fontWeight = FontWeight.Medium, color = c.text, textAlign = TextAlign.Center, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 Spacer(Modifier.height(18.dp))
                 val overview by produceState<ProjectOverview?>(null, workspacePath) { value = withContext(Dispatchers.IO) { runCatching { inspectProject(Path.of(workspacePath)) }.getOrNull() } }
-                ProjectCard(workspacePath, overview, modelName, connectionLine, connectionColor, onOpenFolder)
+                ProjectCard(workspacePath, overview, modelName, connectionLine, connectionColor, onOpenFolder, onCloseProject)
                 Spacer(Modifier.height(18.dp))
                 SectionLabel("С чего начать")
                 val tasks = overview?.let(::starters) ?: starters(ProjectOverview(name, workspacePath, null, emptyList(), null, 0))
@@ -235,7 +236,7 @@ private fun ShortcutHints() {
 }
 
 @Composable
-private fun ProjectCard(path: String, overview: ProjectOverview?, modelName: String, connectionLine: String, connectionColor: Color, onChange: () -> Unit) {
+private fun ProjectCard(path: String, overview: ProjectOverview?, modelName: String, connectionLine: String, connectionColor: Color, onChange: () -> Unit, onClose: () -> Unit) {
     val c = LocalChillerPalette.current
     val shape = RoundedCornerShape(12.dp)
     Column(Modifier.fillMaxWidth().clip(shape).background(c.sidebar.copy(alpha = .6f)).border(1.dp, c.border, shape).padding(horizontal = 16.dp, vertical = 14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -249,6 +250,7 @@ private fun ProjectCard(path: String, overview: ProjectOverview?, modelName: Str
                 Text(homeRelative(path), color = c.faint, fontSize = 11.sp, lineHeight = 15.sp, fontFamily = FontFamily.Monospace, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             ChillerControl("Сменить", onChange)
+            ChillerControl("Закрыть", onClose)
         }
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
             when {

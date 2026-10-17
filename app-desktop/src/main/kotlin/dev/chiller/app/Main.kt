@@ -55,6 +55,7 @@ fun main() = application {
             Menu("Файл") {
                 Item("Новый диалог", enabled = !active, shortcut = KeyShortcut(Key.N, meta = mac, ctrl = !mac), onClick = { actions.tryEmit(DesktopAction.NEW_CHAT) })
                 Item("Открыть проект…", enabled = !active, shortcut = KeyShortcut(Key.O, meta = mac, ctrl = !mac), onClick = chooseWorkspace)
+                Item("Закрыть проект", enabled = !active && state.settings.workspace != null, onClick = { scope.launch { controller.closeWorkspace() } })
                 Separator()
                 Item("Экспорт Markdown…", enabled = !active && state.run.messages.isNotEmpty(), onClick = { scope.launch { controller.prepareExport("markdown") } })
                 Item("Экспорт JSON…", enabled = !active && state.run.messages.isNotEmpty(), onClick = { scope.launch { controller.prepareExport("json") } })
@@ -91,6 +92,7 @@ fun main() = application {
             onChooseWorkspace = chooseWorkspace,
             recentWorkspaces = state.settings.recentWorkspaces, sessionWorkspaces = state.sessionWorkspaces,
             onStartDemo = { scope.launch { controller.startDemo() } },
+            onCloseWorkspace = { scope.launch { controller.closeWorkspace() } },
             titleBar = titleBar, buildStamp = BuildStamp.value,
             onOpenTrace = {
                 val trace = controller.tracePath(state.sessionId).toFile()

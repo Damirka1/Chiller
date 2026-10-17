@@ -36,6 +36,29 @@ class DesktopControllerTest {
         } finally { controller.close() }
     }
 
+    @Test fun `new dialog after the demo returns to the chosen project and close leaves it`() = runBlocking {
+        val project = java.nio.file.Files.createDirectories(directory.resolve("work/app")).toRealPath()
+        val controller = DesktopController(directory.resolve("data"), initialCredential = null)
+        try {
+            controller.initialize()
+            controller.chooseWorkspace(project)
+            controller.startDemo()
+            val demo = controller.state.value.settings.workspace!!
+            assertTrue("demo" in demo && demo != project.toString())
+            kotlinx.coroutines.withTimeout(60_000) { while (controller.state.value.run.status !in setOf("completed", "failed")) {
+                if (controller.state.value.run.question != null) controller.answer("Нет, не нужно")
+                kotlinx.coroutines.delay(50)
+            } }
+            controller.newSession()
+            assertEquals(project.toString(), controller.state.value.settings.workspace)
+            assertFalse(demo in controller.state.value.settings.recentWorkspaces)
+            controller.closeWorkspace()
+            assertNull(controller.state.value.settings.workspace)
+        } finally { controller.close() }
+        val restarted = DesktopController(directory.resolve("data"), initialCredential = null)
+        try { restarted.initialize(); assertNull(restarted.state.value.settings.workspace) } finally { restarted.close() }
+    }
+
     @Test fun `offline send acknowledges durable user message and deduplicates request id`() = runBlocking {
         val controller = DesktopController(directory, initialCredential = null)
         try {

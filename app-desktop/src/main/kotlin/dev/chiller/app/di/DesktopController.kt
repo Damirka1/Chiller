@@ -44,6 +44,8 @@ class DesktopController(private val directory: Path, initialCredential: String? 
     private val events = JsonlEventStore(directory.resolve("sessions"))
     private val artifacts = LocalArtifactStore(directory.resolve("artifacts"))
     private val exporter = SessionExporter(events)
+    /** The project the user chose (persisted), as opposed to a folder shown for a selected or demo dialog. */
+    private var savedWorkspace: String? = null
     private var credential: String? = initialCredential?.takeIf { it.isNotBlank() }
     private val _state = MutableStateFlow(DesktopState(apiKeyConfigured = credential != null, connection = ConnectionState(if (credential == null) "missing" else "unverified", if (credential == null) "Не задан API-ключ" else "Подключение ещё не проверено")))
     val state: StateFlow<DesktopState> = _state.asStateFlow()
@@ -77,6 +79,9 @@ class DesktopController(private val directory: Path, initialCredential: String? 
         }
         if (!sameOrigin(settings.baseUrl, "https://api.deepseek.com")) credential = null
         settings = rememberModel(settings, settings.baseUrl, settings.model)
+        // A demo folder must never come back as the project on the next launch.
+        if (settings.workspace?.let(::isDemoFolder) == true) settings = settings.copy(workspace = null)
+        savedWorkspace = settings.workspace
         refreshSessions()
         _state.update { it.copy(settings = settings, uiPreferences = preferencesStore.load(), apiKeyConfigured = credential != null, connection = connectionForUnverified()) }
         saveSettings(settings)
@@ -246,6 +251,7 @@ class DesktopController(private val directory: Path, initialCredential: String? 
             val current = _state.value.settings
             val recent = (listOf(canonical.toString()) + current.recentWorkspaces).distinct().take(MAX_RECENT_WORKSPACES)
             val settings = current.copy(workspace = canonical.toString(), recentWorkspaces = recent)
+            savedWorkspace = canonical.toString()
             resetEngine()
             _state.update { it.copy(settings = settings, sessionId = newId(), run = RunState()) }
             saveSettings(settings)
@@ -255,7 +261,28 @@ class DesktopController(private val directory: Path, initialCredential: String? 
     private suspend fun newSessionLocked() {
         if (busy()) return
         resetEngine()
-        _state.update { it.copy(sessionId = newId(), run = RunState()) }
+        // Leaving the demo returns to the project the user had open, not the throwaway demo folder.
+        val current = _state.value.settings.workspace
+        val workspace = if (current != null && isDemoFolder(current)) savedWorkspace?.takeIf { Files.isDirectory(Path.of(it)) } else current
+        _state.update { it.copy(sessionId = newId(), run = RunState(), settings = it.settings.copy(workspace = workspace)) }
+    }
+
+    /** Leaves the current project: a new dialog on the start screen without a folder. */
+    suspend fun closeWorkspace() = commands.withLock {
+        if (busy()) return@withLock
+        resetEngine()
+        val settings = _state.value.settings.copy(workspace = null)
+        savedWorkspace = null
+        _state.update { it.copy(settings = settings, sessionId = newId(), run = RunState()) }
+        saveSettings(settings)
+    }
+
+    private fun isDemoFolder(path: String): Boolean {
+        val demo = directory.resolve("demo")
+        // Real paths on both sides: on macOS /var is a link to /private/var.
+        val base = runCatching { demo.toRealPath() }.getOrElse { demo.toAbsolutePath().normalize() }
+        val target = runCatching { Path.of(path).toRealPath() }.getOrElse { Path.of(path).toAbsolutePath().normalize() }
+        return target.startsWith(base)
     }
 
     private suspend fun selectSessionLocked(id: String) {
