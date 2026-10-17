@@ -15,6 +15,7 @@ All development checks use fixtures; this iteration makes no remote paid API req
 | S1 | Persistent theme/density/layout/width/reduced motion; atomic preferences; 10dp divider, resize cursor and accessible width buttons; narrow panel switch, selected file/diff summary. Preferences tests and native dark/compact Apply+restart and narrow panel/chat switch checked. |
 | P1 | Explicit single bounded check, max output128, timeout30s, no tools/files/retries; response <=64KiB and valid protocol; safe errors; snapshot/revision/cancel protection. Loopback tests include stale result, malformed/oversized response, timeout and cancellation. Native button produced Verified from one synthetic local response; captured payload had required bounds and no tools. |
 | K1 | Shared action routing with pending-send guard; multiline TextFieldValue/composition gate; normal Enter newline; native Cmd+N/Cmd+Enter and settings Escape verified in actual preview. Focus borders/semantic names retained. |
+| D1–D3 | Compact composer: 84 dp empty block (`10 + 26 + 6 + 32 + 10`), text field grows to 144 dp then scrolls, measured toolbar with mode + content-sized model control (inline chevron, 5 dp gap, ellipsis + full-ID tooltip), Send/Stop only on the right, wrap instead of smaller type, sidebar capped at 1.2× font scale, top bar grows. Compiled and launched from the current source; **no window/screenshot acceptance was performed for these values**. Process-permission toggle moved into the Changes popup (still in Settings). |
 
 ## GUI checks actually performed
 
@@ -34,7 +35,8 @@ All development checks use fixtures; this iteration makes no remote paid API req
 - Real IME composition and VoiceOver need a human/platform pass; composition gating is implemented but actual CJK input was not exercised.
 - Pointer dragging of Studio divider did not visibly resize under CUA. The draggable implementation and persisted bounds exist; width buttons provide a keyboard-accessible adjustment. Do not describe pointer-drag acceptance as passed.
 - macOS only. Windows/Linux and signing/distribution release gates are not verified.
-- Connection probe authenticates/model-access only. DeepSeek/Gemma live tool loop is outside this UI test run; prior one-request DeepSeek smoke is separately recorded.
+- The compact composer (D1–D3) is compiled and the app launches, but its measured 84 dp height, chevron spacing, wrap at ~740 dp, popup placement and the moved process toggle were not visually reviewed. Do not describe them as accepted.
+- Connection probe authenticates/model-access only. DeepSeek/Gemma live tool loop is outside this UI test run; the separate live smoke is recorded in RUN_REPORT.
 
 ## Repeatable review data
 

@@ -9,10 +9,11 @@
 
 | Проверка | Команда | Результат |
 |---|---|---|
-| Юнит-тесты | `./gradlew check` | см. RUN_REPORT: все модули, 0 падений |
+| Юнит-тесты | `./gradlew check` | 105 тестов, 0 падений, 0 skipped |
 | Offline smoke | `./gradlew :evals:offlineSmoke` | пройден: search → read → chained edit → реальные Python-проверки → final → restart → stale-отказ |
-| Live DeepSeek | `./gradlew :evals:liveDeepSeekSmoke` | пройден: 5 раундов, 6 tool-вызовов, 0 ошибок, 9.8 с; prompt 10 832 / completion 576 / cached 8 192 |
-| macOS-пакет | `./gradlew :app-desktop:createDistributable` | см. RUN_REPORT |
+| Live DeepSeek | `./gradlew :evals:liveDeepSeekSmoke` | пройден дважды на финальном коде: 5 раундов, 6 tool-вызовов, 0 ошибок, 9.1–9.8 с; prompt ~10.8k, completion 576–634, cached 8 192–9 600 |
+| macOS-пакет | `./gradlew :app-desktop:createDistributable` | собран |
+| Запуск приложения | `./gradlew :app-desktop:run` (изолированные данные, без ключа) | процесс стартовал, исключений в логе нет; **визуальная приёмка — вручную** |
 
 Live-прогон — это **один** сценарий на `deepseek-flash`. Он подтверждает, что реальная модель
 ведёт многораундовый tool-loop, но не заменяет eval-корпус и не подтверждает Gemma.
