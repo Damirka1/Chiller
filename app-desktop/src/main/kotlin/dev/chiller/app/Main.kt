@@ -9,6 +9,7 @@ import androidx.compose.ui.input.key.KeyShortcut
 import androidx.compose.ui.window.*
 import dev.chiller.app.di.DesktopController
 import dev.chiller.app.di.LocalCredentials
+import dev.chiller.app.di.BuildStamp
 import dev.chiller.app.ui.ChillerApp
 import dev.chiller.app.ui.DesktopAction
 import kotlinx.coroutines.launch
@@ -28,7 +29,7 @@ fun main() = application {
     val active = state.run.status in setOf("preparing", "streaming", "executing")
     LaunchedEffect(Unit) { controller.initialize() }
     Window(
-        title = "Chiller",
+        title = "Chiller · сборка ${BuildStamp.value}",
         state = rememberWindowState(
             width = (if (java.lang.Boolean.getBoolean("chiller.offlinePreview")) System.getenv("CHILLER_PREVIEW_WIDTH")?.toIntOrNull()?.coerceIn(800, 1800) ?: 1280 else 1280).dp,
             height = (if (java.lang.Boolean.getBoolean("chiller.offlinePreview")) System.getenv("CHILLER_PREVIEW_HEIGHT")?.toIntOrNull()?.coerceIn(600, 1200) ?: 860 else 860).dp,

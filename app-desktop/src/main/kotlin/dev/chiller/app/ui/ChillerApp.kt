@@ -41,6 +41,7 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
@@ -357,14 +358,14 @@ private fun Composer(
         if (modelMenu) {
             Spacer(Modifier.height(6.dp))
             ModelPanel(
-                model = model, models = models, configured = configured, running = running, catalog = catalog,
+                model = model, models = models, configured = configured, running = running, catalog = catalog, contextNote = contextNote,
                 onRefresh = onRefreshModels, onCancelRefresh = onCancelCatalogRefresh,
                 onClose = { modelMenu = false }, onModel = onModel,
                 onSettings = { modelMenu = false; onSettings() },
             )
         }
         Spacer(Modifier.height(6.dp))
-        ComposerToolbar(mode, onMode, model, running, pending, draft.isNotBlank(), contextNote, modelMenu, { modelMenu = !modelMenu }, allowProcesses, onAllow, onSend, onStop)
+        ComposerToolbar(mode, onMode, model, running, pending, draft.isNotBlank(), modelMenu, { modelMenu = !modelMenu }, allowProcesses, onAllow, onSend, onStop)
     }
 }
 
@@ -374,7 +375,7 @@ private fun Composer(
  */
 @Composable
 private fun ModelPanel(
-    model: String, models: List<String>, configured: Boolean, running: Boolean, catalog: ModelCatalogState,
+    model: String, models: List<String>, configured: Boolean, running: Boolean, catalog: ModelCatalogState, contextNote: String?,
     onRefresh: () -> Unit, onCancelRefresh: () -> Unit, onClose: () -> Unit, onModel: (String) -> Unit, onSettings: () -> Unit,
 ) {
     val c = LocalChillerPalette.current
@@ -388,7 +389,7 @@ private fun ModelPanel(
         Row(Modifier.fillMaxWidth().padding(start = 8.dp, end = 2.dp, top = 2.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text("Модели API", color = c.text, fontSize = 12.sp)
-                Text(catalogLine(catalog, configured), color = if (catalog.status == "failed") c.negative else c.muted, fontSize = 11.sp, lineHeight = 15.sp)
+                Text(listOfNotNull(catalogLine(catalog, configured), contextNote).joinToString(" · "), color = if (catalog.status == "failed") c.negative else c.muted, fontSize = 11.sp, lineHeight = 15.sp)
             }
             if (catalog.status == "loading") ChillerIconButton(Icons.Outlined.Close, "Отменить загрузку списка", onCancelRefresh)
             else ChillerIconButton(Icons.Outlined.Refresh, "Обновить список моделей", onRefresh, enabled = !running)
@@ -403,9 +404,7 @@ private fun ModelPanel(
         Column(Modifier.heightIn(max = 210.dp).verticalScroll(rememberScrollState())) {
             shown.forEach { id ->
                 val source = when { id == model -> null; id in discovered -> "API"; else -> "вручную" }
-                Hint(modelDetail(id, catalog)) {
-                    ChillerControl(modelLabel(id), { onModel(id); onClose() }, Modifier.fillMaxWidth(), icon = if (id == model) Icons.Outlined.Check else null, trailing = source)
-                }
+                ModelRow(modelLabel(id), modelSubtitle(id, catalog), selected = id == model, source = source) { onModel(id); onClose() }
             }
             if (shown.isEmpty() && known.isNotEmpty()) {
                 Text("Ничего не найдено по запросу «$filter».", color = c.muted, fontSize = 11.sp, modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp))
@@ -425,7 +424,7 @@ private fun ModelPanel(
 @Composable
 private fun ComposerToolbar(
     mode: ExecutionMode, onMode: (ExecutionMode) -> Unit, model: String, running: Boolean,
-    pending: Boolean, draftNotEmpty: Boolean, contextNote: String?, modelMenuOpen: Boolean, onToggleModel: () -> Unit,
+    pending: Boolean, draftNotEmpty: Boolean, modelMenuOpen: Boolean, onToggleModel: () -> Unit,
     allowProcesses: Boolean, onAllow: (Boolean) -> Unit, onSend: () -> Unit, onStop: () -> Unit,
 ) {
     val c = LocalChillerPalette.current
@@ -442,9 +441,7 @@ private fun ComposerToolbar(
                     ChillerControl(if (mode == ExecutionMode.PLAN) "План" else "Изменения", { modeMenu = !modeMenu }, icon = if (mode == ExecutionMode.PLAN) Icons.Outlined.Lightbulb else Icons.Outlined.Edit, enabled = !running)
                 }
                 Box {
-                    Hint(contextNote?.let { "$model\n$it" } ?: model) {
-                        ChillerControl(friendlyModel(model), onToggleModel, enabled = !running, trailing = "⌄", inlineTrailing = true, style = if (modelMenuOpen) ControlStyle.SELECTED else ControlStyle.QUIET)
-                    }
+                    ChillerControl(friendlyModel(model), onToggleModel, enabled = !running, trailing = "⌄", inlineTrailing = true, style = if (modelMenuOpen) ControlStyle.SELECTED else ControlStyle.QUIET)
                 }
                 ChillerIconButton(if (running && !pending) Icons.Outlined.Stop else Icons.Outlined.ArrowUpward, if (pending) "Сохранение сообщения" else if (running) "Остановить" else "Отправить", if (running && !pending) onStop else onSend, enabled = !pending && (running || draftNotEmpty), primary = true)
             },
@@ -519,15 +516,34 @@ private fun catalogLine(catalog: ModelCatalogState, configured: Boolean): String
     else -> if (configured) "Список не загружен" else "Ключ не задан"
 }
 
-/** Tooltip text: exact model id plus server-declared metadata when the catalog returned it. */
-private fun modelDetail(id: String, catalog: ModelCatalogState): String {
-    val model = catalog.models.firstOrNull { it.id == id } ?: return id
+/** Secondary line for a row: the exact id when the label is friendly, plus declared limits. */
+private fun modelSubtitle(id: String, catalog: ModelCatalogState): String? {
+    val model = catalog.models.firstOrNull { it.id == id }
     val parts = buildList {
-        model.displayName?.takeIf { it != id }?.let(::add)
-        model.contextWindow?.let { add("контекст: ${formatTokens(it)}") }
-        model.maxOutputTokens?.let { add("вывод: ${formatTokens(it)}") }
+        if (modelLabel(id) != id) add(id)
+        model?.contextWindow?.let { add("контекст: ${formatTokens(it)}") }
+        model?.maxOutputTokens?.let { add("вывод: ${formatTokens(it)}") }
     }
-    return if (parts.isEmpty()) id else "$id\n${parts.joinToString(" · ")}"
+    return parts.takeIf { it.isNotEmpty() }?.joinToString(" · ")
+}
+
+@Composable
+private fun ModelRow(label: String, subtitle: String?, selected: Boolean, source: String?, onClick: () -> Unit) {
+    val c = LocalChillerPalette.current
+    val interaction = remember { MutableInteractionSource() }
+    Row(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(7.dp))
+            .clickable(interactionSource = interaction, indication = null, role = Role.Button, onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 5.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.width(18.dp)) { if (selected) Icon(Icons.Outlined.Check, null, Modifier.size(15.dp), tint = c.text) }
+        Column(Modifier.weight(1f)) {
+            Text(label, color = c.text, fontSize = 12.sp, lineHeight = 17.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            subtitle?.let { Text(it, color = c.faint, fontSize = 10.sp, lineHeight = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+        }
+        source?.let { Text(it, color = c.faint, fontSize = 10.sp, modifier = Modifier.padding(start = 8.dp)) }
+    }
 }
 
 private fun formatTokens(value: Int): String = if (value >= 1_000) "${(value + 500) / 1_000}k" else value.toString()
