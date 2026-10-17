@@ -24,7 +24,7 @@ import java.nio.file.Path
 import java.nio.file.StandardCopyOption
 
 @Serializable
-data class DesktopSettings(val baseUrl: String = "https://api.deepseek.com", val model: String = "deepseek-flash", val thinking: Boolean = false, val workspace: String? = null, val rememberedModels: Map<String, List<String>> = emptyMap())
+data class DesktopSettings(val baseUrl: String = "https://api.deepseek.com", val model: String = "deepseek-flash", val thinking: Boolean = false, val workspace: String? = null, val rememberedModels: Map<String, List<String>> = emptyMap(), val recentWorkspaces: List<String> = emptyList())
 data class SendReceipt(val accepted: Boolean, val sessionId: String, val clientRequestId: String, val reason: String? = null)
 data class ConnectionState(val status: String = "unverified", val message: String = "", val checkedAt: String? = null)
 data class ModelCatalogState(
@@ -241,7 +241,9 @@ class DesktopController(private val directory: Path, initialCredential: String? 
         try {
             val canonical = withContext(Dispatchers.IO) { path.toRealPath() }
             require(Files.isDirectory(canonical))
-            val settings = _state.value.settings.copy(workspace = canonical.toString())
+            val current = _state.value.settings
+            val recent = (listOf(canonical.toString()) + current.recentWorkspaces).distinct().take(MAX_RECENT_WORKSPACES)
+            val settings = current.copy(workspace = canonical.toString(), recentWorkspaces = recent)
             resetEngine()
             _state.update { it.copy(settings = settings, sessionId = newId(), run = RunState()) }
             saveSettings(settings)
@@ -434,5 +436,5 @@ class DesktopController(private val directory: Path, initialCredential: String? 
         else -> message
     }
 
-    private companion object { const val MAX_MODEL_LENGTH = 200 }
+    private companion object { const val MAX_MODEL_LENGTH = 200; const val MAX_RECENT_WORKSPACES = 6 }
 }

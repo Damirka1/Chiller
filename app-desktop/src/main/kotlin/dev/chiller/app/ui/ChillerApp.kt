@@ -87,6 +87,7 @@ fun ChillerApp(
     onExportSession: (String, String) -> Unit = { _, _ -> },
     connection: ConnectionState = ConnectionState(), onCheckConnection: () -> Unit = {}, onCancelConnection: () -> Unit = {},
     catalog: ModelCatalogState = ModelCatalogState(), onRefreshModels: () -> Unit = {}, onCancelCatalogRefresh: () -> Unit = {},
+    recentWorkspaces: List<String> = emptyList(), onOpenWorkspace: (String) -> Unit = {},
 ) {
     val systemDark = isSystemInDarkTheme()
     var view by remember { mutableStateOf(preferences) }
@@ -150,7 +151,7 @@ fun ChillerApp(
     LaunchedEffect(Unit) { rootFocus.requestFocus() }
     ChillerTheme(darkTheme = dark, reducedMotion = reducedMotion, compact = compactDensity) {
         val c = LocalChillerPalette.current
-        BoxWithConstraints(Modifier.fillMaxSize().background(c.canvas).focusRequester(rootFocus).onPreviewKeyEvent {
+        BoxWithConstraints(Modifier.fillMaxSize().background(c.canvas).focusRequester(rootFocus).chillerKeyboardFocusTracking().onPreviewKeyEvent {
             if (it.type == KeyEventType.KeyDown && (it.isMetaPressed || it.isCtrlPressed)) {
                 when (it.key) {
                     Key.Enter -> { handleAction(DesktopAction.SEND); true }
@@ -176,21 +177,13 @@ fun ChillerApp(
                             if (!(compact && layout == WorkspaceLayout.STUDIO && showCompactChanges)) {
                                 Column(Modifier.weight(1f).fillMaxHeight()) {
                                     if (empty) {
-                                        Box(Modifier.weight(1f).fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
-                                            Column(Modifier.widthIn(max = 760.dp).fillMaxWidth().padding(bottom = 12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                                                ChillerMark(Modifier.size(34.dp), c.faint)
-                                                Spacer(Modifier.height(22.dp))
-                                                Text(if (workspacePath == null) "Что будем создавать?" else "Что сделаем в ${workspacePath.substringAfterLast('/')}?", fontSize = 26.sp, lineHeight = 34.sp, letterSpacing = (-.6).sp, color = c.text, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
-                                                Spacer(Modifier.height(10.dp))
-                                                Text(if (workspacePath == null) "Выберите проект или начните с идеи" else "От идеи до работающего кода — вместе с Chiller", color = c.muted, fontSize = 13.sp, lineHeight = 20.sp)
-                                                Spacer(Modifier.height(20.dp))
-                                                if (workspacePath == null) ChillerControl("Открыть проект", onChooseWorkspace, icon = Icons.Outlined.FolderOpen, style = ControlStyle.OUTLINE)
-                                                else Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                                    ChillerControl("Разобраться в проекте", { updateDraft("Помоги разобраться в структуре и назначении этого проекта.") }, icon = Icons.Outlined.Search)
-                                                    ChillerControl("Найти ошибку", { updateDraft("Помоги найти и исправить ошибку в проекте.") }, icon = Icons.Outlined.BugReport)
-                                                }
-                                            }
-                                        }
+                                        val (line, color) = connectionSummary(connection, apiKeyConfigured)
+                                        StartScreen(
+                                            workspacePath, recentWorkspaces.filter { it != workspacePath }, friendlyModel(providerModel), line, color,
+                                            onOpenFolder = onChooseWorkspace, onOpenPath = { if (!active) onOpenWorkspace(it) },
+                                            onStarter = { starter -> updateDraft(starter.prompt); if (starter.needsEdits) mode = ExecutionMode.WORKSPACE_EDIT },
+                                            modifier = Modifier.weight(1f).fillMaxWidth(),
+                                        )
                                     } else {
                                         Conversation(state, reducedMotion, onAnswerQuestion, onUndo, !active, { text -> updateDraft(text); sendError = null }, Modifier.weight(1f).fillMaxWidth())
                                     }
@@ -786,6 +779,18 @@ private fun SettingRow(title: String, detail: String, value: Boolean, onChange: 
 internal fun formatCheckTime(value: String?): String = runCatching {
     java.time.Instant.parse(value).atZone(java.time.ZoneId.systemDefault()).format(java.time.format.DateTimeFormatter.ofPattern("dd.MM HH:mm"))
 }.getOrDefault(value.orEmpty())
+/** One line and a dot color describing whether the model can be reached. */
+@Composable
+internal fun connectionSummary(connection: ConnectionState, configured: Boolean): Pair<String, androidx.compose.ui.graphics.Color> {
+    val c = LocalChillerPalette.current
+    return when (connection.status) {
+        "verified" -> "подключение проверено" to c.positive
+        "checking" -> "проверяю подключение…" to c.muted
+        "failed" -> "ошибка подключения" to c.negative
+        else -> if (configured) "ключ задан, не проверено" to c.faint else "ключ API не задан" to c.negative
+    }
+}
+
 private fun friendlyModel(model: String) = modelLabel(model).ifBlank { "Выбрать модель" }
 
 private fun statusLabel(status: String) = when (status) { "preparing" -> "Подготовка…"; "streaming" -> "Работает…"; "executing" -> "Выполняет действие…"; else -> "" }
