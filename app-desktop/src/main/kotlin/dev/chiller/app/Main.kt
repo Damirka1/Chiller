@@ -11,6 +11,9 @@ import dev.chiller.app.di.DesktopController
 import dev.chiller.app.di.LocalCredentials
 import dev.chiller.app.di.BuildStamp
 import dev.chiller.app.ui.ChillerApp
+import dev.chiller.app.ui.TitleBarSpec
+import androidx.compose.foundation.window.WindowDraggableArea
+import androidx.compose.foundation.layout.fillMaxSize
 import dev.chiller.app.ui.DesktopAction
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -29,13 +32,21 @@ fun main() = application {
     val active = state.run.status in setOf("preparing", "streaming", "executing")
     LaunchedEffect(Unit) { controller.initialize() }
     Window(
-        title = "Chiller · сборка ${BuildStamp.value}",
+        title = "Chiller",
         state = rememberWindowState(
             width = (if (java.lang.Boolean.getBoolean("chiller.offlinePreview")) System.getenv("CHILLER_PREVIEW_WIDTH")?.toIntOrNull()?.coerceIn(800, 1800) ?: 1280 else 1280).dp,
             height = (if (java.lang.Boolean.getBoolean("chiller.offlinePreview")) System.getenv("CHILLER_PREVIEW_HEIGHT")?.toIntOrNull()?.coerceIn(600, 1200) ?: 860 else 860).dp,
         ),
         onCloseRequest = { scope.launch { controller.close(); exitApplication() } },
     ) {
+        // Codex/Claude-style window: transparent title bar, content under it, traffic lights over the sidebar.
+        // The title stays set for Mission Control and the Window menu but is not drawn.
+        if (mac) LaunchedEffect(Unit) {
+            window.rootPane.putClientProperty("apple.awt.fullWindowContent", true)
+            window.rootPane.putClientProperty("apple.awt.transparentTitleBar", true)
+            window.rootPane.putClientProperty("apple.awt.windowTitleVisible", false)
+        }
+        val titleBar = remember(mac) { if (!mac) null else TitleBarSpec(dragArea = { modifier -> WindowDraggableArea(modifier) { androidx.compose.foundation.layout.Box(androidx.compose.ui.Modifier.fillMaxSize()) } }) }
         val chooseWorkspace = {
             chooseDirectory(window, state.settings.workspace, mac)?.let { path -> scope.launch { controller.chooseWorkspace(path) } }
             Unit
@@ -76,6 +87,7 @@ fun main() = application {
             onSelectSession = { scope.launch { controller.selectSession(it) } },
             onChooseWorkspace = chooseWorkspace,
             recentWorkspaces = state.settings.recentWorkspaces,
+            titleBar = titleBar, buildStamp = BuildStamp.value,
             onOpenTrace = {
                 val trace = controller.tracePath(state.sessionId).toFile()
                 runCatching {

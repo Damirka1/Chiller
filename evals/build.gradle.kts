@@ -8,6 +8,8 @@ dependencies {
     implementation(project(":runtime"))
     implementation(project(":tools"))
     implementation(project(":sessions"))
+    // Ktor logs through slf4j-api; without a binding SLF4J prints a startup warning. Logging stays off.
+    runtimeOnly("org.slf4j:slf4j-nop:2.0.17")
 }
 tasks.register<JavaExec>("offlineSmoke") {
     group = "verification"

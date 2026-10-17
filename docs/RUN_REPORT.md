@@ -148,3 +148,9 @@ User explicitly resumed after limits reset. Read-only audit began at14:43 Asia/A
 - Live `deepseek-flash`, one attempt per task: **8/8 passed**, 32 rounds, 38 tool calls, 0 failed calls, 55.9 s, prompt 75 299 / completion 3 798 / cached 61 440 tokens. Tools used: read_file 7, list_files 6, search_text 5, run_process 4, replace_text 4, edit_file 1, create_file 1; `update_plan` was not used on these short tasks.
 - Not verified: Gemma/vLLM (no server), keyless endpoints in the desktop app, harder or longer tasks, repeat variance, UI click-through of the new run-tab items.
 
+
+## macOS title bar and logging binding — 17 October
+
+- macOS window uses full-window content with a transparent, untitled title bar (`apple.awt.fullWindowContent`, `apple.awt.transparentTitleBar`, `apple.awt.windowTitleVisible`). The traffic lights float over a 30 dp draggable strip at the top of the sidebar; with the sidebar hidden the toolbar leaves 78 dp for them. Empty toolbar space drags the window (Compose `WindowDraggableArea`). The build stamp moved from the title to the Settings footer.
+- Dependency: `org.slf4j:slf4j-nop:2.0.17` (MIT) as runtimeOnly in app-desktop and evals, silencing the SLF4J no-binding warning from Ktor; logging stays off.
+- Not verified: the window appearance itself (no screen-capture permission in this session); double-click-to-zoom on the hidden title bar is not implemented.

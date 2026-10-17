@@ -67,6 +67,14 @@ import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.serialization.json.*
 
 enum class WorkspaceLayout { FOCUS, STUDIO }
+
+/** Geometry and drag behaviour of a transparent native title bar (macOS full-window content). */
+class TitleBarSpec(
+    val height: androidx.compose.ui.unit.Dp = 30.dp,
+    val trafficLightsWidth: androidx.compose.ui.unit.Dp = 78.dp,
+    /** Renders an area that moves the window when dragged, e.g. Compose's WindowDraggableArea. */
+    val dragArea: @Composable (Modifier) -> Unit,
+)
 enum class DesktopAction { NEW_CHAT, SEND, SETTINGS, STOP, FOCUS, STUDIO, SIDEBAR }
 
 @Composable
@@ -89,6 +97,9 @@ fun ChillerApp(
     catalog: ModelCatalogState = ModelCatalogState(), onRefreshModels: () -> Unit = {}, onCancelCatalogRefresh: () -> Unit = {},
     recentWorkspaces: List<String> = emptyList(), onOpenWorkspace: (String) -> Unit = {},
     onOpenTrace: (() -> Unit)? = null,
+    /** macOS full-window content: the native title bar is transparent and the traffic lights float over the app. */
+    titleBar: TitleBarSpec? = null,
+    buildStamp: String? = null,
 ) {
     val systemDark = isSystemInDarkTheme()
     var view by remember { mutableStateOf(preferences) }
@@ -166,12 +177,13 @@ fun ChillerApp(
             Row(Modifier.fillMaxSize()) {
                 if (showSidebar) Sidebar(sessions, selectedSessionId, workspacePath, apiKeyConfigured, !active, onNewSession, onSelectSession, onChooseWorkspace,
                     onSettings = { settings = true }, onTheme = { updateView(view.copy(theme = if (dark) "light" else "dark")) }, onRename = { renameTarget = it }, onExport = onExportSession, connection = connection, width = 248f * density.fontScale.coerceIn(1f, 1.2f),
-                    running = active, searchFocus = sidebarSearch)
+                    running = active, searchFocus = sidebarSearch, titleBar = titleBar)
                 Box(Modifier.width(1.dp).fillMaxHeight().background(c.border.copy(alpha = .7f)))
                 BoxWithConstraints(Modifier.weight(1f).fillMaxHeight()) {
                     val compact = maxWidth < 860.dp || density.fontScale > 1.3f
                     Column(Modifier.fillMaxSize()) {
                         Toolbar(
+                            titleBar, leadingInset = titleBar != null && !showSidebar,
                             sessions.firstOrNull { it.id == selectedSessionId }?.title, workspacePath, layout, active, state.status,
                             onLayout = { updateView(view.copy(layout = it.name.lowercase())) }, onSidebar = { sidebar = !sidebar }, onSettings = { settings = true },
                             canConfigure = !active, compact = compact, compactChanges = showCompactChanges,
@@ -219,7 +231,7 @@ fun ChillerApp(
                 }
             }
         }
-        if (settings && !active) Settings(providerBaseUrl, providerModel, thinkingEnabled, apiKeyConfigured, allowProcesses,
+        if (settings && !active) Settings(providerBaseUrl, providerModel, thinkingEnabled, apiKeyConfigured, allowProcesses, buildStamp,
             view, connection, onCheckConnection, onCancelConnection, { settings = false }) { url, model, thinking, key, allow, nextView ->
             onAllowProcessesChange(allow); updateView(nextView)
             if (url != providerBaseUrl || model != providerModel || thinking != thinkingEnabled || key != null) {
@@ -239,13 +251,15 @@ fun ChillerApp(
 private fun Sidebar(
     sessions: List<SessionInfo>, selected: String?, workspace: String?, connected: Boolean, enabled: Boolean,
     onNew: () -> Unit, onSelect: (String) -> Unit, onChoose: () -> Unit, onSettings: () -> Unit, onTheme: () -> Unit, onRename: (SessionInfo) -> Unit, onExport: (String, String) -> Unit, connection: ConnectionState, width: Float,
-    running: Boolean, searchFocus: FocusRequester,
+    running: Boolean, searchFocus: FocusRequester, titleBar: TitleBarSpec?,
 ) {
     val c = LocalChillerPalette.current
     var query by remember { mutableStateOf("") }
     val shown = filterSessions(sessions, query)
     Column(Modifier.width(width.dp).fillMaxHeight().background(c.sidebar).padding(horizontal = 12.dp)) {
-        Row(Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        // Room for the floating traffic lights; the strip moves the window like a title bar.
+        if (titleBar != null) titleBar.dragArea(Modifier.fillMaxWidth().height(titleBar.height))
+        Row(Modifier.fillMaxWidth().height(if (titleBar != null) 44.dp else 56.dp).padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             ChillerMark(Modifier.size(23.dp), c.accent); Spacer(Modifier.width(9.dp))
             Text("Chiller", color = c.text, fontSize = 15.sp, fontWeight = FontWeight.Medium, letterSpacing = (-.4f).sp)
             Spacer(Modifier.weight(1f))
@@ -356,9 +370,12 @@ private fun SessionRow(session: SessionInfo, selected: Boolean, running: Boolean
 }
 
 @Composable
-private fun Toolbar(title: String?, workspace: String?, layout: WorkspaceLayout, active: Boolean, status: String, onLayout: (WorkspaceLayout) -> Unit, onSidebar: () -> Unit, onSettings: () -> Unit, canConfigure: Boolean, compact: Boolean, compactChanges: Boolean, onCompactChanges: () -> Unit) {
+private fun Toolbar(titleBar: TitleBarSpec?, leadingInset: Boolean, title: String?, workspace: String?, layout: WorkspaceLayout, active: Boolean, status: String, onLayout: (WorkspaceLayout) -> Unit, onSidebar: () -> Unit, onSettings: () -> Unit, canConfigure: Boolean, compact: Boolean, compactChanges: Boolean, onCompactChanges: () -> Unit) {
     val c = LocalChillerPalette.current
-    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(horizontal = 15.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+    // Empty toolbar space drags the window; controls on top keep their clicks.
+    Box(Modifier.fillMaxWidth()) {
+    titleBar?.dragArea?.invoke(Modifier.matchParentSize())
+    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(start = if (leadingInset) titleBar!!.trafficLightsWidth else 15.dp, end = 15.dp, top = 4.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
         ChillerIconButton(Icons.Outlined.VerticalSplit, "Боковая панель", onSidebar)
         Spacer(Modifier.width(10.dp))
         Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
@@ -377,6 +394,7 @@ private fun Toolbar(title: String?, workspace: String?, layout: WorkspaceLayout,
         }
         Spacer(Modifier.width(7.dp))
         ChillerIconButton(Icons.Outlined.Tune, "Настройки подключения", onSettings, enabled = canConfigure)
+    }
     }
 }
 
@@ -680,7 +698,7 @@ private fun Question(question: UserQuestion, onAnswer: (String) -> Unit, canAnsw
 }
 
 @Composable
-private fun Settings(url: String, model: String, thinking: Boolean, configured: Boolean, allow: Boolean,
+private fun Settings(url: String, model: String, thinking: Boolean, configured: Boolean, allow: Boolean, buildStamp: String?,
     preferences: UiPreferences, connection: ConnectionState, onCheck: () -> Unit, onCancelCheck: () -> Unit,
     onDismiss: () -> Unit, onSave: (String, String, Boolean, String?, Boolean, UiPreferences) -> Unit) {
     val c = LocalChillerPalette.current
@@ -739,7 +757,8 @@ private fun Settings(url: String, model: String, thinking: Boolean, configured: 
                 }
                 else -> SettingRow("Разрешить команды", "Процессы доступны в режиме изменений. Это не OS sandbox.", nextAllow) { nextAllow = it }
             }
-            Row(Modifier.fillMaxWidth().padding(top = 4.dp), horizontalArrangement = Arrangement.End) {
+            Row(Modifier.fillMaxWidth().padding(top = 4.dp), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
+                buildStamp?.let { Text("Сборка $it", color = c.faint, fontSize = 11.sp, modifier = Modifier.weight(1f)) }
                 ChillerControl("Отмена", onDismiss)
                 Spacer(Modifier.width(8.dp))
                 ChillerControl("Применить", { onSave(nextUrl.trim(), nextModel.trim(), nextThinking, if (clear) "" else key.takeIf { it.isNotBlank() }, nextAllow, nextView); key = "" }, style = ControlStyle.PRIMARY, enabled = nextUrl.isNotBlank() && nextModel.isNotBlank())
