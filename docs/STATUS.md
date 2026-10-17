@@ -9,7 +9,7 @@
 
 | Проверка | Команда | Результат |
 |---|---|---|
-| Юнит-тесты | `./gradlew check` | 75 тестов, 0 падений, 0 skipped |
+| Юнит-тесты | `./gradlew check` | 138 тестов, 0 падений, 0 skipped |
 | Offline smoke | `./gradlew :evals:offlineSmoke` | пройден: search → read → chained edit → реальные Python-проверки → final → restart → stale-отказ; все 8 eval-проверок падают на нетронутой задаче и проходят на эталоне |
 | Live eval | `./gradlew :evals:liveEval` | `deepseek-flash`, 17.10: **8/8**, 1 прогон на задачу; 32 раунда, 38 tool-вызовов, 0 ошибок, 55.9 с; prompt 75.3k, completion 3.8k, cached 61.4k. Задачи простые, n=1 — это базовая линия, не статистика |
 | Live DeepSeek | `./gradlew :evals:liveDeepSeekSmoke` | пройден дважды на финальном коде: 5 раундов, 6 tool-вызовов, 0 ошибок, 9.1–9.8 с; prompt ~10.8k, completion 576–634, cached 8 192–9 600 |
