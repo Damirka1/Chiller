@@ -63,8 +63,10 @@ internal fun FilePresentationCard(file: FilePresentation, onPreviewFile: suspend
                 modifier = Modifier.fillMaxWidth().heightIn(max = 380.dp)
                     .aspectRatio(image.width.toFloat() / image.height)
                     .clickable(role = Role.Button, onClickLabel = "Открыть изображение") { viewing = true })
+            // The hover highlight stops at the image: a divider and some air before the caption.
+            Box(Modifier.fillMaxWidth().height(1.dp).background(c.border))
         }
-        Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = if (bitmap != null) 10.dp else 12.dp, bottom = 10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Icon(if (imageMime) Icons.Outlined.Image else Icons.Outlined.InsertDriveFile, null, Modifier.size(18.dp), tint = c.muted)
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                 Text(file.name, color = c.text, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)

@@ -103,6 +103,12 @@ fun main(args: Array<String>) {
                     SwingUtilities.invokeAndWait { scene.render(frame * 100_000_000L).close() }
                     Thread.sleep(25)
                 }
+                // Pointer over the table: its copy button is part of the accepted look.
+                SwingUtilities.invokeAndWait {
+                    scene.sendPointerEvent(androidx.compose.ui.input.pointer.PointerEventType.Enter, androidx.compose.ui.geometry.Offset(160f, 90f))
+                    scene.sendPointerEvent(androidx.compose.ui.input.pointer.PointerEventType.Move, androidx.compose.ui.geometry.Offset(160f, 92f))
+                    scene.render(1_900_000_000L).close()
+                }
                 SwingUtilities.invokeAndWait {
                     scene.render(2_000_000_000L).use { rendered ->
                         rendered.encodeToData()!!.use { Files.write(output.resolve("${if (dark) "dark" else "light"}-$width.png"), it.bytes) }

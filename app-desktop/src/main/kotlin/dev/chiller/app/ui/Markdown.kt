@@ -6,10 +6,22 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.hoverable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Check
+import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
@@ -21,6 +33,7 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.chiller.design.ChillerIconButton
 import dev.chiller.design.ChillerPalette
 import dev.chiller.design.LocalChillerPalette
 
@@ -213,8 +226,58 @@ fun MarkdownText(text: String, tail: AnnotatedString? = null) {
     }
 }
 
+/** A cell's visible text without the thin spaces that pad inline code on screen. */
+private fun plainCell(cell: String): String = inlineMarkdownPlain(cell).replace(" ", "").replace(Regex(" {2,}"), " ").trim()
+
+/** Tab-separated table: pastes as cells into spreadsheets and stays readable as text. */
+fun tableAsTsv(table: MdBlock.Table): String = (listOf(table.headers) + table.rows).joinToString("\n") { row ->
+    row.joinToString("\t") { cell -> plainCell(cell).replace(Regex("[\t\r\n]+"), " ") }
+}
+
+/** The same table as HTML, which spreadsheets and word processors paste as a real table. */
+fun tableAsHtml(table: MdBlock.Table): String = buildString {
+    fun esc(cell: String) = plainCell(cell).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    append("<table><thead><tr>"); table.headers.forEach { append("<th>").append(esc(it)).append("</th>") }; append("</tr></thead><tbody>")
+    table.rows.forEach { row -> append("<tr>"); row.forEach { append("<td>").append(esc(it)).append("</td>") }; append("</tr>") }
+    append("</tbody></table>")
+}
+
+/** Puts both formats on the system clipboard; the pasting app picks the richest one it understands. */
+private fun copyTable(table: MdBlock.Table): Boolean = runCatching {
+    val tsv = tableAsTsv(table); val html = tableAsHtml(table)
+    val htmlFlavor = java.awt.datatransfer.DataFlavor("text/html;class=java.lang.String")
+    val transferable = object : java.awt.datatransfer.Transferable {
+        override fun getTransferDataFlavors() = arrayOf(htmlFlavor, java.awt.datatransfer.DataFlavor.stringFlavor)
+        override fun isDataFlavorSupported(flavor: java.awt.datatransfer.DataFlavor) = flavor in transferDataFlavors
+        override fun getTransferData(flavor: java.awt.datatransfer.DataFlavor): Any = when (flavor) {
+            htmlFlavor -> html
+            java.awt.datatransfer.DataFlavor.stringFlavor -> tsv
+            else -> throw java.awt.datatransfer.UnsupportedFlavorException(flavor)
+        }
+    }
+    java.awt.Toolkit.getDefaultToolkit().systemClipboard.setContents(transferable, null)
+    true
+}.getOrDefault(false)
+
 @Composable
 private fun MarkdownTable(table: MdBlock.Table, c: ChillerPalette) {
+    val hover = remember { MutableInteractionSource() }
+    val hovered by hover.collectIsHoveredAsState()
+    var copied by remember(table) { mutableStateOf(false) }
+    LaunchedEffect(copied) { if (copied) { kotlinx.coroutines.delay(1600); copied = false } }
+    // Copy sits right beside the table's top corner in its own slot: it never covers a cell and the layout
+    // does not shift when it appears on hover.
+    Row(Modifier.hoverable(hover), verticalAlignment = Alignment.Top) {
+        Box(Modifier.weight(1f, fill = false)) { TableGrid(table, c) }
+        Spacer(Modifier.width(4.dp))
+        Box(Modifier.size(26.dp).alpha(if (hovered || copied) 1f else 0f)) {
+            ChillerIconButton(if (copied) Icons.Outlined.Check else Icons.Outlined.ContentCopy, if (copied) "Скопировано" else "Копировать таблицу", { copied = copyTable(table) }, Modifier.size(26.dp))
+        }
+    }
+}
+
+@Composable
+private fun TableGrid(table: MdBlock.Table, c: ChillerPalette) {
     val allRows = listOf(table.headers) + table.rows
     val widths = table.headers.indices.map { column ->
         val longestLine = allRows.maxOf { row -> row[column].lineSequence().maxOfOrNull(String::length) ?: 0 }
@@ -222,7 +285,7 @@ private fun MarkdownTable(table: MdBlock.Table, c: ChillerPalette) {
         (longestLine * 7.2f + 20f).coerceIn(112f, 280f).dp
     }
     val tableWidth = widths.fold(0.dp) { total, width -> total + width }
-    Column(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
+    Column(Modifier.horizontalScroll(rememberScrollState())) {
         allRows.forEachIndexed { rowIndex, row ->
             Row(Modifier.height(IntrinsicSize.Min)) {
                 row.forEachIndexed { column, value ->

@@ -70,4 +70,15 @@ class MarkdownTest {
             parseMarkdownBlocks("a | b | c\n--- | nope | row"),
         )
     }
+
+    @Test fun `tables copy as TSV for text and HTML for spreadsheets`() {
+        val table = parseMarkdownBlocks("""| Дата | День (max) | Заметка |
+            ||---|---:|---|
+            || 17.10.2026 | +9.5 °C | **тепло** <ясно> |
+            || 23.10.2026 | +3.7 °C | `t<0` & ветер |""".trimMargin()).single() as MdBlock.Table
+        assertEquals("Дата\tДень (max)\tЗаметка\n17.10.2026\t+9.5 °C\tтепло <ясно>\n23.10.2026\t+3.7 °C\tt<0 & ветер", tableAsTsv(table))
+        assertEquals("<table><thead><tr><th>Дата</th><th>День (max)</th><th>Заметка</th></tr></thead><tbody>" +
+            "<tr><td>17.10.2026</td><td>+9.5 °C</td><td>тепло &lt;ясно&gt;</td></tr>" +
+            "<tr><td>23.10.2026</td><td>+3.7 °C</td><td>t&lt;0 &amp; ветер</td></tr></tbody></table>", tableAsHtml(table))
+    }
 }
