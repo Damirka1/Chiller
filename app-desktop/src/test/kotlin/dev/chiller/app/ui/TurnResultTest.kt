@@ -59,6 +59,11 @@ class TurnResultTest {
         assertTrue(claimsVerification("Проверил: всё работает.") && !claimsVerification("Без запуска проверок."))
     }
 
+    @Test fun `tab alternates plan and edit modes`() {
+        assertEquals(dev.chiller.contracts.ExecutionMode.WORKSPACE_EDIT, toggledMode(dev.chiller.contracts.ExecutionMode.PLAN))
+        assertEquals(dev.chiller.contracts.ExecutionMode.PLAN, toggledMode(dev.chiller.contracts.ExecutionMode.WORKSPACE_EDIT))
+    }
+
     @Test fun `only the latest turn counts and a plain answer is empty`() {
         val messages = run("old", """["pytest"]""", "exited", 1) + listOf(AgentMessage("user", "what is this?"), AgentMessage("assistant", "A parser."))
         assertTrue(turnResult(RunState(status = "completed", messages = messages)).isEmpty)

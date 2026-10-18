@@ -820,6 +820,11 @@ private fun Composer(
                             if (clipboard != null) importTransferable(clipboard)
                             return@onPreviewKeyEvent clipboard != null
                         }
+                        // Tab (and Shift+Tab) switches Plan / Edit; inside the @ menu Tab still inserts the file.
+                        if (event.type == KeyEventType.KeyDown && event.key == Key.Tab && matches.isEmpty() && !event.isCtrlPressed && !event.isMetaPressed && !event.isAltPressed) {
+                            if (!running) onMode(toggledMode(mode))
+                            return@onPreviewKeyEvent true
+                        }
                         if (matches.isEmpty() || event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                         when (event.key) {
                             Key.DirectionDown -> { highlight = (highlight + 1) % matches.size; true }
@@ -980,6 +985,8 @@ private fun ComposerToolbar(
                                 ChillerToggle(allowProcesses, { onAllow(it) }, "Команды процессов", enabled = !running)
                             }
                         }
+                        MenuDivider()
+                        Text("Tab в поле ввода — переключить режим", color = c.faint, fontSize = 11.sp, lineHeight = 15.sp, modifier = Modifier.padding(start = 16.dp, end = 14.dp, top = 2.dp))
                         Spacer(Modifier.height(6.dp))
                     }
                 }
@@ -1465,3 +1472,6 @@ internal fun toolLabel(name: String) = when (name) {
     "move_file" -> "Перемещение"; "delete_file" -> "Удаление"; "run_process" -> "Команда"; "read_process" -> "Вывод"; "stop_process" -> "Остановка"
     "read_artifact" -> "Результат"; "ask_user" -> "Вопрос"; "undo" -> "Откат"; else -> name
 }
+
+/** Plan and Edit alternate; Tab in the composer calls this. */
+internal fun toggledMode(mode: ExecutionMode): ExecutionMode = if (mode == ExecutionMode.PLAN) ExecutionMode.WORKSPACE_EDIT else ExecutionMode.PLAN
