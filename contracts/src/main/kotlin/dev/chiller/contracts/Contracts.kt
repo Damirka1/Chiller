@@ -218,6 +218,7 @@ data class RunState(
     val messages: List<AgentMessage> = emptyList(),
     val streamingText: String = "",
     val reasoning: String = "",
+    val recoveryNotice: String? = null,
     val activities: List<Activity> = emptyList(),
     val error: String? = null,
     val question: UserQuestion? = null,

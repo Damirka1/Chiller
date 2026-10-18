@@ -64,6 +64,7 @@ private val FILE_EFFECTS = setOf("edit_file", "replace_text", "create_file", "mo
 
 /** Short user-facing state for the current run, derived only from engine state. */
 internal fun runProgressLabel(state: RunState): String? = when {
+    state.recoveryNotice != null && state.status == "streaming" -> state.recoveryNotice
     state.question != null -> "Ожидает вашего ответа"
     state.status == "preparing" -> "Подготавливает запрос…"
     state.status == "streaming" && state.streamingText.isBlank() -> "Ждёт ответа модели…"
@@ -476,4 +477,12 @@ private fun MetricGrid(items: List<Pair<String, String>>) {
 private fun runStatusLabel(status: String) = when (status) {
     "preparing" -> "Подготовка"; "streaming" -> "Модель отвечает"; "executing" -> "Выполняются действия"
     "completed" -> "Завершён"; "failed" -> "Ошибка"; "cancelled" -> "Остановлен"; "interrupted" -> "Прерван"; else -> "Последний прогон"
+}
+
+internal fun runErrorDescription(error: String): String = when {
+    error.contains("INCOMPLETE_TOOL_CALL") -> "Ответ достиг лимита, и попытки восстановления исчерпаны. Незавершённый вызов не выполнен. Продолжите задачу меньшими частями или увеличьте лимит ответа."
+    error.contains("INCOMPLETE_STREAM") -> "Соединение оборвалось до завершения ответа. Незавершённые вызовы не выполнялись. Проверьте подключение и продолжите задачу."
+    error.contains("current request or newest exchange exceeds") -> "Запрос или последний обмен не помещается в контекст. Сократите запрос либо начните новый диалог с сохранённой памятью задачи."
+    error.contains("Общий бюджет") -> "Бюджет задачи исчерпан. Увеличьте его в настройках агента и продолжите задачу."
+    else -> error
 }

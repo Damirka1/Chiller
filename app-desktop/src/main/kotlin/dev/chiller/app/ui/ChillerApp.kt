@@ -243,7 +243,7 @@ fun ChillerApp(
     val active = pendingSend || state.status in setOf("preparing", "streaming", "executing")
     val demoCompleted = isCompletedDemo(isDemo, state.status)
     val empty = state.messages.none { it.role in setOf("user", "assistant") } && state.activities.isEmpty() && state.error == null
-    val contextNote = state.contextEstimatedTokens?.let { tokens -> "Оценка входа ≈ $tokens токенов${state.contextReportedTokens?.let { "; провайдер: $it" }.orEmpty()}${if (state.droppedContextMessages > 0 || state.prunedContextResults > 0) " · контекст сокращён" else ""}" }
+    val contextNote = state.contextEstimatedTokens?.let { tokens -> "Оценка входа ≈ $tokens токенов${state.contextOutputReserve?.let { "; резерв ответа: $it" }.orEmpty()}${state.contextReportedTokens?.let { "; провайдер: $it" }.orEmpty()}${if (state.droppedContextMessages > 0 || state.prunedContextResults > 0) " · контекст сокращён" else ""}" }
     // "Продолжить" after the step limit: the same task goes on in the current mode, with its history.
     val continueTask: () -> Unit = {
         if (!active && !pendingSend) {
@@ -1162,7 +1162,7 @@ private fun Conversation(state: RunState, reduced: Boolean, onAnswer: (String) -
             state.question?.let { q -> item(key = "question-${q.id}") { Box(entryModifier("question-${q.id}")) { Question(q, onAnswer, state.status != "interrupted") } } }
             state.error?.let { error -> item(key = "error") { Column(entryModifier("error")) { Row(Modifier.fillMaxWidth().padding(8.dp), horizontalArrangement = Arrangement.spacedBy(9.dp)) {
                 Icon(Icons.Outlined.ErrorOutline, null, Modifier.size(16.dp), tint = c.negative)
-                Text(error, color = c.negative, fontSize = 12.sp, lineHeight = 20.sp)
+                Text(runErrorDescription(error), color = c.negative, fontSize = 12.sp, lineHeight = 20.sp)
             }
                 if (isStepLimitError(error)) Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     ChillerControl("Продолжить", onContinue, icon = Icons.Outlined.PlayArrow, style = ControlStyle.OUTLINE)

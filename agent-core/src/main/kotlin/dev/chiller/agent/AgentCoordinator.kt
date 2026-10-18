@@ -100,7 +100,7 @@ class AgentCoordinator(
         }
         val lastEvent = history.lastOrNull()?.type
         val latestHistoryEdit = history.lastOrNull { it.type.startsWith("history.") }?.seq ?: -1
-        val latestRunEvent = history.lastOrNull { it.type.startsWith("run.") && it.type != "run.summary" }
+        val latestRunEvent = history.lastOrNull { it.type in setOf("run.started", "run.completed", "run.failed", "run.cancelled", "run.recovered") }
             ?.takeIf { it.seq > latestHistoryEdit }
         val latestRunSummary = history.lastOrNull { it.type == "run.summary" }
             ?.takeIf {
@@ -182,6 +182,12 @@ class AgentCoordinator(
                     (provider as? RunBudgetProvider)?.beginRun()
                     subagents?.begin(id)
                     withTimeout(10 * 60_000L) { run(text, mode, allowProcesses, allowNetwork, allowScreenshots, attachments, id, onAccepted, stats) }
+                } catch (timeout: TimeoutCancellationException) {
+                    withContext(NonCancellable) {
+                        val message = "Лимит времени задачи (10 минут) достигнут. Проверьте результаты и продолжите задачу."
+                        events.append(sessionId, "run.failed", buildJsonObject { put("runId", id); put("message", message) })
+                        _state.update { it.copy(status = "failed", error = message, streamingText = "", activeModelId = null, runDurationMs = stats.durationMs) }
+                    }
                 } catch (cancelled: CancellationException) {
                     withContext(NonCancellable) {
                         events.append(sessionId, "run.cancelled", buildJsonObject { put("runId", id) })
@@ -305,7 +311,7 @@ class AgentCoordinator(
     }
 
     private suspend fun run(text: String, mode: ExecutionMode, allowProcesses: Boolean, allowNetwork: Boolean, allowScreenshots: Boolean, attachments: List<ComposerAttachment>, id: String, onAccepted: () -> Unit, stats: RunStats) {
-        _state.update { it.copy(status = "preparing", error = null, reasoning = "", streamingText = "", activeModelId = model, usage = TokenUsage(), usageIncomplete = false, toolCalls = 0, failedToolCalls = 0, runDurationMs = null) }
+        _state.update { it.copy(status = "preparing", error = null, recoveryNotice = null, reasoning = "", streamingText = "", activeModelId = model, usage = TokenUsage(), usageIncomplete = false, toolCalls = 0, failedToolCalls = 0, runDurationMs = null) }
         // An interrupted tool group cannot be silently sent back as if it completed.
         val previous = _state.value.messages
         if (unresolvedToolCalls(previous).isNotEmpty()) throw IllegalStateException("Предыдущая операция прервана. Начните новый диалог; неизвестные действия не повторяются.")
@@ -415,10 +421,11 @@ class AgentCoordinator(
                 })
                 if (truncatedText) completion?.let { partial -> appendMessage(partial.copy(origin = MessageOrigin(MessageOriginKind.MODEL, model))) }
                 truncationNotice = AgentMessage("user", if (truncatedCall) TRUNCATED_CALL_NOTICE else TRUNCATED_TEXT_NOTICE)
-                _state.update { it.copy(streamingText = "") }
+                _state.update { it.copy(streamingText = "", recoveryNotice = if (truncatedCall) "Ответ достиг лимита. Незавершённый вызов не выполнен; пробуем меньшими частями ($truncations/$MAX_TRUNCATION_RECOVERIES)." else "Ответ достиг лимита. Продолжаем с места обрыва ($truncations/$MAX_TRUNCATION_RECOVERIES).") }
                 return@repeat
             }
             truncationNotice = null
+            _state.update { it.copy(recoveryNotice = null) }
             val response = completion ?: throw IllegalStateException("Stream interrupted before completion; no tool was executed")
             appendMessage(response.copy(origin = MessageOrigin(MessageOriginKind.MODEL, model)))
             _state.update { it.copy(streamingText = "") }

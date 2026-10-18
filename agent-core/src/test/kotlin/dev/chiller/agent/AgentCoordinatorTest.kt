@@ -586,6 +586,21 @@ class AgentCoordinatorTest {
         assertTrue(f.coordinator.state.value.usageIncomplete)
     }
 
+    @Test fun taskDeadlineIsNotReportedAsUserCancellation() = runTest {
+        val provider = ScriptedProvider { _ -> flow {
+            kotlinx.coroutines.delay(601_000)
+            emit(ModelEvent.Completed(AgentMessage("assistant", "late"), "stop"))
+        } }
+        val events = MemoryEvents()
+        val f = fixture(provider, RecordingTools(), events, StandardTestDispatcher(testScheduler))
+        f.coordinator.send("work", ExecutionMode.WORKSPACE_EDIT)
+        advanceUntilIdle()
+        assertEquals("failed", f.coordinator.state.value.status)
+        assertTrue(f.coordinator.state.value.error.orEmpty().contains("10 минут"))
+        assertTrue(events.records.none { it.type == "run.cancelled" })
+        assertTrue(events.records.any { it.type == "run.failed" })
+    }
+
     @Test fun roundLimitIsConfigurableAndReported() = runTest {
         val provider = ScriptedProvider { _ -> flow {
             emit(ModelEvent.Completed(AgentMessage("assistant", toolCalls = listOf(ToolCall(newId(), "read", "{}"))), "tool_calls"))

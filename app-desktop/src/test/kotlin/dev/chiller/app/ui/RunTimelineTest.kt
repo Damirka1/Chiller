@@ -10,6 +10,12 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 class RunTimelineTest {
+    @Test fun incompleteUsageAndRecoveryAreVisible() {
+        assertTrue(runSummaryParts(RunState(modelRounds = 2, usageIncomplete = true)).contains("расход известен частично"))
+        assertEquals("retrying", runProgressLabel(RunState(status = "streaming", recoveryNotice = "retrying")))
+        assertTrue(runErrorDescription("INCOMPLETE_TOOL_CALL").contains("Незавершённый вызов не выполнен"))
+    }
+
     @Test fun `run progress distinguishes model tool user and terminal states`() {
         assertEquals("Ждёт ответа модели…", runProgressLabel(RunState(status = "streaming")))
         assertEquals("Модель пишет…", runProgressLabel(RunState(status = "streaming", streamingText = "Привет")))
