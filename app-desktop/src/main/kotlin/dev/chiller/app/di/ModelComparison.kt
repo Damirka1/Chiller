@@ -58,13 +58,15 @@ class ModelComparison(private val directory: Path, private val scope: CoroutineS
     private val folder get() = directory.resolve("comparisons")
 
     fun loadHistory() {
-        val records = runCatching {
-            if (!Files.isDirectory(folder)) emptyList() else Files.list(folder).use { files ->
-                files.filter { it.fileName.toString().endsWith(".json") }.toList()
-            }.mapNotNull { runCatching { json.decodeFromString(ComparisonRecord.serializer(), Files.readString(it)) }.getOrNull() }
-        }.getOrDefault(emptyList()).sortedByDescending { it.startedAt }.take(20)
+        val records = readHistory()
         _state.update { it.copy(history = records) }
     }
+
+    private fun readHistory(): List<ComparisonRecord> = runCatching {
+        if (!Files.isDirectory(folder)) emptyList() else Files.list(folder).use { files ->
+            files.filter { it.fileName.toString().endsWith(".json") }.toList()
+        }.mapNotNull { runCatching { json.decodeFromString(ComparisonRecord.serializer(), Files.readString(it)) }.getOrNull() }
+    }.getOrDefault(emptyList()).sortedByDescending { it.startedAt }.take(20)
 
     fun show(record: ComparisonRecord?) { _state.update { it.copy(shown = record) } }
 
@@ -110,8 +112,9 @@ class ModelComparison(private val directory: Path, private val scope: CoroutineS
                 withContext(NonCancellable) {
                     // Partial results are kept too, including the stopped side: they cost money and still say something.
                     withContext(Dispatchers.IO) { save() }
-                    _state.update { it.copy(running = false, current = null) }
-                    loadHistory()
+                    // One update: whoever sees the run finished also sees its record in the history.
+                    val records = withContext(Dispatchers.IO) { readHistory() }
+                    _state.update { it.copy(running = false, current = null, history = records) }
                 }
             }
         }
