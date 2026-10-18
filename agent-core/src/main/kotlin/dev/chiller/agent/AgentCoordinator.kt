@@ -144,6 +144,7 @@ class AgentCoordinator(
             toolCalls = latestRunSummary?.payload?.long("toolCalls")?.toInt() ?: 0,
             failedToolCalls = latestRunSummary?.payload?.long("failedToolCalls")?.toInt() ?: 0,
             runDurationMs = latestRunSummary?.payload?.long("durationMs"),
+            usageIncomplete = latestRunSummary?.payload?.get("usageIncomplete")?.jsonPrimitive?.booleanOrNull ?: false,
             usage = latestRunSummary?.payload?.let { summary ->
                 TokenUsage(
                     promptTokens = summary.long("promptTokens"),
@@ -234,6 +235,7 @@ class AgentCoordinator(
             put("completionTokens", usage.completionTokens)
             put("cachedPromptTokens", usage.cachedPromptTokens)
             put("usageEstimated", usage.isEmpty)
+            put("usageIncomplete", state.usageIncomplete)
             // Helpers' own requests, reported separately so the parent's numbers stay comparable across runs.
             val helpers = subagents?.state?.value?.filter { it.parentRunId == id }.orEmpty()
             if (helpers.isNotEmpty()) {
@@ -301,7 +303,7 @@ class AgentCoordinator(
     }
 
     private suspend fun run(text: String, mode: ExecutionMode, allowProcesses: Boolean, allowNetwork: Boolean, allowScreenshots: Boolean, attachments: List<ComposerAttachment>, id: String, onAccepted: () -> Unit, stats: RunStats) {
-        _state.update { it.copy(status = "preparing", error = null, reasoning = "", streamingText = "", activeModelId = model, usage = TokenUsage(), toolCalls = 0, failedToolCalls = 0, runDurationMs = null) }
+        _state.update { it.copy(status = "preparing", error = null, reasoning = "", streamingText = "", activeModelId = model, usage = TokenUsage(), usageIncomplete = false, toolCalls = 0, failedToolCalls = 0, runDurationMs = null) }
         // An interrupted tool group cannot be silently sent back as if it completed.
         val previous = _state.value.messages
         if (unresolvedToolCalls(previous).isNotEmpty()) throw IllegalStateException("Предыдущая операция прервана. Начните новый диалог; неизвестные действия не повторяются.")
@@ -397,6 +399,10 @@ class AgentCoordinator(
             } catch (error: Throwable) {
                 trace(id, round, request, completion, finishReason, roundUsage, roundStarted, error.message ?: error.javaClass.simpleName)
                 throw error
+            } finally {
+                if (roundUsage.promptTokens == null || roundUsage.completionTokens == null) {
+                    _state.update { it.copy(usageIncomplete = true) }
+                }
             }
             trace(id, round, request, completion, finishReason, roundUsage, roundStarted, if (truncatedCall) "INCOMPLETE_TOOL_CALL: recovered" else null)
             if (truncatedCall || truncatedText) {

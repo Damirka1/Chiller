@@ -264,6 +264,23 @@ class ChatCompletionsProviderTest {
         assertTrue("private-local-model-id" !in sentMessage)
     }
 
+    @Test fun truncatedToolRetainsProviderUsage() = runBlocking {
+        val server = testServer { exchange ->
+            sendSse(exchange, sse(
+                toolChunk(0, "call-cut", "create_file", "{", "length"),
+                """{"choices":[],"usage":{"prompt_tokens":50,"completion_tokens":100}}""",
+                "[DONE]",
+            ))
+        }
+        val events = invoke(server)
+        assertIs<ModelEvent.Failed>(events.last())
+        assertEquals("INCOMPLETE_TOOL_CALL", (events.last() as ModelEvent.Failed).code)
+        val usage = events.filterIsInstance<ModelEvent.Usage>().single().usage
+        assertEquals(100L, usage.completionTokens)
+        assertEquals(50L, usage.promptTokens)
+        assertTrue(events.none { it is ModelEvent.Completed })
+    }
+
     @Test fun usageIsEmittedOnceBeforeCompleted() = runBlocking {
         val server = testServer { exchange ->
             sendSse(exchange, sse(

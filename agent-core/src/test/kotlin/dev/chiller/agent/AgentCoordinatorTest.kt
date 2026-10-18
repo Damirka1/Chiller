@@ -566,6 +566,26 @@ class AgentCoordinatorTest {
         assertEquals(200L, summary["promptTokens"]?.jsonPrimitive?.long)
     }
 
+    @Test fun missingUsageInRecoveredRoundIsMarkedAndRestored() = runTest {
+        var round = 0
+        val provider = ScriptedProvider { _ -> flow {
+            if (round++ == 0) emit(ModelEvent.Failed("INCOMPLETE_TOOL_CALL", "cut"))
+            else {
+                emit(ModelEvent.Usage(TokenUsage(promptTokens = 100, completionTokens = 20)))
+                emit(ModelEvent.Completed(AgentMessage("assistant", "done"), "stop"))
+            }
+        } }
+        val events = MemoryEvents()
+        val f = fixture(provider, RecordingTools(), events, StandardTestDispatcher(testScheduler))
+        f.coordinator.send("count", ExecutionMode.WORKSPACE_EDIT)
+        advanceUntilIdle()
+        assertTrue(f.coordinator.state.value.usageIncomplete)
+        assertEquals(20L, f.coordinator.state.value.usage.completionTokens)
+        assertEquals(true, events.records.last { it.type == "run.summary" }.payload["usageIncomplete"]?.jsonPrimitive?.boolean)
+        f.coordinator.restore()
+        assertTrue(f.coordinator.state.value.usageIncomplete)
+    }
+
     @Test fun roundLimitIsConfigurableAndReported() = runTest {
         val provider = ScriptedProvider { _ -> flow {
             emit(ModelEvent.Completed(AgentMessage("assistant", toolCalls = listOf(ToolCall(newId(), "read", "{}"))), "tool_calls"))

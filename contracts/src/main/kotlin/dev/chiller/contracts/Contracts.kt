@@ -64,7 +64,7 @@ sealed interface ModelEvent {
     data class TextDelta(val text: String) : ModelEvent
     data class ReasoningDelta(val text: String) : ModelEvent
 
-    /** Reported at most once per request, before [Completed]. */
+    /** Reported at most once per request, before the terminal [Completed] or [Failed] event. */
     data class Usage(val usage: TokenUsage) : ModelEvent
     data class Completed(val message: AgentMessage, val finishReason: String) : ModelEvent
     data class Failed(val code: String, val message: String) : ModelEvent
@@ -227,6 +227,7 @@ data class RunState(
     val modelRounds: Int = 0,
     val activeModelId: String? = null,
     val usage: TokenUsage = TokenUsage(),
+    val usageIncomplete: Boolean = false,
     val toolCalls: Int = 0,
     val failedToolCalls: Int = 0,
     val runDurationMs: Long? = null,

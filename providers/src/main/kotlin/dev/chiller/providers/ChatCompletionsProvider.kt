@@ -131,6 +131,7 @@ class ChatCompletionsProvider private constructor(
             when (outcome) {
                 is AttemptOutcome.Streamed -> {
                     val accumulator = outcome.accumulator
+                    accumulator.usage?.let { emit(ModelEvent.Usage(it)) }
                     if (!outcome.sawDone || accumulator.finishReason == null) {
                         failure = ModelEvent.Failed("INCOMPLETE_STREAM", "Provider stream ended before a complete response")
                         retryable = !emittedAny && !outcome.sawData
@@ -141,7 +142,6 @@ class ChatCompletionsProvider private constructor(
                         failure = ModelEvent.Failed("MALFORMED_TOOL_CALL", "Provider returned an incomplete tool call; it was not executed")
                         retryable = false
                     } else {
-                        accumulator.usage?.let { emit(ModelEvent.Usage(it)) }
                         emit(ModelEvent.Completed(accumulator.message(), accumulator.finishReason!!))
                         return@flow
                     }

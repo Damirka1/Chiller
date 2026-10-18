@@ -316,6 +316,7 @@ internal fun runSummaryParts(state: RunState): List<String> {
         state.runDurationMs?.let { add(formatDuration(it)) }
         val usage = state.usage
         if (usage.promptTokens != null || usage.completionTokens != null) add("${compactTokens(usage.promptTokens)} → ${compactTokens(usage.completionTokens)} токенов")
+        if (state.usageIncomplete) add("расход известен частично")
         val prompt = usage.promptTokens; val cached = usage.cachedPromptTokens
         if (prompt != null && cached != null && prompt > 0) add("кэш ${(cached * 100 / prompt)}%")
     }
@@ -405,6 +406,7 @@ internal fun RunPanel(state: RunState, modifier: Modifier, onOpenTrace: (() -> U
             (state.activeModelId)?.let { Text(modelLabel(it), color = c.faint, fontSize = 11.sp) }
         }
         val usage = state.usage
+        if (state.usageIncomplete) Text("Провайдер сообщил расход не для всех запросов. Значения ниже неполные.", color = c.muted, fontSize = 12.sp)
         val cacheShare = usage.promptTokens?.takeIf { it > 0 }?.let { p -> usage.cachedPromptTokens?.let { "${it * 100 / p}%" } }
         MetricGrid(listOf(
             "Раунды" to state.modelRounds.toString(),
