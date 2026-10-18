@@ -32,6 +32,9 @@ compose.desktop {
             packageVersion = project.version.toString()
             licenseFile.set(rootProject.layout.projectDirectory.file("LICENSE"))
             macOS.iconFile.set(project.file("icons/Chiller.icns"))
+            macOS.infoPlist {
+                extraKeysRawXml = "<key>NSScreenCaptureUsageDescription</key><string>Chiller captures only the window you select to attach a screenshot to your conversation.</string>"
+            }
             windows.iconFile.set(project.file("icons/Chiller.ico"))
             linux.iconFile.set(project.file("src/main/resources/chiller-icon.png"))
             targetFormats(org.jetbrains.compose.desktop.application.dsl.TargetFormat.Dmg, org.jetbrains.compose.desktop.application.dsl.TargetFormat.Msi)

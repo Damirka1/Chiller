@@ -398,7 +398,7 @@ class DesktopController(
         try {
             val targets = withContext(Dispatchers.IO) { captureController.listAvailable() }
             _state.update { it.copy(captureTargets = targets, selectedCaptureTarget = captureController.selected()?.title) }
-        } catch (_: Exception) { showError("Для снимков разрешите запись экрана Chiller в настройках macOS, затем выберите окно заново.") }
+        } catch (_: Exception) { showError("Разрешите Chiller запись экрана в системном запросе или в «Системные настройки → Конфиденциальность и безопасность → Запись экрана и системного аудио». Если macOS потребует, перезапустите Chiller; затем обновите список окон.") }
     }
     suspend fun selectCaptureTarget(id: String) = commands.withLock {
         try { val chosen = withContext(Dispatchers.IO) { captureController.select(id) }; _state.update { it.copy(selectedCaptureTarget = chosen.title) } }

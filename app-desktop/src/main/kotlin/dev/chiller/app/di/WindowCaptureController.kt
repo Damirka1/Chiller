@@ -43,7 +43,7 @@ class WindowCaptureController private constructor(
     /** Lists bounded, on-screen, layer-zero windows for the UI picker only. */
     fun listAvailable(): List<CaptureTarget> {
         ensureSupported()
-        ensurePermission()
+        ensurePermission(request = true)
         return runCatching { native.windows().asSequence()
             .filter { it.onScreen && it.layer == 0 && it.id > 0 && it.ownerPid > 0 }
             .distinctBy { it.id }
@@ -151,9 +151,11 @@ class WindowCaptureController private constructor(
         if (!supported) throw ToolException("CAPTURE_UNSUPPORTED", "Selected-window capture is available only on supported macOS systems")
     }
 
-    private fun ensurePermission() {
-        val granted = try { native.hasPermission() } catch (_: Exception) { false }
-        if (!granted) throw ToolException("CAPTURE_PERMISSION_REQUIRED", "macOS screen recording permission is required", "Allow Chiller in System Settings → Privacy & Security → Screen Recording, then retry")
+    private fun ensurePermission(request: Boolean = false) {
+        val granted = try {
+            native.hasPermission() || (request && native.requestPermission())
+        } catch (_: Exception) { false }
+        if (!granted) throw ToolException("CAPTURE_PERMISSION_REQUIRED", "macOS screen recording permission is required", "Allow Chiller in System Settings → Privacy & Security → Screen & System Audio Recording, restart Chiller if required, then refresh the window list")
     }
 
     private fun presentationTarget(record: WindowRecord) = CaptureTarget(
@@ -191,6 +193,7 @@ internal data class WindowRecord(
 internal interface WindowCaptureNative {
     val supported: Boolean
     fun hasPermission(): Boolean
+    fun requestPermission(): Boolean = false
     fun windows(): List<WindowRecord>
 }
 
@@ -245,6 +248,7 @@ private class MacWindowCaptureNative : WindowCaptureNative {
     override val supported = true
 
     override fun hasPermission(): Boolean = cg.CGPreflightScreenCaptureAccess().toInt() != 0
+    override fun requestPermission(): Boolean = cg.CGRequestScreenCaptureAccess().toInt() != 0
 
     override fun windows(): List<WindowRecord> {
         val array = cg.CGWindowListCopyWindowInfo(ON_SCREEN_ONLY or EXCLUDE_DESKTOP, 0)
@@ -291,6 +295,7 @@ private class MacWindowCaptureNative : WindowCaptureNative {
     private interface CoreGraphicsApi : Library {
         fun CGWindowListCopyWindowInfo(option: Int, relativeToWindow: Int): Pointer?
         fun CGPreflightScreenCaptureAccess(): Byte
+        fun CGRequestScreenCaptureAccess(): Byte
     }
 
     private interface CoreFoundationApi : Library {

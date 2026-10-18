@@ -74,10 +74,35 @@ class WindowCaptureControllerTest {
         } finally { root.toFile().deleteRecursively() }
     }
 
+    @Test fun pickerRequestsPermissionButModelCallsNeverPrompt() = runBlocking {
+        val root = Files.createTempDirectory("chiller-window-permission")
+        try {
+            val native = FakeNative(listOf(window(41, "Editor", "Code")), permission = false)
+            val controller = WindowCaptureController(root, native, FakeCapturer())
+            assertFailsWith<ToolException> { controller.targets() }
+            assertFailsWith<ToolException> { controller.capture() }
+            assertEquals(0, native.requests)
+            assertFailsWith<ToolException> { controller.listAvailable() }
+            assertEquals(1, native.requests)
+            native.grantOnRequest = true
+            assertEquals(1, controller.listAvailable().size)
+            assertEquals(2, native.requests)
+            controller.listAvailable()
+            assertEquals(2, native.requests)
+        } finally { root.toFile().deleteRecursively() }
+    }
+
     private fun window(id: Long, title: String, application: String) = WindowRecord(id, 12, title, application)
 
     private class FakeNative(var records: List<WindowRecord>, var permission: Boolean = true) : WindowCaptureNative {
+        var requests = 0
+        var grantOnRequest = false
         override val supported = true
+        override fun requestPermission(): Boolean {
+            requests++
+            if (grantOnRequest) permission = true
+            return permission
+        }
         override fun hasPermission() = permission
         override fun windows() = records
     }
