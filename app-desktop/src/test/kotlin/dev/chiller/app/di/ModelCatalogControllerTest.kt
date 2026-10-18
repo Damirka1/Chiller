@@ -27,7 +27,7 @@ class ModelCatalogControllerTest {
             controller.initialize()
             awaitStatus(controller, "ready")
             assertEquals(1, client.calls)
-            assertEquals("unverified", controller.state.value.connection.status)
+            assertEquals("reachable", controller.state.value.connection.status, "a listed catalog shows the server answers; it is not a paid check")
             assertEquals(listOf("deepseek-flash", "deepseek-chat"), controller.configuredModels())
             controller.selectModel("deepseek-chat")
             assertEquals(1, client.calls, "changing only the model reuses the endpoint catalog")

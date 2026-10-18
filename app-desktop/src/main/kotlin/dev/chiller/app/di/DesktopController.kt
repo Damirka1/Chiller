@@ -264,7 +264,7 @@ class DesktopController(
                 }
                 _state.update { state ->
                     val previous = state.catalog
-                    state.copy(catalog = if (result.ok) {
+                    state.copy(connection = if (result.ok && state.connection.status == "unverified") ConnectionState("reachable", "Список моделей получен; ответ модели ещё не проверялся") else state.connection, catalog = if (result.ok) {
                         ModelCatalogState(status = "ready", models = result.models, fetchedAt = Instant.now().toString())
                     } else {
                         previous.copy(status = "failed", message = catalogMessage(result, key), stale = previous.models.isNotEmpty())
@@ -896,7 +896,14 @@ class DesktopController(
         if (events.read(s.sessionId).none { it.type == "session.workspace" })
             events.append(s.sessionId, "session.workspace", buildJsonObject { put("root", workspace.root) })
         _state.update { it.copy(sessionWorkspaces = it.sessionWorkspaces + (s.sessionId to workspace.root)) }
-        observer = scope.launch { combine(engine.state, questions.question) { run, question -> run.copy(question = run.question ?: question) }.collect { run -> _state.update { it.copy(run = run) } } }
+        // A turn the real provider finished is proof the connection works, so it counts as a check without an extra request.
+        val live = providerOverride == null
+        var previous = engine.state.value.status
+        observer = scope.launch { combine(engine.state, questions.question) { run, question -> run.copy(question = run.question ?: question) }.collect { run ->
+            val answered = live && run.status == "completed" && previous in setOf("preparing", "streaming", "executing")
+            previous = run.status
+            _state.update { it.copy(run = run, connection = if (answered && it.connection.status in setOf("unverified", "reachable")) ConnectionState("verified", "Подтверждено ответом модели", Instant.now().toString()) else it.connection) }
+        } }
         subagentObserver = scope.launch { supervisor.state.collect { list -> _state.update { it.copy(subagents = list) } } }
         return engine
     }
