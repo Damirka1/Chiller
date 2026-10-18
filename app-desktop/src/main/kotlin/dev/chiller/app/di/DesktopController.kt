@@ -39,7 +39,10 @@ data class DesktopSettings(val baseUrl: String = "https://api.deepseek.com", val
 @Serializable
 data class CachedModelCatalog(val models: List<ProviderModel>, val fetchedAt: String)
 
-/** How the agent runs; applied from the next dialog. Bounded so a typo cannot start an unbounded run. */
+/**
+ * How the agent runs; applied from the next dialog. A limit of 0 means "no limit" ("model maximum" for the reply
+ * length); every other value is bounded so a typo cannot start a runaway run.
+ */
 @Serializable
 data class AgentOptions(
     val maxRounds: Int = 24,
@@ -62,10 +65,30 @@ data class AgentOptions(
     /** "auto" (by model id), "on" or "off": whether attached images are sent as pixels. */
     val vision: String = "auto",
 ) {
-    fun sanitized() = copy(autoVerifyAttempts = autoVerifyAttempts.coerceIn(1, 3), maxRounds = maxRounds.coerceIn(4, 60), maxOutputTokens = maxOutputTokens.coerceIn(1024, 16_384), maxRequests = maxRequests.coerceIn(1, 120), totalOutputTokens = totalOutputTokens.coerceIn(1024, 262144),
+    fun sanitized() = copy(autoVerifyAttempts = autoVerifyAttempts.coerceIn(1, 3), maxRounds = unlimitedOr(maxRounds, 4, 200), maxOutputTokens = unlimitedOr(maxOutputTokens, 1024, 1_048_576),
+        maxRequests = unlimitedOr(maxRequests, 1, 500), totalOutputTokens = unlimitedOr(totalOutputTokens, 1024, 4_194_304),
         profile = profile.takeIf { it in setOf("auto", "full", "compact") } ?: "auto", temperature = temperature?.coerceIn(0.0, 2.0), requestExtras = requestExtras.take(4000),
         vision = vision.takeIf { it in setOf("auto", "on", "off") } ?: "auto")
+
+    /** Model steps per task; "no limit" still stops at a backstop so a looping run cannot go on forever. */
+    val effectiveMaxRounds: Int get() = if (maxRounds == UNLIMITED) UNLIMITED_ROUNDS_BACKSTOP else maxRounds
+    val effectiveMaxRequests: Int get() = if (maxRequests == UNLIMITED) Int.MAX_VALUE else maxRequests
+    val effectiveTotalOutputTokens: Int get() = if (totalOutputTokens == UNLIMITED) Int.MAX_VALUE else totalOutputTokens
+
+    companion object {
+        const val UNLIMITED = 0
+        const val UNLIMITED_ROUNDS_BACKSTOP = 500
+        private fun unlimitedOr(value: Int, min: Int, max: Int) = if (value == UNLIMITED) UNLIMITED else value.coerceIn(min, max)
+    }
 }
+
+/**
+ * Reply length per model step. "Model maximum" asks for as much as the context allows (the coordinator caps it at half the
+ * window) and the provider clamps it to the model's real ceiling; an explicit choice also lifts the profile's own cap.
+ */
+fun effectiveMaxOutput(options: AgentOptions, profileCap: Int?): Int =
+    if (options.maxOutputTokens == AgentOptions.UNLIMITED) Int.MAX_VALUE
+    else profileCap?.let { minOf(it, options.maxOutputTokens) } ?: options.maxOutputTokens
 data class SendReceipt(val accepted: Boolean, val sessionId: String, val clientRequestId: String, val reason: String? = null)
 
 internal data class AutoVerifyContext(
@@ -844,7 +867,7 @@ class DesktopController(
         val profile = baseProfile.withExtras(requestExtrasFor(modelProfile, options)).copy(imageInput = vision)
         // The engine's provider is bound to its own endpoint's key, read at request time.
         val engineOrigin = originOf(s.settings.baseUrl)
-        val provider = providerOverride ?: RunBudgetProvider(ChatCompletionsProvider(http, profile) { engineOrigin?.let { credentials[it] } }, options.maxRequests, options.totalOutputTokens)
+        val provider = providerOverride ?: RunBudgetProvider(ChatCompletionsProvider(http, profile) { engineOrigin?.let { credentials[it] } }, options.effectiveMaxRequests, options.effectiveTotalOutputTokens)
         // Children use the same provider and model, read-only tools and the plain executor (no delegation).
         val supervisor = SubagentSupervisor(provider, builtin, events, s.sessionId, modelOverride ?: s.settings.model, scope)
         subagentService = supervisor
@@ -852,12 +875,12 @@ class DesktopController(
         val helpers = options.subagents && (modelProfile.tools == null || "spawn_agent" in modelProfile.tools!!)
         val delegating: ToolExecutor = if (helpers) SubagentTools(builtin, supervisor) else builtin
         val tools: ToolExecutor = modelProfile.tools?.let { ProfiledTools(delegating, it) } ?: delegating
-        val maxOutput = modelProfile.maxOutputTokens?.let { minOf(it, options.maxOutputTokens) } ?: options.maxOutputTokens
+        val maxOutput = effectiveMaxOutput(options, modelProfile.maxOutputTokens)
         _state.update { it.copy(activeProfile = modelProfile.id) }
         // Read once per engine: an edit to AGENTS.md applies from the next dialog.
         val instructions = if (options.projectInstructions) withContext(Dispatchers.IO) { ProjectInstructions.load(root) } else null
         val map = if (modelProfile.projectMap) runCatching { code.projectMap() }.getOrNull() else null
-        val engine = AgentCoordinator(provider, tools, events, processes, s.sessionId, modelOverride ?: s.settings.model, s.settings.thinking, maxRounds = options.maxRounds, maxOutputTokens = maxOutput,
+        val engine = AgentCoordinator(provider, tools, events, processes, s.sessionId, modelOverride ?: s.settings.model, s.settings.thinking, maxRounds = options.effectiveMaxRounds, maxOutputTokens = maxOutput,
             projectInstructions = instructions?.text, traces = traceSink(s.sessionId), subagents = supervisor.takeIf { helpers }, systemPrompt = modelProfile.systemPrompt, projectMap = map, scope = scope,
             contextWindowTokens = s.catalog.models.firstOrNull { it.id == (modelOverride ?: s.settings.model) }?.contextWindow)
         events.append(s.sessionId, "context.profile", buildJsonObject { put("profile", modelProfile.id); put("tools", tools.specs.size) })

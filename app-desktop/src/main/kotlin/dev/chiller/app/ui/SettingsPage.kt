@@ -235,23 +235,38 @@ private fun AgentSection(data: SettingsData, actions: SettingsActions) {
                 Text("Шагов модели за задачу", color = c.text, fontSize = 13.sp)
                 Text("Каждый шаг — один запрос к модели", color = c.faint, fontSize = 11.sp)
             }
-            ChillerIconButton(Icons.Outlined.Remove, "Меньше", { actions.agent(a.copy(maxRounds = a.maxRounds - 4)) }, enabled = a.maxRounds > 4)
-            Text("${a.maxRounds}", color = c.text, fontSize = 14.sp, fontWeight = FontWeight.Medium, modifier = Modifier.widthIn(min = 36.dp), textAlign = androidx.compose.ui.text.style.TextAlign.Center)
-            ChillerIconButton(Icons.Outlined.Add, "Больше", { actions.agent(a.copy(maxRounds = a.maxRounds + 4)) }, enabled = a.maxRounds < 60)
+            val unlimitedRounds = a.maxRounds == AgentOptions.UNLIMITED
+            ChillerIconButton(Icons.Outlined.Remove, "Меньше", { actions.agent(a.copy(maxRounds = if (unlimitedRounds) 200 else a.maxRounds - 4)) }, enabled = unlimitedRounds || a.maxRounds > 4)
+            Text(if (unlimitedRounds) "∞" else "${a.maxRounds}", color = c.text, fontSize = 14.sp, fontWeight = FontWeight.Medium, modifier = Modifier.widthIn(min = 36.dp), textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+            ChillerIconButton(Icons.Outlined.Add, "Больше", { actions.agent(a.copy(maxRounds = (a.maxRounds + 4).coerceAtMost(200))) }, enabled = !unlimitedRounds && a.maxRounds < 200)
+            Spacer(Modifier.width(6.dp))
+            ChillerControl("Без лимита", { actions.agent(a.copy(maxRounds = AgentOptions.UNLIMITED)) }, style = if (unlimitedRounds) ControlStyle.SELECTED else ControlStyle.QUIET)
         }
         Text("Общий бюджет: основной агент и все помощники", color = c.text, fontSize = 13.sp)
         Text("Логические запросы к модели на всю задачу; транспортные повторы не считаются", color = c.faint, fontSize = 11.sp, lineHeight = 16.sp)
         Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            listOf(24, 48, 96).forEach { v -> ChillerControl("$v", { actions.agent(a.copy(maxRequests = v)) }, style = if (a.maxRequests == v) ControlStyle.SELECTED else ControlStyle.QUIET) }
+            listOf(24 to "24", 48 to "48", 96 to "96", 192 to "192", AgentOptions.UNLIMITED to "Без лимита").forEach { (v, label) ->
+                ChillerControl(label, { actions.agent(a.copy(maxRequests = v)) }, style = if (a.maxRequests == v) ControlStyle.SELECTED else ControlStyle.QUIET)
+            }
         }
         Text("Сумма сгенерированных выходных токенов на всю задачу, включая помощников. Это не лимит стоимости; входные токены не учитываются.", color = c.faint, fontSize = 11.sp, lineHeight = 16.sp)
         Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            listOf(16384, 32768, 65536).forEach { v -> ChillerControl(formatK(v), { actions.agent(a.copy(totalOutputTokens = v)) }, style = if (a.totalOutputTokens == v) ControlStyle.SELECTED else ControlStyle.QUIET) }
+            listOf(32768 to "32k", 65536 to "64k", 262144 to "256k", 1_048_576 to "1M", AgentOptions.UNLIMITED to "Без лимита").forEach { (v, label) ->
+                ChillerControl(label, { actions.agent(a.copy(totalOutputTokens = v)) }, style = if (a.totalOutputTokens == v) ControlStyle.SELECTED else ControlStyle.QUIET)
+            }
         }
         Text("Длина ответа за шаг, токенов", color = c.text, fontSize = 13.sp)
         Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            listOf(2048, 4096, 8192, 16384).forEach { v -> ChillerControl(formatK(v), { actions.agent(a.copy(maxOutputTokens = v)) }, style = if (a.maxOutputTokens == v) ControlStyle.SELECTED else ControlStyle.QUIET) }
+            listOf(4096 to "4k", 8192 to "8k", 16384 to "16k", 32768 to "32k", 65536 to "64k", AgentOptions.UNLIMITED to "Максимум модели").forEach { (v, label) ->
+                ChillerControl(label, { actions.agent(a.copy(maxOutputTokens = v)) }, style = if (a.maxOutputTokens == v) ControlStyle.SELECTED else ControlStyle.QUIET)
+            }
         }
+        Text("«Максимум модели» просит столько, сколько разрешает сама модель (например, у DeepSeek Flash до 384k): предел узнаётся из ответа провайдера и запоминается. " +
+            "Рассуждения модели расходуют этот же лимит. Если ответ всё же упрётся в предел, обрезанный вызов не выполняется, а агент продолжит, записывая файл частями.",
+            color = c.faint, fontSize = 11.sp, lineHeight = 16.sp)
+        if (a.maxRounds == AgentOptions.UNLIMITED || a.maxRequests == AgentOptions.UNLIMITED || a.totalOutputTokens == AgentOptions.UNLIMITED)
+            Text("Без лимита задача идёт, пока не закончит, пока вы её не остановите или до страховочных ${AgentOptions.UNLIMITED_ROUNDS_BACKSTOP} шагов. Следите за расходом токенов в Studio → Прогон.",
+                color = c.negative, fontSize = 11.sp, lineHeight = 16.sp)
     }
     Card {
         SectionTitle("Возможности", null)
