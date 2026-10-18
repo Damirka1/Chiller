@@ -21,6 +21,30 @@ import kotlin.test.assertNull
 class DesktopControllerTest {
     @TempDir lateinit var directory: Path
 
+    @Test fun `process permission persists enabled and disabled across restarts`() = runBlocking {
+        suspend fun open() = DesktopController(directory, initialCredential = null, catalogClient = OfflineCatalog).also { it.initialize() }
+        var controller = open()
+        try {
+            assertFalse(controller.state.value.allowProcesses)
+            controller.allowProcesses(true)
+            kotlinx.coroutines.withTimeout(5000) {
+                while (!controller.state.value.allowProcesses) kotlinx.coroutines.delay(10)
+            }
+            controller.close()
+            controller = open()
+            assertTrue(controller.state.value.allowProcesses)
+            assertTrue(controller.state.value.settings.allowProcesses)
+            controller.allowProcesses(false)
+            kotlinx.coroutines.withTimeout(5000) {
+                while (controller.state.value.allowProcesses) kotlinx.coroutines.delay(10)
+            }
+            controller.close()
+            controller = open()
+            assertFalse(controller.state.value.allowProcesses)
+            assertFalse(controller.state.value.settings.allowProcesses)
+        } finally { controller.close() }
+    }
+
     @Test fun `message delete and edit project history without replaying effects`() = runBlocking {
         val controller = DesktopController(directory, initialCredential = null, catalogClient = OfflineCatalog)
         try {

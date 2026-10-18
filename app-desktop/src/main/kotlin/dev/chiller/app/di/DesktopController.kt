@@ -33,7 +33,8 @@ import java.nio.file.StandardCopyOption
 data class DesktopSettings(val baseUrl: String = "https://api.deepseek.com", val model: String = "deepseek-flash", val thinking: Boolean = false, val workspace: String? = null, val rememberedModels: Map<String, List<String>> = emptyMap(), val recentWorkspaces: List<String> = emptyList(), val agent: AgentOptions = AgentOptions(), val credentialOrigins: List<String> = emptyList(),
     /** Check command per project root, e.g. "./gradlew test"; used by auto-verify. */
     val verifyCommands: Map<String, String> = emptyMap(),
-    val modelCatalogs: Map<String, CachedModelCatalog> = emptyMap())
+    val modelCatalogs: Map<String, CachedModelCatalog> = emptyMap(),
+    val allowProcesses: Boolean = false)
 
 @Serializable
 data class CachedModelCatalog(val models: List<ProviderModel>, val fetchedAt: String)
@@ -177,7 +178,7 @@ class DesktopController(
         if (settings.workspace?.let(::isDemoFolder) == true) settings = settings.copy(workspace = null)
         savedWorkspace = settings.workspace
         refreshSessions()
-        _state.update { it.copy(settings = settings, uiPreferences = preferencesStore.load()) }
+        _state.update { it.copy(settings = settings, allowProcesses = settings.allowProcesses, uiPreferences = preferencesStore.load()) }
         _state.update { it.copy(apiKeyConfigured = ready(), connection = connectionForUnverified()) }
         saveSettings(settings)
         restoreCachedCatalog()
@@ -653,7 +654,14 @@ class DesktopController(
     fun allowProcesses(value: Boolean) {
         scope.launch {
             commands.withLock {
-                if (!busy()) _state.update { it.copy(allowProcesses = value, verify = VerifyState()) }
+                if (!busy()) {
+                    val settings = _state.value.settings.copy(allowProcesses = value)
+                    try {
+                        saveSettings(settings)
+                        _state.update { it.copy(settings = settings, allowProcesses = value, verify = VerifyState()) }
+                    } catch (cancelled: CancellationException) { throw cancelled }
+                    catch (_: Exception) { showError("Не удалось сохранить разрешение на команды процессов.") }
+                }
             }
         }
     }

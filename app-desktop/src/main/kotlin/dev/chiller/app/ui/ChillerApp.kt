@@ -377,13 +377,15 @@ fun ChillerApp(
                                             },
                                         )
                                     } else {
-                                        Conversation(state, reducedMotion, onAnswerQuestion, onUndo, !active,
-                                            { text -> updateDraft(text); sendError = null }, onPreviewFile, onRevealFile,
-                                            onEdit = { index, text -> if (!active) targetMessage(index, text)?.let { messageEditTarget = it; messageEditText = text; messageActionError = null } },
-                                            onDelete = { index, text -> if (!active) targetMessage(index, text)?.let { messageDeleteTarget = it; messageActionError = null } },
-                                            onRecoverInterrupted = onRecoverInterrupted,
-                                            modifier = Modifier.weight(1f).fillMaxWidth(),
-                                            onRewind = { ids -> if (!active) onRewindTurn(ids) }, undoneChanges = undoneChanges, outsideChanges = outsideChanges)
+                                        key(selectedSessionId) {
+                                            Conversation(state, reducedMotion, onAnswerQuestion, onUndo, !active,
+                                                { text -> updateDraft(text); sendError = null }, onPreviewFile, onRevealFile,
+                                                onEdit = { index, text -> if (!active) targetMessage(index, text)?.let { messageEditTarget = it; messageEditText = text; messageActionError = null } },
+                                                onDelete = { index, text -> if (!active) targetMessage(index, text)?.let { messageDeleteTarget = it; messageActionError = null } },
+                                                onRecoverInterrupted = onRecoverInterrupted,
+                                                modifier = Modifier.weight(1f).fillMaxWidth(),
+                                                onRewind = { ids -> if (!active) onRewindTurn(ids) }, undoneChanges = undoneChanges, outsideChanges = outsideChanges)
+                                        }
                                     }
                                     Box(Modifier.fillMaxWidth().padding(horizontal = if (compact) 20.dp else 32.dp).padding(top = 6.dp, bottom = 18.dp), contentAlignment = Alignment.Center) {
                                         Column(Modifier.widthIn(max = 760.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1051,7 +1053,8 @@ private fun FolderToolbarChip(workspace: String?, onChoose: () -> Unit, enabled:
 @Composable
 private fun Conversation(state: RunState, reduced: Boolean, onAnswer: (String) -> Unit, onUndo: (String) -> Unit, canUndo: Boolean, onRestoreDraft: (String) -> Unit, onPreviewFile: suspend (String) -> ByteArray?, onRevealFile: (String) -> Unit, onEdit: (Int, String) -> Unit, onDelete: (Int, String) -> Unit, onRecoverInterrupted: () -> Unit, modifier: Modifier, onRewind: (List<String>) -> Unit = {}, undoneChanges: Set<String> = emptySet(), outsideChanges: dev.chiller.app.di.OutsideChanges? = null) {
     val c = LocalChillerPalette.current
-    val scroll = rememberLazyListState()
+    // Begin at the tail even for restored long conversations; LazyColumn clamps to the final item.
+    val scroll = rememberLazyListState(initialFirstVisibleItemIndex = Int.MAX_VALUE)
     val scope = rememberCoroutineScope()
     // Following is a user decision: only the user's own scroll turns it off (scrolling up) or on (reaching the end).
     var follow by remember { mutableStateOf(true) }
