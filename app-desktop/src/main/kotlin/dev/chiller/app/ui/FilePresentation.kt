@@ -58,11 +58,15 @@ internal fun FilePresentationCard(file: FilePresentation, onPreviewFile: suspend
     val shape = RoundedCornerShape(10.dp)
     Column(Modifier.fillMaxWidth().clip(shape).background(c.surface).border(1.dp, c.border, shape)) {
         bitmap?.let { image ->
-            // Fit includes all axes and labels; large charts remain useful without opening the viewer.
-            Image(image, "Открыть изображение ${file.name}", contentScale = ContentScale.Fit,
-                modifier = Modifier.fillMaxWidth().heightIn(max = 380.dp)
-                    .aspectRatio(image.width.toFloat() / image.height)
-                    .clickable(role = Role.Button, onClickLabel = "Открыть изображение") { viewing = true })
+            // Fit includes all axes and labels; large charts remain useful without opening the viewer. The slot height
+            // is computed explicitly: width + max height + aspect ratio together over-constrain a wide image, which then
+            // overflowed its slot, cut its top and laid its hover highlight over the caption.
+            BoxWithConstraints(Modifier.fillMaxWidth()) {
+                val slot = minOf(maxWidth * (image.height.toFloat() / image.width), 380.dp)
+                Image(image, "Открыть изображение ${file.name}", contentScale = ContentScale.Fit,
+                    modifier = Modifier.fillMaxWidth().height(slot).clipToBounds()
+                        .clickable(role = Role.Button, onClickLabel = "Открыть изображение") { viewing = true })
+            }
             // The hover highlight stops at the image: a divider and some air before the caption.
             Box(Modifier.fillMaxWidth().height(1.dp).background(c.border))
         }

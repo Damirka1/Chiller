@@ -26,6 +26,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.toComposeImageBitmap
@@ -282,7 +283,8 @@ internal fun RunSummaryLine(state: RunState) {
 internal fun RunProgressBar(active: Boolean) {
     val c = LocalChillerPalette.current
     val reduced = LocalChillerReducedMotion.current
-    Box(Modifier.fillMaxWidth().height(2.dp)) {
+    // The segment starts left of the bar; without clipping it is drawn over the sidebar and the window title.
+    Box(Modifier.fillMaxWidth().height(2.dp).clipToBounds()) {
         if (!active) return@Box
         if (reduced) { Box(Modifier.fillMaxSize().background(c.accent.copy(alpha = .5f))); return@Box }
         val shift by rememberInfiniteTransition(label = "progress").animateFloat(-.35f, 1f, infiniteRepeatable(tween(1300, easing = FastOutSlowInEasing)), label = "shift")
