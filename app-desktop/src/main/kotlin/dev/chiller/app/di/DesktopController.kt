@@ -858,7 +858,8 @@ class DesktopController(
         val instructions = if (options.projectInstructions) withContext(Dispatchers.IO) { ProjectInstructions.load(root) } else null
         val map = if (modelProfile.projectMap) runCatching { code.projectMap() }.getOrNull() else null
         val engine = AgentCoordinator(provider, tools, events, processes, s.sessionId, modelOverride ?: s.settings.model, s.settings.thinking, maxRounds = options.maxRounds, maxOutputTokens = maxOutput,
-            projectInstructions = instructions?.text, traces = traceSink(s.sessionId), subagents = supervisor.takeIf { helpers }, systemPrompt = modelProfile.systemPrompt, projectMap = map, scope = scope)
+            projectInstructions = instructions?.text, traces = traceSink(s.sessionId), subagents = supervisor.takeIf { helpers }, systemPrompt = modelProfile.systemPrompt, projectMap = map, scope = scope,
+            contextWindowTokens = s.catalog.models.firstOrNull { it.id == (modelOverride ?: s.settings.model) }?.contextWindow)
         events.append(s.sessionId, "context.profile", buildJsonObject { put("profile", modelProfile.id); put("tools", tools.specs.size) })
         coordinator = engine
         if (instructions != null) events.append(s.sessionId, "context.instructions", buildJsonObject {

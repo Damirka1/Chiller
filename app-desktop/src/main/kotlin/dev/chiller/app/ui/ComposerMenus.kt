@@ -308,15 +308,15 @@ internal fun MentionPopover(matches: List<String>, highlighted: Int, onPick: (St
 }
 
 /**
- * Estimated prompt size of the last request (characters / 4, not a tokenizer) against the
- * model's declared context window when the provider listed one.
+ * Last request input: provider-reported when available, otherwise a script-aware estimate.
+ * Denominator is the effective planner window including the output reserve.
  */
 @Composable
-internal fun ContextMeter(tokens: Int, window: Int?) {
+internal fun ContextMeter(tokens: Int, window: Int?, estimated: Boolean = true) {
     val c = LocalChillerPalette.current
     val fraction = window?.takeIf { it > 0 }?.let { (tokens.toFloat() / it).coerceIn(0f, 1f) }
     val color = when { fraction == null -> c.faint; fraction > .9f -> c.negative; fraction > .7f -> c.muted; else -> c.accent }
-    Row(Modifier.semantics { contentDescription = "Контекст: примерно $tokens токенов" + (window?.let { " из $it" } ?: "") }, verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.semantics { contentDescription = "Контекст: ${if (estimated) "примерно" else "вход последнего запроса,"} $tokens токенов" + (window?.let { " из $it" } ?: "") }, verticalAlignment = Alignment.CenterVertically) {
         if (fraction != null) {
             androidx.compose.foundation.Canvas(Modifier.size(14.dp)) {
                 val stroke = androidx.compose.ui.graphics.drawscope.Stroke(width = 2.dp.toPx(), cap = androidx.compose.ui.graphics.StrokeCap.Round)
@@ -325,6 +325,6 @@ internal fun ContextMeter(tokens: Int, window: Int?) {
             }
             Spacer(Modifier.width(6.dp))
         }
-        Text("≈ ${compactTokens(tokens.toLong())}" + (window?.let { " / ${compactTokens(it.toLong())}" } ?: " ток."), color = c.faint, fontSize = 11.sp, lineHeight = 16.sp, maxLines = 1)
+        Text("${if (estimated) "≈ " else ""}${compactTokens(tokens.toLong())}" + (window?.let { " / ${compactTokens(it.toLong())}" } ?: " ток."), color = c.faint, fontSize = 11.sp, lineHeight = 16.sp, maxLines = 1)
     }
 }

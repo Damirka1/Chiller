@@ -68,9 +68,9 @@ class ContextPlanner(
 
             for (index in groups.lastIndex - 1 downTo 0) {
                 val group = groups[index]
-                // Never cross a broken or unfinished historical turn: doing so could hide
+                // Never cross an unpaired historical tool group: doing so could hide
                 // an unknown operation or leave its call/result context inconsistent.
-                if (!group.complete || !group.toolPairsComplete) break
+                if (!group.toolPairsComplete) break
                 val cost = group.indices.sumOf { messageCharacters(messages[it]) }
                 if (used + cost > budget) break
                 keep[index] = true
@@ -98,11 +98,9 @@ class ContextPlanner(
             if (current.isNotEmpty()) {
                 val groupMessages = current.map(messages::get)
                 val paired = hasCompleteToolPairs(groupMessages)
-                val finalMessage = groupMessages.lastOrNull()
                 groups += TurnGroup(
                     indices = current.toList(),
                     toolPairsComplete = paired,
-                    complete = paired && hasUser && finalMessage?.role == "assistant" && finalMessage.toolCalls.isEmpty(),
                 )
             }
             current = mutableListOf()
@@ -136,12 +134,15 @@ class ContextPlanner(
     }
 
     private fun messageCharacters(message: AgentMessage): Long =
-        8L + message.role.length + (message.content?.length ?: 0) + (message.toolCallId?.length ?: 0) +
-            message.toolCalls.sumOf { it.id.length.toLong() + it.name.length + it.arguments.length } + message.replay.toString().length + message.attachments.sumOf { it.name.length.toLong() + it.artifactId.length + 200 }
+        8L + message.role.length + weightedCharacters(message.content.orEmpty()) + (message.toolCallId?.length ?: 0) +
+            message.toolCalls.sumOf { it.id.length.toLong() + it.name.length + weightedCharacters(it.arguments) } + weightedCharacters(message.replay.toString()) + message.attachments.sumOf { it.name.length.toLong() + it.artifactId.length + if (it.mimeType.startsWith("image/")) 6400 else 200 }
+
+    // Conservative script-aware estimate: ASCII ~4 chars/token; non-ASCII ~1 char/token.
+    // Tool JSON and attachment references remain estimates; provider usage is recorded separately.
+    private fun weightedCharacters(text: String): Long = text.sumOf { if (it.code < 128) 1L else 4L }
 
     private data class TurnGroup(
         val indices: List<Int>,
-        val complete: Boolean,
         val toolPairsComplete: Boolean,
     )
 

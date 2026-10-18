@@ -138,4 +138,38 @@ class ContextPlannerTest {
         assertTrue(tools[0].content!!.contains("false"))
         assertTrue(!tools[1].content!!.contains("\"ok\""))
     }
+    @Test fun pairedCancelledTurnDoesNotHideEarlierGoal() {
+        val messages = listOf(
+            AgentMessage("user", "Make a landing"), AgentMessage("assistant", "Skywise Tailwind plan"),
+            AgentMessage("user", "Start"), AgentMessage("assistant", toolCalls = listOf(ToolCall("c", "run_process", "{}"))),
+            AgentMessage("tool", "PERMISSION_DENIED", toolCallId = "c"), AgentMessage("user", "Try again"))
+        assertEquals(messages, ContextPlanner().select(messages).messages)
+    }
+
+    @Test fun unknownHistoricalToolOutcomeStillStopsSelection() {
+        val messages = listOf(AgentMessage("user", "old goal"), AgentMessage("assistant", "plan"),
+            AgentMessage("user", "write"), AgentMessage("assistant", toolCalls = listOf(ToolCall("unknown", "write", "{}"))),
+            AgentMessage("user", "continue"))
+        val selected = ContextPlanner().select(messages)
+        assertEquals(listOf(messages.last()), selected.messages)
+    }
+
+    @Test fun estimateAccountsForNonAsciiAndKnownWindowDoesNotUseLegacyCharacterCap() {
+        assertTrue(ContextPlanner().select(listOf(AgentMessage("user", "я".repeat(100)))).estimatedTokens >
+            ContextPlanner().select(listOf(AgentMessage("user", "x".repeat(100)))).estimatedTokens)
+        val messages = listOf(AgentMessage("user", "x".repeat(100_000)), AgentMessage("assistant", "done"), AgentMessage("user", "continue"))
+        assertEquals(0, ContextPlanner(maxCharacters = effectiveContextWindow(1_048_576) * 4, outputReserveCharacters = 16384).select(messages).droppedMessages)
+    }
+
+    @Test fun memoryKeepsDetailedGoalAndPlanAcrossShortFollowupsAndRebuildsAfterDeletion() {
+        val goal = "Build Skywise landing: " + "requirements ".repeat(10)
+        val source = listOf(AgentMessage("user", goal), AgentMessage("assistant", "Plan: Skywise with pricing")) +
+            (1..10).flatMap { listOf(AgentMessage("user", "continue"), AgentMessage("assistant", "working")) }
+        val memory = conversationMemory(source)
+        assertTrue(memory.contains("requirements"))
+        assertTrue(memory.contains("Plan: Skywise"))
+        assertTrue(memory.contains("extractive_reference"))
+        assertTrue(!conversationMemory(source.drop(2)).contains("Skywise"))
+    }
+
 }

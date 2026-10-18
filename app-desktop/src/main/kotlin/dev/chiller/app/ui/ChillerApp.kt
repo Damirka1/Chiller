@@ -243,7 +243,7 @@ fun ChillerApp(
     val active = pendingSend || state.status in setOf("preparing", "streaming", "executing")
     val demoCompleted = isCompletedDemo(isDemo, state.status)
     val empty = state.messages.none { it.role in setOf("user", "assistant") } && state.activities.isEmpty() && state.error == null
-    val contextNote = state.contextEstimatedTokens?.let { tokens -> "≈ $tokens токенов${if (state.droppedContextMessages > 0) " · контекст сокращён" else ""}" }
+    val contextNote = state.contextEstimatedTokens?.let { tokens -> "Оценка входа ≈ $tokens токенов${state.contextReportedTokens?.let { "; провайдер: $it" }.orEmpty()}${if (state.droppedContextMessages > 0 || state.prunedContextResults > 0) " · контекст сокращён" else ""}" }
     val send = {
         if ((draft.isNotBlank() || draftAttachments.isNotEmpty()) && !active && !pendingSend && !composing && (pendingImportsBySession[draftKey] ?: 0) == 0) {
             val sentKey = draftKey; val sentText = draft; val requestId = newId()
@@ -391,6 +391,10 @@ fun ChillerApp(
                                         Column(Modifier.widthIn(max = 760.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                             sendError?.let { Text(it, color = c.negative, fontSize = 12.sp, lineHeight = 18.sp) }
                                             VerifyBanner(verify, onDismissVerify)
+                                            if (state.droppedContextMessages > 0 || state.prunedContextResults > 0) Text(
+                                                "Контекст сокращён: сообщений ${state.droppedContextMessages}, результатов ${state.prunedContextResults}. Сводка сохранена при исключении сообщений.",
+                                                color = c.muted, fontSize = 10.sp, lineHeight = 14.sp)
+
                                             if (demoCompleted) {
                                                 Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(c.sidebar).border(1.dp, c.border, RoundedCornerShape(12.dp)).padding(horizontal = 14.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
                                                     Icon(Icons.Outlined.CheckCircleOutline, null, Modifier.size(17.dp), tint = c.positive)
@@ -405,7 +409,7 @@ fun ChillerApp(
                                                 val oldDraft = draft
                                                 scope.launch { onSelectModel(selected)?.let { id -> drafts.putIfAbsent(id, oldDraft) } }
                                             }, { composing = it }, pendingSend, contextNote, catalog, onRefreshModels, onCancelCatalogRefresh, allowProcesses, onAllowProcessesChange,
-                                                workspacePath, onChooseWorkspace, state.contextEstimatedTokens, connectionSummary(connection, apiKeyConfigured).second,
+                                                workspacePath, onChooseWorkspace, state.contextReportedTokens?.coerceAtMost(Int.MAX_VALUE.toLong())?.toInt() ?: state.contextEstimatedTokens, state.contextReportedTokens == null, state.contextWindowTokens, connectionSummary(connection, apiKeyConfigured).second,
                                                 attachments = draftAttachments, attachmentOwnerKey = draftKey, vision = visionEnabled(settingsData?.agent ?: AgentOptions(), providerModel),
                                                 importing = (pendingImportsBySession[draftKey] ?: 0) > 0,
                                                 onAppendAttachments = appendAttachments,
@@ -691,7 +695,7 @@ private fun Composer(
     onModel: (String) -> Unit, onComposition: (Boolean) -> Unit, pending: Boolean, contextNote: String?,
     catalog: ModelCatalogState, onRefreshModels: () -> Unit, onCancelCatalogRefresh: () -> Unit,
     allowProcesses: Boolean, onAllow: (Boolean) -> Unit,
-    workspace: String?, onChooseWorkspace: () -> Unit, contextTokens: Int?, connectionDot: androidx.compose.ui.graphics.Color,
+    workspace: String?, onChooseWorkspace: () -> Unit, contextTokens: Int?, contextIsEstimate: Boolean, effectiveWindow: Int?, connectionDot: androidx.compose.ui.graphics.Color,
     attachments: List<ComposerAttachment>, attachmentOwnerKey: String,
     importing: Boolean,
     onAppendAttachments: (String, List<ComposerAttachment>) -> Boolean,
@@ -853,7 +857,7 @@ private fun Composer(
         }
         Spacer(Modifier.height(4.dp))
         ComposerToolbar(mode, onMode, model, running, pending, importing, draft.isNotBlank() || attachments.isNotEmpty(), modelMenu, { if (System.currentTimeMillis() - modelClosedAt > 200) modelMenu = !modelMenu }, allowProcesses, onAllow, onSend, onStop, addFiles,
-            connectionDot, contextTokens, catalog.models.firstOrNull { it.id == model }?.contextWindow, workspace, onChooseWorkspace) {
+            connectionDot, contextTokens, effectiveWindow, contextIsEstimate, workspace, onChooseWorkspace) {
             ModelPickerPopover(
                 model = model, models = models, configured = configured, running = running, catalog = catalog, contextNote = contextNote,
                 onRefresh = onRefreshModels, onCancelRefresh = onCancelCatalogRefresh,
@@ -956,7 +960,7 @@ private fun ComposerToolbar(
     pending: Boolean, importing: Boolean, draftNotEmpty: Boolean, modelMenuOpen: Boolean, onToggleModel: () -> Unit,
     allowProcesses: Boolean, onAllow: (Boolean) -> Unit, onSend: () -> Unit, onStop: () -> Unit,
     onAttach: () -> Unit,
-    connectionDot: androidx.compose.ui.graphics.Color, contextTokens: Int?, contextWindow: Int?,
+    connectionDot: androidx.compose.ui.graphics.Color, contextTokens: Int?, contextWindow: Int?, contextIsEstimate: Boolean,
     workspace: String?, onChooseWorkspace: () -> Unit,
     modelPopover: @Composable () -> Unit,
 ) {
@@ -1002,7 +1006,7 @@ private fun ComposerToolbar(
                     Spacer(Modifier.width(6.dp))
                     ChillerIconButton(Icons.Outlined.AttachFile, "Добавить файлы", onAttach, enabled = !running)
                     Spacer(Modifier.width(8.dp))
-                    contextTokens?.let { ContextMeter(it, contextWindow); Spacer(Modifier.width(10.dp)) }
+                    contextTokens?.let { ContextMeter(it, contextWindow, contextIsEstimate); Spacer(Modifier.width(10.dp)) }
                     ChillerIconButton(if (running && !pending) Icons.Outlined.Stop else Icons.Outlined.ArrowUpward, if (pending) "Сохранение сообщения" else if (running) "Остановить" else if (importing) "Добавление вложения" else "Отправить", if (running && !pending) onStop else onSend, enabled = !pending && (running || (!importing && draftNotEmpty)), primary = true)
                 }
             },

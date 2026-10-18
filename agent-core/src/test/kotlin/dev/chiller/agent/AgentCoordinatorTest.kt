@@ -100,7 +100,7 @@ class AgentCoordinatorTest {
         advanceUntilIdle()
         assertEquals("completed", fixture.coordinator.state.value.status)
         requests.forEach { request ->
-            assertEquals(listOf("system", "system", "system"), request.messages.take(3).map { it.role })
+            assertEquals(listOf("system", "system", "user"), request.messages.take(3).map { it.role })
             assertTrue(request.messages[1].content!!.contains("Run make test."))
         }
         assertEquals(listOf(1, 2), traced.map { it.getValue("round").jsonPrimitive.int })
@@ -524,6 +524,67 @@ class AgentCoordinatorTest {
         assertEquals(2, provider.calls)
     }
 
+    @Test fun cancelledDeniedProcessRetainsLandingPlanAfterRestore() = runTest {
+        val store = MemoryEvents()
+        val json = Json { encodeDefaults = true }
+        val history = listOf(
+            AgentMessage("user", "Build a landing page in HTML and Tailwind"),
+            AgentMessage("assistant", "Skywise plan: landing/index.html, pricing and FAQ"),
+            AgentMessage("user", "Do it"),
+            AgentMessage("assistant", toolCalls = listOf(ToolCall("denied", "process", "{}"))),
+            AgentMessage("tool", "{\"ok\":false,\"error\":{\"code\":\"PERMISSION_DENIED\"}}", toolCallId = "denied"),
+        )
+        history.forEach { store.append("session", "message", json.encodeToJsonElement(AgentMessage.serializer(), it).jsonObject) }
+        store.append("session", "run.cancelled", buildJsonObject { put("runId", "old") })
+        val requests = mutableListOf<ModelRequest>()
+        val provider = ScriptedProvider { request -> flow {
+            requests += request
+            emit(ModelEvent.Usage(TokenUsage(promptTokens = 1234)))
+            emit(ModelEvent.Completed(AgentMessage("assistant", "Continuing Skywise"), "stop"))
+        } }
+        val fixture = fixture(provider, eventStore = store, dispatcher = StandardTestDispatcher(testScheduler))
+        fixture.coordinator.restore()
+        fixture.coordinator.send("Permission enabled, try again", ExecutionMode.WORKSPACE_EDIT, allowProcesses = true)
+        advanceUntilIdle()
+        assertTrue(requests.single().messages.any { it.content?.contains("Skywise plan") == true })
+        assertTrue(requests.single().messages.any { it.content?.contains("PERMISSION_DENIED") == true })
+        assertEquals(0, fixture.coordinator.state.value.droppedContextMessages)
+        val restored = fixture(provider, eventStore = store, dispatcher = StandardTestDispatcher(testScheduler))
+        restored.coordinator.restore()
+        assertEquals(1234L, restored.coordinator.state.value.contextReportedTokens)
+        assertEquals(fixture.coordinator.state.value.contextEstimatedTokens, restored.coordinator.state.value.contextEstimatedTokens)
+    }
+
+    @Test fun longHistoryGetsDurableExtractiveMemoryAndConfiguredWindow() = runTest {
+        val store = MemoryEvents()
+        val json = Json { encodeDefaults = true }
+        listOf(
+            AgentMessage("user", "Build Skywise landing with pricing"),
+            AgentMessage("assistant", "Plan: Tailwind, pricing, FAQ. " + "x".repeat(140_000)),
+        ).forEach { store.append("session", "message", json.encodeToJsonElement(AgentMessage.serializer(), it).jsonObject) }
+        store.append("session", "run.completed", buildJsonObject { put("runId", "old") })
+        var request: ModelRequest? = null
+        val provider = ScriptedProvider { r -> flow { request = r; emit(ModelEvent.Completed(AgentMessage("assistant", "ok"), "stop")) } }
+        val f = fixture(provider, eventStore = store, dispatcher = StandardTestDispatcher(testScheduler))
+        f.coordinator.restore()
+        f.coordinator.send("Proceed", ExecutionMode.PLAN)
+        advanceUntilIdle()
+        assertEquals("completed", f.coordinator.state.value.status)
+        assertEquals(2, f.coordinator.state.value.droppedContextMessages)
+        assertTrue(request!!.messages.any { it.role == "system" && it.content.orEmpty().contains("Skywise") })
+        assertTrue(store.records.any { it.type == "context.summary" && it.payload["method"]?.jsonPrimitive?.content == "extractive" })
+        assertEquals(32768, f.coordinator.state.value.contextWindowTokens)
+        val wide = fixture(provider, eventStore = store, dispatcher = StandardTestDispatcher(testScheduler), contextWindow = 131072)
+        wide.coordinator.restore()
+        wide.coordinator.send("Continue with full history", ExecutionMode.PLAN)
+        advanceUntilIdle()
+        assertEquals("completed", wide.coordinator.state.value.status)
+        assertEquals(131072, wide.coordinator.state.value.contextWindowTokens)
+        assertEquals(0, wide.coordinator.state.value.droppedContextMessages)
+        assertTrue(request!!.messages.any { it.content.orEmpty().length > 100_000 })
+
+    }
+
     private fun fixture(
         provider: ScriptedProvider,
         tools: ToolExecutor = RecordingTools(),
@@ -532,10 +593,11 @@ class AgentCoordinatorTest {
         model: String = "model",
         instructions: String? = null,
         traces: RunTraceSink? = null,
+        contextWindow: Int? = null,
     ): Fixture {
         val scope = CoroutineScope(SupervisorJob() + dispatcher)
         val processes = RecordingProcesses()
-        return Fixture(AgentCoordinator(provider, tools, eventStore, processes, "session", model, projectInstructions = instructions, traces = traces, scope = scope), processes)
+        return Fixture(AgentCoordinator(provider, tools, eventStore, processes, "session", model, projectInstructions = instructions, traces = traces, scope = scope, contextWindowTokens = contextWindow), processes)
     }
 
     private data class Fixture(val coordinator: AgentCoordinator, val processes: RecordingProcesses)
