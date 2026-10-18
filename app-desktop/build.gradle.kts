@@ -30,6 +30,7 @@ compose.desktop {
             packageName = if (preview) "ChillerPreview" else "Chiller"
             macOS.bundleID = if (preview) "dev.chiller.preview" else "dev.chiller.app"
             packageVersion = project.version.toString()
+            licenseFile.set(rootProject.layout.projectDirectory.file("LICENSE"))
             macOS.iconFile.set(project.file("icons/Chiller.icns"))
             windows.iconFile.set(project.file("icons/Chiller.ico"))
             linux.iconFile.set(project.file("src/main/resources/chiller-icon.png"))
@@ -63,7 +64,10 @@ val writeVersion by tasks.registering {
     }
 }
 sourceSets.named("main") { resources.srcDir(versionResources) }
-tasks.named("processResources") { dependsOn(writeVersion) }
+tasks.named<ProcessResources>("processResources") {
+    dependsOn(writeVersion)
+    from(rootProject.file("LICENSE")) { into("META-INF") }
+}
 
 // Explicit native check, isolated from check/test and configured provider credentials.
 tasks.register<JavaExec>("keychainSmoke") {
