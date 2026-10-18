@@ -69,37 +69,51 @@ class SettingsActions(
     val refreshCaptureTargets: () -> Unit = {}, val selectCaptureTarget: (String) -> Unit = {},
 )
 
-private enum class Section(val title: String, val icon: ImageVector) {
+internal enum class SettingsSection(val title: String, val icon: ImageVector) {
     CONNECTION("Подключение", Icons.Outlined.Cable), AGENT("Агент", Icons.Outlined.SmartToy), APPEARANCE("Внешний вид", Icons.Outlined.Palette),
     DATA("Проекты и данные", Icons.Outlined.FolderOpen), KEYS("Клавиши", Icons.Outlined.Keyboard), ABOUT("О программе", Icons.Outlined.Info),
 }
 
-/** Settings as a full page in the main area: section list on the left, the section on the right. Escape goes back. */
+/** The settings section list. Lives in the app sidebar while it is shown, otherwise at the page's left edge. */
 @Composable
-internal fun SettingsPage(data: SettingsData, actions: SettingsActions, modifier: Modifier = Modifier, initial: String? = null) {
+internal fun SettingsNav(section: SettingsSection, onSection: (SettingsSection) -> Unit, onClose: () -> Unit, modifier: Modifier = Modifier) {
     val c = LocalChillerPalette.current
-    var section by remember { mutableStateOf(Section.entries.firstOrNull { it.name == initial } ?: Section.CONNECTION) }
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        ChillerControl("Назад к диалогу", onClose, Modifier.fillMaxWidth(), icon = Icons.AutoMirrored.Outlined.ArrowBack, trailing = "esc", inlineTrailing = true)
+        Spacer(Modifier.height(14.dp))
+        Text("Настройки", color = c.text, fontSize = 20.sp, fontWeight = FontWeight.Medium, letterSpacing = (-.4).sp, modifier = Modifier.padding(start = 10.dp, bottom = 10.dp))
+        SettingsSection.entries.forEach { s -> ChillerControl(s.title, { onSection(s) }, Modifier.fillMaxWidth(), icon = s.icon, style = if (s == section) ControlStyle.SELECTED else ControlStyle.QUIET) }
+    }
+}
+
+/**
+ * Settings as a full page in the main area. The section list is drawn here only when the sidebar is hidden;
+ * otherwise the sidebar shows it in place of the dialogs. Escape goes back.
+ */
+@Composable
+internal fun SettingsPage(
+    data: SettingsData, actions: SettingsActions, section: SettingsSection, onSection: (SettingsSection) -> Unit,
+    modifier: Modifier = Modifier, showNav: Boolean = true,
+) {
+    val c = LocalChillerPalette.current
     val focus = remember { androidx.compose.ui.focus.FocusRequester() }
     LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
     Row(modifier.focusRequester(focus).onPreviewKeyEvent { if (it.type == KeyEventType.KeyDown && it.key == Key.Escape) { actions.close(); true } else false }.focusable()) {
-        Column(Modifier.width(220.dp).fillMaxHeight().padding(start = 16.dp, top = 8.dp, end = 8.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            ChillerControl("Назад к диалогу", actions.close, icon = Icons.AutoMirrored.Outlined.ArrowBack, trailing = "esc", inlineTrailing = true)
-            Spacer(Modifier.height(14.dp))
-            Text("Настройки", color = c.text, fontSize = 20.sp, fontWeight = FontWeight.Medium, letterSpacing = (-.4).sp, modifier = Modifier.padding(start = 10.dp, bottom = 10.dp))
-            Section.entries.forEach { s -> ChillerControl(s.title, { section = s }, Modifier.fillMaxWidth(), icon = s.icon, style = if (s == section) ControlStyle.SELECTED else ControlStyle.QUIET) }
+        if (showNav) {
+            SettingsNav(section, onSection, actions.close, Modifier.width(220.dp).fillMaxHeight().padding(start = 16.dp, top = 8.dp, end = 8.dp))
+            Box(Modifier.width(1.dp).fillMaxHeight().background(c.border.copy(alpha = .6f)))
         }
-        Box(Modifier.width(1.dp).fillMaxHeight().background(c.border.copy(alpha = .6f)))
         Crossfade(section, Modifier.weight(1f).fillMaxHeight(), animationSpec = tween(if (LocalChillerReducedMotion.current) 0 else 150), label = "settings") { current ->
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
                 Column(Modifier.widthIn(max = 760.dp).fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 32.dp, vertical = 24.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
                     Text(current.title, color = c.text, fontSize = 22.sp, fontWeight = FontWeight.Medium, letterSpacing = (-.5).sp)
                     when (current) {
-                        Section.CONNECTION -> ConnectionSection(data, actions)
-                        Section.AGENT -> AgentSection(data, actions)
-                        Section.APPEARANCE -> AppearanceSection(data, actions)
-                        Section.DATA -> DataSection(data, actions)
-                        Section.KEYS -> KeysSection()
-                        Section.ABOUT -> AboutSection(data, actions)
+                        SettingsSection.CONNECTION -> ConnectionSection(data, actions)
+                        SettingsSection.AGENT -> AgentSection(data, actions)
+                        SettingsSection.APPEARANCE -> AppearanceSection(data, actions)
+                        SettingsSection.DATA -> DataSection(data, actions)
+                        SettingsSection.KEYS -> KeysSection()
+                        SettingsSection.ABOUT -> AboutSection(data, actions)
                     }
                 }
             }

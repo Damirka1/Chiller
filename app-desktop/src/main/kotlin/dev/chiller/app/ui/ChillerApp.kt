@@ -2,6 +2,8 @@ package dev.chiller.app.ui
 
 import androidx.compose.animation.*
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.*
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.draganddrop.dragAndDropTarget
@@ -219,6 +221,9 @@ fun ChillerApp(
     }
     var sidebar by remember { mutableStateOf(true) }
     var settings by remember { mutableStateOf(openSettingsOnStart != null) }
+    var settingsSection by remember { mutableStateOf(SettingsSection.entries.firstOrNull { it.name == openSettingsOnStart } ?: SettingsSection.CONNECTION) }
+    // Every way into settings starts at the connection, as before; the section is shared by the sidebar and the page.
+    val openSettings = { settingsSection = SettingsSection.CONNECTION; settings = true }
     var comparing by remember { mutableStateOf(openComparisonOnStart) }
     val drafts = remember { mutableStateMapOf<String, String>() }
     val attachmentsBySession = remember { mutableStateMapOf<String, List<ComposerAttachment>>() }
@@ -296,7 +301,7 @@ fun ChillerApp(
         when (action) {
             DesktopAction.NEW_CHAT -> if (!active) onNewSession()
             DesktopAction.SEND -> if (!settings && renameTarget == null && exportPreview == null) send()
-            DesktopAction.SETTINGS -> if (!active) { comparing = false; settings = true }
+            DesktopAction.SETTINGS -> if (!active) { comparing = false; openSettings() }
             DesktopAction.COMPARE -> if (!active && comparison != null) { settings = false; comparing = true }
             DesktopAction.STOP -> if (active) onStop()
             DesktopAction.FOCUS -> updateView(view.copy(layout = "focus"))
@@ -325,7 +330,7 @@ fun ChillerApp(
             val showSidebar = sidebar && maxWidth >= 740.dp
             Row(Modifier.fillMaxSize()) {
                 if (showSidebar) Sidebar(sessions, selectedSessionId, workspacePath, apiKeyConfigured, !active, onNewSession, onSelectSession, onChooseWorkspace,
-                    onSettings = { settings = true }, onTheme = { updateView(view.copy(theme = if (dark) "light" else "dark")) }, onRename = { renameTarget = it }, onDelete = { session ->
+                    onSettings = { openSettings() }, onTheme = { updateView(view.copy(theme = if (dark) "light" else "dark")) }, onRename = { renameTarget = it }, onDelete = { session ->
                         if (!active && selectedSessionId != session.id && deleteTarget == null && !deletePreviewLoading && !deleteInFlight) {
                             deleteTarget = session
                             deletePreview = null
@@ -348,7 +353,8 @@ fun ChillerApp(
                             }
                         }
                     }, onExport = onExportSession, connection = connection, width = 248f * density.fontScale.coerceIn(1f, 1.2f),
-                    running = active, searchFocus = sidebarSearch, titleBar = titleBar, onClose = { if (!active) onCloseWorkspace() })
+                    running = active, searchFocus = sidebarSearch, titleBar = titleBar, onClose = { if (!active) onCloseWorkspace() },
+                    settingsOpen = settings && !active, settingsSection = settingsSection, onSettingsSection = { settingsSection = it }, onCloseSettings = { settings = false })
                 Box(Modifier.width(1.dp).fillMaxHeight().background(c.border.copy(alpha = .7f)))
                 BoxWithConstraints(Modifier.weight(1f).fillMaxHeight()) {
                     val compact = maxWidth < 860.dp || density.fontScale > 1.3f
@@ -356,7 +362,7 @@ fun ChillerApp(
                         Toolbar(
                             titleBar, leadingInset = titleBar != null && titleBar.trafficLightsWidth > 0.dp && !showSidebar,
                             sessions.firstOrNull { it.id == selectedSessionId }?.title, workspacePath, layout, active, state.status, state.question != null,
-                            onLayout = { updateView(view.copy(layout = it.name.lowercase())) }, onSidebar = { sidebar = !sidebar }, onSettings = { settings = true },
+                            onLayout = { updateView(view.copy(layout = it.name.lowercase())) }, onSidebar = { sidebar = !sidebar }, onSettings = { openSettings() },
                             canConfigure = !active, compact = compact, compactChanges = showCompactChanges,
                             onCompactChanges = { showCompactChanges = !showCompactChanges },
                         )
@@ -378,7 +384,7 @@ fun ChillerApp(
                                 openComparison = comparison?.let { { settings = false; comparing = true } },
                                 setVerifyCommand = base.setVerifyCommand,
                                 close = { settings = false },
-                            ), Modifier.weight(1f).fillMaxWidth(), initial = openSettingsOnStart)
+                            ), settingsSection, { settingsSection = it }, Modifier.weight(1f).fillMaxWidth(), showNav = !showSidebar)
                         } else if (comparing && comparison != null && !active) {
                             ComparisonPage(comparison.state, comparison.endpoint, comparison.models, comparison.tasks,
                                 ComparisonActions(comparison.actions.start, comparison.actions.cancel, comparison.actions.show, comparison.actions.reset, close = { comparing = false }),
@@ -400,7 +406,7 @@ fun ChillerApp(
                                             onCloseProject = { if (!active) onCloseWorkspace() },
                                             connection = when {
                                                 connection.status == "verified" -> null
-                                                !apiKeyConfigured -> ConnectionPrompt("Добавить ключ") { settings = true }
+                                                !apiKeyConfigured -> ConnectionPrompt("Добавить ключ") { openSettings() }
                                                 connection.status == "checking" -> null
                                                 else -> ConnectionPrompt("Проверить") { onCheckConnection() }
                                             },
@@ -432,7 +438,7 @@ fun ChillerApp(
                                                     }
                                                     ChillerControl("Начать обычный диалог", { if (!active) onNewSession() }, icon = Icons.AutoMirrored.Outlined.ArrowForward, style = ControlStyle.PRIMARY, enabled = !active)
                                                 }
-                                            } else Composer(draft, updateDraft, mode, { mode = it }, providerModel, active, send, onStop, { settings = true }, Modifier.fillMaxWidth(), apiKeyConfigured, models, { selected ->
+                                            } else Composer(draft, updateDraft, mode, { mode = it }, providerModel, active, send, onStop, { openSettings() }, Modifier.fillMaxWidth(), apiKeyConfigured, models, { selected ->
                                                 val oldDraft = draft
                                                 scope.launch { onSelectModel(selected)?.let { id -> drafts.putIfAbsent(id, oldDraft) } }
                                             }, { composing = it }, pendingSend, contextNote, catalog, onRefreshModels, onCancelCatalogRefresh, allowProcesses, onAllowProcessesChange,
@@ -551,10 +557,15 @@ private fun Sidebar(
     sessions: List<SessionInfo>, selected: String?, workspace: String?, connected: Boolean, enabled: Boolean,
     onNew: () -> Unit, onSelect: (String) -> Unit, onChoose: () -> Unit, onSettings: () -> Unit, onTheme: () -> Unit, onRename: (SessionInfo) -> Unit, onDelete: (SessionInfo) -> Unit, onExport: (String, String) -> Unit, connection: ConnectionState, width: Float,
     running: Boolean, searchFocus: FocusRequester, titleBar: TitleBarSpec?, onClose: () -> Unit,
+    settingsOpen: Boolean = false, settingsSection: SettingsSection = SettingsSection.CONNECTION,
+    onSettingsSection: (SettingsSection) -> Unit = {}, onCloseSettings: () -> Unit = {},
 ) {
     val c = LocalChillerPalette.current
     var query by remember { mutableStateOf("") }
     val shown = filterSessions(sessions, query)
+    // Kept outside the animated content so the dialog list keeps its scroll position across a settings visit.
+    val listState = rememberLazyListState()
+    val reduced = LocalChillerReducedMotion.current
     Column(Modifier.width(width.dp).fillMaxHeight().background(c.sidebar).padding(horizontal = 12.dp)) {
         // Room for the floating traffic lights; the strip moves the window like a title bar.
         val trafficLights = titleBar != null && titleBar.trafficLightsWidth > 0.dp
@@ -564,6 +575,21 @@ private fun Sidebar(
             Text("Chiller", color = c.text, fontSize = 15.sp, fontWeight = FontWeight.Medium, letterSpacing = (-.4f).sp)
             Spacer(Modifier.weight(1f))
         }
+        // While settings are open the chats cannot be used, so the sidebar turns into the settings navigation.
+        // Opening slides it in from the right, closing slides the dialogs back from the left.
+        AnimatedContent(
+            settingsOpen, Modifier.weight(1f).fillMaxWidth(), label = "sidebar",
+            transitionSpec = {
+                if (reduced) EnterTransition.None togetherWith ExitTransition.None
+                else {
+                    val direction = if (targetState) 1 else -1
+                    (slideInHorizontally(tween(240, easing = FastOutSlowInEasing)) { direction * it / 3 } + fadeIn(tween(200, 40))) togetherWith
+                        (slideOutHorizontally(tween(240, easing = FastOutSlowInEasing)) { -direction * it / 3 } + fadeOut(tween(120)))
+                }
+            },
+        ) { inSettings ->
+        if (inSettings) SettingsNav(settingsSection, onSettingsSection, onCloseSettings, Modifier.fillMaxSize().padding(top = 4.dp))
+        else Column(Modifier.fillMaxSize()) {
         ChillerControl("Новый диалог", onNew, Modifier.fillMaxWidth(), icon = Icons.Outlined.Add, enabled = enabled, trailing = shortcut("N"))
         SidebarSearch(query, { query = it }, searchFocus)
         Spacer(Modifier.height(10.dp))
@@ -591,7 +617,7 @@ private fun Sidebar(
             sessions.isEmpty() -> Text("Здесь появятся ваши задачи", color = c.faint, fontSize = 11.sp, lineHeight = 18.sp, modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp))
             shown.isEmpty() -> Text("Нет диалогов с «${query.trim()}»", color = c.faint, fontSize = 11.sp, lineHeight = 18.sp, modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp))
         }
-        LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+        LazyColumn(Modifier.weight(1f), state = listState, verticalArrangement = Arrangement.spacedBy(1.dp)) {
             historySections(shown).forEach { section ->
                 item(key = "section-${section.title}") { Text(section.title, color = c.faint, fontSize = 11.sp, modifier = Modifier.padding(start = 10.dp, top = 12.dp, bottom = 4.dp)) }
                 items(section.sessions, key = { it.id }) { session ->
@@ -614,6 +640,8 @@ private fun Sidebar(
                 }
             }
             ChillerIconButton(Icons.Outlined.Contrast, "Сменить тему", onTheme)
+        }
+        }
         }
     }
 }
