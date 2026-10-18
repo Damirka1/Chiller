@@ -144,6 +144,8 @@ fun ChillerApp(
     comparison: ComparisonModel? = null,
     /** Undo all file changes of one turn (change ids oldest first). */
     onRewindTurn: (List<String>) -> Unit = {},
+    /** Changes already undone (from the session journal); rewind offers only what remains. */
+    undoneChanges: Set<String> = emptySet(),
     /** Result of the project's check command after the last editing run. */
     verify: dev.chiller.app.di.VerifyState = dev.chiller.app.di.VerifyState(),
     onDismissVerify: () -> Unit = {},
@@ -378,7 +380,7 @@ fun ChillerApp(
                                             onDelete = { index, text -> if (!active) targetMessage(index, text)?.let { messageDeleteTarget = it; messageActionError = null } },
                                             onRecoverInterrupted = onRecoverInterrupted,
                                             modifier = Modifier.weight(1f).fillMaxWidth(),
-                                            onRewind = { ids -> if (!active) onRewindTurn(ids) })
+                                            onRewind = { ids -> if (!active) onRewindTurn(ids) }, undoneChanges = undoneChanges)
                                     }
                                     Box(Modifier.fillMaxWidth().padding(horizontal = if (compact) 20.dp else 32.dp).padding(top = 6.dp, bottom = 18.dp), contentAlignment = Alignment.Center) {
                                         Column(Modifier.widthIn(max = 760.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1036,7 +1038,7 @@ private fun FolderToolbarChip(workspace: String?, onChoose: () -> Unit, enabled:
 }
 
 @Composable
-private fun Conversation(state: RunState, reduced: Boolean, onAnswer: (String) -> Unit, onUndo: (String) -> Unit, canUndo: Boolean, onRestoreDraft: (String) -> Unit, onPreviewFile: suspend (String) -> ByteArray?, onRevealFile: (String) -> Unit, onEdit: (Int, String) -> Unit, onDelete: (Int, String) -> Unit, onRecoverInterrupted: () -> Unit, modifier: Modifier, onRewind: (List<String>) -> Unit = {}) {
+private fun Conversation(state: RunState, reduced: Boolean, onAnswer: (String) -> Unit, onUndo: (String) -> Unit, canUndo: Boolean, onRestoreDraft: (String) -> Unit, onPreviewFile: suspend (String) -> ByteArray?, onRevealFile: (String) -> Unit, onEdit: (Int, String) -> Unit, onDelete: (Int, String) -> Unit, onRecoverInterrupted: () -> Unit, modifier: Modifier, onRewind: (List<String>) -> Unit = {}, undoneChanges: Set<String> = emptySet()) {
     val c = LocalChillerPalette.current
     val scroll = rememberLazyListState()
     val scope = rememberCoroutineScope()
@@ -1076,8 +1078,8 @@ private fun Conversation(state: RunState, reduced: Boolean, onAnswer: (String) -
                             onPreviewFile = onPreviewFile,
                             onEdit = if (canUndo) ({ _ -> onEdit(entry.index, entry.message.content.orEmpty()) }) else null,
                             onDelete = if (canUndo) ({ _ -> onDelete(entry.index, entry.message.content.orEmpty()) }) else null,
-                            rewindCount = if (entry.message.role == "user" && canUndo) turnChangeIds(state.messages, state.activities, entry.index).size else 0,
-                            onRewind = if (canUndo) ({ onRewind(turnChangeIds(state.messages, state.activities, entry.index)) }) else null)
+                            rewindCount = if (entry.message.role == "user" && canUndo) turnChangeIds(state.messages, state.activities, entry.index, undoneChanges).size else 0,
+                            onRewind = if (canUndo) ({ onRewind(turnChangeIds(state.messages, state.activities, entry.index, undoneChanges)) }) else null)
                         ToolGroup(entry.activities, reduced, onUndo, canUndo, onPreviewFile, onRevealFile)
                     }
                 }

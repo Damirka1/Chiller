@@ -3,6 +3,7 @@ package dev.chiller.app.di
 import dev.chiller.agent.*
 import dev.chiller.contracts.*
 import dev.chiller.providers.*
+import dev.chiller.app.ui.undoneChangeIds
 import dev.chiller.runtime.LocalProcessService
 import dev.chiller.sessions.*
 import dev.chiller.tools.LocalReadOnlyCodeService
@@ -83,7 +84,7 @@ data class ModelCatalogState(
     val fetchedAt: String? = null,
     val stale: Boolean = false,
 )
-data class DesktopState(val run: RunState = RunState(), val sessions: List<SessionInfo> = emptyList(), val sessionId: String = newId(), val settings: DesktopSettings = DesktopSettings(), val apiKeyConfigured: Boolean = false, val allowProcesses: Boolean = false, val exportContent: String? = null, val exportFormat: String = "markdown", val exportSessionId: String? = null, val uiPreferences: UiPreferences = UiPreferences(), val connection: ConnectionState = ConnectionState(), val catalog: ModelCatalogState = ModelCatalogState(), val sessionWorkspaces: Map<String, String> = emptyMap(), val subagents: List<SubagentSnapshot> = emptyList(), val captureTargets: List<CaptureTarget> = emptyList(), val selectedCaptureTarget: String? = null, val activeProfile: String? = null, val verify: VerifyState = VerifyState())
+data class DesktopState(val run: RunState = RunState(), val sessions: List<SessionInfo> = emptyList(), val sessionId: String = newId(), val settings: DesktopSettings = DesktopSettings(), val apiKeyConfigured: Boolean = false, val allowProcesses: Boolean = false, val exportContent: String? = null, val exportFormat: String = "markdown", val exportSessionId: String? = null, val uiPreferences: UiPreferences = UiPreferences(), val connection: ConnectionState = ConnectionState(), val catalog: ModelCatalogState = ModelCatalogState(), val sessionWorkspaces: Map<String, String> = emptyMap(), val subagents: List<SubagentSnapshot> = emptyList(), val captureTargets: List<CaptureTarget> = emptyList(), val selectedCaptureTarget: String? = null, val activeProfile: String? = null, val verify: VerifyState = VerifyState(), val undoneChanges: Set<String> = emptySet())
 
 class DesktopController(
     private val directory: Path, initialCredential: String? = LocalCredentials.load(), connectionChecker: ConnectionChecker? = null, catalogClient: ModelCatalogClient? = null,
@@ -533,6 +534,7 @@ class DesktopController(
                 val messages = projectConversation(history)
                 _state.update { it.copy(run = RunState(messages = messages)) }
             } else buildEngine().restore()
+            _state.update { it.copy(undoneChanges = undoneChangeIds(history)) }
         } catch (_: Exception) { showError("Сессию не удалось восстановить. Её данные сохранены для проверки.") }
     }
 
@@ -616,7 +618,7 @@ class DesktopController(
         try {
             val w = workspaceService ?: run { buildEngine(); workspaceService!! }
             val change = w.undo(id)
-            _state.update { it.copy(run = it.run.copy(activities = it.run.activities + Activity(name = "undo", target = change.path, status = "completed", diff = change.diff))) }
+            _state.update { it.copy(run = it.run.copy(activities = it.run.activities + Activity(name = "undo", target = change.path, status = "completed", diff = change.diff)), undoneChanges = it.undoneChanges + id) }
         } catch (e: ToolException) { showError("${e.code}: ${e.message}") }
         catch (_: Exception) { showError("Откат не выполнен. Файл мог измениться.") }
     }
@@ -716,18 +718,23 @@ class DesktopController(
         if (busy()) return@withLock RewindResult(0, listOf("Задача ещё выполняется"))
         if (changeIds.isEmpty()) return@withLock RewindResult(0, emptyList())
         val w = try { workspaceService ?: run { buildEngine(); workspaceService!! } } catch (_: Exception) { return@withLock RewindResult(0, listOf("Папка проекта недоступна")) }
+        // The journal is the durable record: a second rewind (even after a restart) skips what is already undone.
+        val alreadyUndone = runCatching { undoneChangeIds(events.read(_state.value.sessionId)) }.getOrDefault(emptySet())
+        _state.update { it.copy(undoneChanges = it.undoneChanges + alreadyUndone) }
+        val remaining = changeIds.filterNot { it in alreadyUndone }
+        if (remaining.isEmpty()) return@withLock RewindResult(0, emptyList())
         var undone = 0
         val failed = mutableListOf<String>()
-        for (id in changeIds.asReversed()) {
+        for (id in remaining.asReversed()) {
             try {
                 val change = w.undo(id)
                 undone++
-                _state.update { it.copy(run = it.run.copy(activities = it.run.activities + Activity(name = "undo", target = change.path, status = "completed", diff = change.diff))) }
+                _state.update { it.copy(run = it.run.copy(activities = it.run.activities + Activity(name = "undo", target = change.path, status = "completed", diff = change.diff)), undoneChanges = it.undoneChanges + id) }
             } catch (e: ToolException) { failed += "${e.code}: ${e.message}" }
             catch (e: Exception) { failed += "Откат не выполнен (${e.javaClass.simpleName}: ${e.message?.take(160)})" }
         }
-        runCatching { events.append(_state.value.sessionId, "turn.rewound", buildJsonObject { put("requested", changeIds.size); put("undone", undone); put("failed", failed.size) }) }
-        if (failed.isNotEmpty()) showError("Откачено $undone из ${changeIds.size}. Не откатилось: ${failed.distinct().take(3).joinToString("; ")}")
+        runCatching { events.append(_state.value.sessionId, "turn.rewound", buildJsonObject { put("requested", remaining.size); put("undone", undone); put("failed", failed.size) }) }
+        if (failed.isNotEmpty()) showError("Откачено $undone из ${remaining.size}. Не откатилось: ${failed.distinct().take(3).joinToString("; ")}")
         RewindResult(undone, failed)
     }
 

@@ -170,6 +170,14 @@ class DesktopControllerTest {
             assertEquals(ids.size, result.undone, result.failed.joinToString())
             val after = java.nio.file.Files.list(root).use { files -> files.toList() }.filter { java.nio.file.Files.isRegularFile(it) }.associate { it.fileName.toString() to java.nio.file.Files.readString(it) }
             assertEquals(original, after, "the project is back to its state before the turn")
+            // A second rewind finds nothing left and fails nothing; the UI offers no remaining changes.
+            val state = controller.state.value
+            assertTrue(dev.chiller.app.ui.turnChangeIds(state.run.messages, state.run.activities, userIndex, state.undoneChanges).isEmpty())
+            val again = controller.rewindTurn(ids)
+            assertEquals(0, again.undone); assertTrue(again.failed.isEmpty(), again.failed.joinToString())
+            // Durable: the journal alone (as after a restart) knows every undone change.
+            val journal = dev.chiller.sessions.JsonlEventStore(directory.resolve("rewind").resolve("sessions")).read(state.sessionId)
+            assertEquals(ids.toSet(), dev.chiller.app.ui.undoneChangeIds(journal).intersect(ids.toSet()))
         } finally { controller.close() }
     }
 
