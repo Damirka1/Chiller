@@ -6,7 +6,7 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.collect
 
 /** Shared by parent and helpers. Reserve before starting a stream, including concurrent children.
- * Unknown/failed outcomes keep the full reservation; only a completed, measured response refunds it.
+ * Unknown/failed outcomes keep the full reservation; only a measured response with a known terminal outcome refunds it.
  * This limits logical model requests and output tokens, not monetary cost or transport retries.
  */
 class RunBudgetProvider(
@@ -43,7 +43,7 @@ class RunBudgetProvider(
         try {
             delegate.stream(request.copy(maxOutputTokens = reserved)).collect { event ->
                 if (event is ModelEvent.Usage) event.usage.completionTokens?.let { measured = (measured ?: 0) + it.coerceAtLeast(0) }
-                if (event is ModelEvent.Completed) completed = true
+                if (event is ModelEvent.Completed || (event is ModelEvent.Failed && event.code in setOf("INCOMPLETE_TOOL_CALL", "MALFORMED_TOOL_CALL"))) completed = true
                 emit(event)
             }
         } finally {

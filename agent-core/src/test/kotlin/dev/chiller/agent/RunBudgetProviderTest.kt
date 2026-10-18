@@ -70,6 +70,20 @@ class RunBudgetProviderTest {
         assertEquals(listOf(8, 4), synchronized(delegate.requests) { delegate.requests.map { it.maxOutputTokens } })
     }
 
+    @Test fun `measured truncated call refunds unused reservation`() = runBlocking {
+        var first = true
+        val delegate = FakeProvider {
+            if (first) {
+                first = false
+                listOf(ModelEvent.Usage(TokenUsage(completionTokens = 3)), ModelEvent.Failed("INCOMPLETE_TOOL_CALL", "not executed"))
+            } else completed(2)
+        }
+        val budget = RunBudgetProvider(delegate, maxOutputTokens = 10)
+        budget.stream(request(8)).toList()
+        budget.stream(request(8)).toList()
+        assertEquals(listOf(8, 7), delegate.requests.map { it.maxOutputTokens })
+    }
+
     @Test fun `unknown and failed outcomes retain full reservation`() = runBlocking {
         var first = true
         val delegate = FakeProvider {
