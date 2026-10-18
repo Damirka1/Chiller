@@ -242,7 +242,7 @@ User explicitly resumed after limits reset. Read-only audit began at14:43 Asia/A
 ## Paste, vision, loss metrics, smart context — 17 October (late night)
 
 - Branch feat/paste-vision-context. Instant paste cards with background encoding (4K image ~160 ms, off the UI thread).
-- Vision: image_url parts for the two newest user messages, at most four images per request, downscaled to 1568 px JPEG; Settings → Agent → Изображения (auto by model id / on / off); the composer note says whether the model will see images. Offline tests only: DeepSeek Flash does not accept images and the Gemma server is unavailable.
+- Vision: image_url parts for the two newest user messages, at most four images per request, downscaled to 1568 px JPEG; Settings → Agent → Изображения (auto by model id / on / off); the composer note says whether the model will see images. Offline tests only. The deepseek-flash id is text-only under "auto"; DeepSeek's page lists vision for the current Flash, but that endpoint has not been tested with images (force "on" to try). The Gemma server is unavailable.
 - Eval loss metrics: repeated reads (same path and range with no write in between), failed file-changing calls and tool output characters, in the CLI line, report.md, summaries and the in-app comparison.
 - Compact profile: project map (files by folder with top-level declarations, ≤3000 chars) as a stable system message, find_symbols in the toolbox, prompt for fragment reads.
 - Live A/B, deepseek-flash, compact, 14 tasks, n=1 each: without map 14/14, 67 rounds, 78 calls, prompt 154 826, 120 s; with map 14/14, 56 rounds, 61 calls, prompt 143 344, 108 s. Navigation tasks went from 4 to 2 rounds; edit-large-file went from 4 to 5 rounds. Repeated reads and failed edits were 0 in both runs.

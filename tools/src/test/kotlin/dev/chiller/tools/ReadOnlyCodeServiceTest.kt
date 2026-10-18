@@ -95,9 +95,10 @@ class ReadOnlyCodeServiceTest {
             assertTrue("README.md" in map, map)
             assertFalse("total" in map, "nested methods stay out of the map")
             assertFalse("Generated" in map, "ignored folders stay out of the map")
-            val cut = service.projectMap(maxChars = 60)!!
+            val cut = service.projectMap(maxChars = 90)!!
             assertTrue(cut.startsWith("3 files, map cut to fit") || cut.startsWith("4 files, map cut to fit"), cut)
-            assertTrue(cut.length <= 60 + 80, cut)
+            assertTrue(cut.length <= 90, cut)
+            assertTrue(service.projectMap(maxChars = 200)!!.length <= 200)
         } finally { root.toFile().deleteRecursively() }
     }
 }

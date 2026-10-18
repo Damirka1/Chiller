@@ -119,10 +119,14 @@ class LocalReadOnlyCodeService(workspaceRoot: String) : ReadOnlyCodeService {
                 }
             }
         }
-        if (full.length <= maxChars) return@withContext "${names.size} files; declarations as kind name:line\n" + full.trimEnd()
-        // Too large: folders with file counts first, then as many file lines as fit.
+        val header = "${names.size} files; declarations as kind name:line\n"
+        if (header.length + full.trimEnd().length <= maxChars) return@withContext header + full.trimEnd()
+        // Too large: folders with file counts first, then as many whole lines as fit; the result never exceeds maxChars.
+        val cutHeader = "${names.size} files, map cut to fit; use list_files/find_symbols for the rest\n"
         val folders = names.groupBy { it.substringBeforeLast('/', ".") }.toSortedMap().entries.joinToString("\n") { (folder, files) -> "$folder/ (${files.size})" }
-        "${names.size} files, map cut to fit; use list_files/find_symbols for the rest\n" + (folders + "\n\n" + full).take(maxChars).substringBeforeLast('\n')
+        val budget = maxChars - cutHeader.length
+        if (budget <= 0) return@withContext cutHeader.take(maxChars)
+        cutHeader + (folders + "\n\n" + full).take(budget + 1).substringBeforeLast('\n')
     }
 
     private suspend fun git(args: List<String>): ToolResult = withContext(Dispatchers.IO) {

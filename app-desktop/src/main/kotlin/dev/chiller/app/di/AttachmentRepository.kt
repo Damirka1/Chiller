@@ -110,6 +110,18 @@ class AttachmentRepository(directory: Path, private val artifacts: ArtifactStore
      * re-encoded as JPEG. Returns null for anything [preview] would reject.
      */
     fun modelImage(sessionId: String, artifactId: String): ModelImage? {
+        // Every model round resends the newest images; prepare each stored file once, not once per round.
+        val path = rawPath(sessionId, artifactId) ?: return null
+        val key = "$sessionId/$artifactId/${Files.size(path)}/${Files.getLastModifiedTime(path).toMillis()}"
+        synchronized(modelImages) { modelImages[key] }?.let { return it }
+        return prepareModelImage(sessionId, artifactId)?.also { image -> synchronized(modelImages) { modelImages[key] = image } }
+    }
+
+    private val modelImages = object : LinkedHashMap<String, ModelImage>(16, .75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, ModelImage>?) = size > 8
+    }
+
+    private fun prepareModelImage(sessionId: String, artifactId: String): ModelImage? {
         val bytes = preview(sessionId, artifactId) ?: return null
         val source = try { ImageIO.read(ByteArrayInputStream(bytes)) } catch (_: Exception) { null } ?: return null
         val scale = minOf(1.0, MODEL_IMAGE_EDGE.toDouble() / maxOf(source.width, source.height))

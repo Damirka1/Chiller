@@ -94,6 +94,7 @@ class AttachmentRepositoryTest {
         val item = repo.importImage("s", png)
         val image = assertNotNull(repo.modelImage("s", item.artifactId))
         assertEquals("image/jpeg", image.mimeType)
+        kotlin.test.assertSame(image, repo.modelImage("s", item.artifactId), "prepared once, reused on later rounds")
         val decoded = javax.imageio.ImageIO.read(java.io.ByteArrayInputStream(java.util.Base64.getDecoder().decode(image.base64)))
         assertEquals(AttachmentRepository.MODEL_IMAGE_EDGE, decoded.width)
         assertEquals(523, decoded.height)
