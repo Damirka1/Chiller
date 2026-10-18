@@ -80,6 +80,25 @@ class AgentCoordinatorTest {
         assertTrue("Continue exactly where it stopped" in requests[1].messages.last().content.orEmpty())
     }
 
+    @Test fun truncationsAreLimitedPerStreakAndTheNoteNamesTheLimit() = runTest {
+        val requests = mutableListOf<ModelRequest>()
+        // Cut-off, progress, cut-off, progress, cut-off, progress, then done: three cut-offs in total, never two in a row.
+        val provider = ScriptedProvider { request -> flow {
+            requests += request
+            when (requests.size) {
+                1, 3, 5 -> emit(ModelEvent.Failed("INCOMPLETE_TOOL_CALL", "Provider truncated a tool call; it was not executed"))
+                7 -> emit(ModelEvent.Completed(AgentMessage("assistant", "done"), "stop"))
+                else -> emit(ModelEvent.Completed(AgentMessage("assistant", toolCalls = listOf(ToolCall(newId(), "read", "{}"))), "tool_calls"))
+            }
+        } }
+        val fixture = fixture(provider, dispatcher = StandardTestDispatcher(testScheduler), maxOutputTokens = 2048)
+        fixture.coordinator.send("write in parts", ExecutionMode.WORKSPACE_EDIT)
+        advanceUntilIdle()
+        assertEquals("completed", fixture.coordinator.state.value.status, fixture.coordinator.state.value.error)
+        val note = requests[1].messages.last().content.orEmpty()
+        assertTrue("about 2048 tokens" in note && "3072 characters" in note && "edit_file" in note, note)
+    }
+
     @Test fun repeatedTruncationStopsInsteadOfLooping() = runTest {
         val provider = ScriptedProvider { _ -> flow { emit(ModelEvent.Failed("INCOMPLETE_TOOL_CALL", "Provider truncated a tool call; it was not executed")) } }
         val fixture = fixture(provider, dispatcher = StandardTestDispatcher(testScheduler))

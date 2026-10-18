@@ -420,11 +420,13 @@ class AgentCoordinator(
                     put("runId", id); put("round", round + 1); put("kind", if (truncatedCall) "tool_call" else "text"); put("maxOutputTokens", reserve)
                 })
                 if (truncatedText) completion?.let { partial -> appendMessage(partial.copy(origin = MessageOrigin(MessageOriginKind.MODEL, model))) }
-                truncationNotice = AgentMessage("user", if (truncatedCall) TRUNCATED_CALL_NOTICE else TRUNCATED_TEXT_NOTICE)
+                truncationNotice = AgentMessage("user", if (truncatedCall) truncatedCallNotice(reserve) else TRUNCATED_TEXT_NOTICE)
                 _state.update { it.copy(streamingText = "", recoveryNotice = if (truncatedCall) "Ответ достиг лимита. Незавершённый вызов не выполнен; пробуем меньшими частями ($truncations/$MAX_TRUNCATION_RECOVERIES)." else "Ответ достиг лимита. Продолжаем с места обрыва ($truncations/$MAX_TRUNCATION_RECOVERIES).") }
                 return@repeat
             }
             truncationNotice = null
+            // Recoveries are limited per streak: a model that makes progress between cut-offs keeps going.
+            truncations = 0
             _state.update { it.copy(recoveryNotice = null) }
             val response = completion ?: throw IllegalStateException("Stream interrupted before completion; no tool was executed")
             appendMessage(response.copy(origin = MessageOrigin(MessageOriginKind.MODEL, model)))
@@ -517,7 +519,14 @@ class AgentCoordinator(
 }
 
 private const val MAX_TRUNCATION_RECOVERIES = 2
-private const val TRUNCATED_CALL_NOTICE = "[Chiller] Your previous reply reached the output token limit and its tool call was cut off. Nothing was executed and that call is discarded. Do not resend it in one piece: write large content in parts. Create the file with a first part well under the limit, then add the remaining parts with further edits, one part per call."
+/** The cut-off note names the actual limit and a concrete way to append, which small models need to recover. */
+internal fun truncatedCallNotice(replyTokens: Int): String {
+    val partChars = (replyTokens.toLong() * 3 / 2).coerceIn(1_000, 200_000)
+    return "[Chiller] Your previous reply reached the output token limit and its tool call was cut off. Nothing was executed and that call is discarded. " +
+        "Do not resend it in one piece: write large content in parts. Your reply limit is about $replyTokens tokens including any reasoning, so keep each call's " +
+        "content under about $partChars characters. Create the file with the first part, then append each next part by replacing the file's last line with " +
+        "that same line followed by the new part (edit_file with the latest snapshot_id), one part per call."
+}
 private const val TRUNCATED_TEXT_NOTICE = "[Chiller] Your previous message reached the output token limit and was cut off. Continue exactly where it stopped, without repeating what you already wrote."
 
 private const val SYSTEM_PROMPT = """You are Chiller, a precise coding assistant working in the user's project through tools.
