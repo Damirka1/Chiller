@@ -8,8 +8,15 @@ import java.util.concurrent.TimeUnit
 /** Explicit, local version probes only; no project commands, network or credential reads. */
 object EnvironmentDiagnostics {
     suspend fun inspect(): List<Pair<String, String>> = runInterruptible(Dispatchers.IO) {
-        listOf("Поиск (ripgrep)" to runCatching { Ripgrep.executable() }.getOrNull(), "Git" to "git", "Python 3" to "python3").map { (label, command) ->
-            label to if (command == null) "Встроенный инструмент повреждён — переустановите Chiller" else probe(command)
+        val rg = runCatching { Ripgrep.executable() }.getOrNull()
+        // "rg" means no bundled copy is configured (tests, unpackaged runs): the one on PATH is used instead.
+        val rgSource = when (rg) { null -> null; "rg" -> "из PATH"; else -> "встроенный" }
+        listOf("Поиск (ripgrep)" to rg, "Git" to "git", "Python 3" to "python3").map { (label, command) ->
+            label to when {
+                command == null -> "Встроенный инструмент повреждён — переустановите Chiller"
+                command == rg && rgSource != null -> "${probe(command)} · $rgSource"
+                else -> probe(command)
+            }
         }
     }
     private fun probe(command: String): String {
