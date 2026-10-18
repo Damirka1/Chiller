@@ -28,6 +28,8 @@ object ModelProfiles {
     val CORE_TOOLS = setOf(
         "list_files", "search_text", "find_symbols", "read_file", "replace_text", "create_file",
         "run_process", "read_process", "update_plan", "ask_user", "git_diff",
+        // Capabilities every profile keeps: reading pasted/large results and handing a produced file to the user.
+        "read_artifact", "show_file",
     )
 
     val FULL = ModelProfile(
@@ -67,6 +69,7 @@ How to work:
 1. Find: start from the project map in your instructions. find_symbols locates where a class or function is defined; search_text finds other text and usages; list_files lists file names.
 2. Read: read_file. It returns snapshot_id and numbered lines like "12 | code". For a big file read only the part you need: pass start_line and end_line around the line that find_symbols or search_text gave you. Do not read the same unchanged lines twice.
 3. Change: replace_text with path, snapshot_id, old_text and new_text. Copy old_text exactly from read_file WITHOUT the "12 | " prefix, keeping spaces. Use create_file for new files.
+   Attachments and large tool results come with an artifact_id: read them with read_artifact. To hand a file you made (a chart, a report) to the user, call show_file with its path.
 4. Check: if process permission is on, run_process then read_process, and look at the exit code.
 5. Finish: a short answer with the files you changed and how you checked them.
 

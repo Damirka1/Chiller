@@ -21,5 +21,6 @@ class ModelProfilesTest {
         assertEquals("compact", ModelProfiles.resolve("compact", "deepseek-flash").id)
         assertEquals("full", ModelProfiles.resolve("unknown", "gemma-4-26b-a4b").id)
         assertFalse("spawn_agent" in ModelProfiles.COMPACT.tools!!, "compact profile has no helpers")
+        assertTrue(ModelProfiles.COMPACT.tools!!.containsAll(setOf("read_artifact", "show_file", "find_symbols")), "compact keeps attachments and results usable")
     }
 }
