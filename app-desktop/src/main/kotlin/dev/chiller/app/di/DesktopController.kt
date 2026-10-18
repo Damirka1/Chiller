@@ -879,7 +879,8 @@ class DesktopController(
         val helpers = options.subagents && (modelProfile.tools == null || "spawn_agent" in modelProfile.tools!!)
         val delegating: ToolExecutor = if (helpers) SubagentTools(builtin, supervisor) else builtin
         val tools: ToolExecutor = modelProfile.tools?.let { ProfiledTools(delegating, it) } ?: delegating
-        val maxOutput = effectiveMaxOutput(options, modelProfile.maxOutputTokens)
+        val maxOutput = minOf(effectiveMaxOutput(options, modelProfile.maxOutputTokens),
+            s.catalog.models.firstOrNull { it.id == (modelOverride ?: s.settings.model) }?.maxOutputTokens?.takeIf { it > 0 } ?: Int.MAX_VALUE)
         _state.update { it.copy(activeProfile = modelProfile.id) }
         // Read once per engine: an edit to AGENTS.md applies from the next dialog.
         val instructions = if (options.projectInstructions) withContext(Dispatchers.IO) { ProjectInstructions.load(root) } else null

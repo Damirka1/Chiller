@@ -53,8 +53,28 @@ class ChatCompletionsProviderTest {
     @Test fun outputLimitsAreReadFromProviderErrors() {
         assertEquals(393216, parseOutputLimit("""{"error":{"message":"Invalid max_tokens value, the valid range of max_tokens is [1, 393216] (request_id: x)"}}"""))
         assertEquals(16384, parseOutputLimit("""{"error":{"message":"max_tokens is too large: 1000000. This model supports at most 16384 completion tokens, whereas you provided 1000000."}}"""))
-        assertEquals(32768 - 1200 - 64, parseOutputLimit("""{"message":"This model's maximum context length is 32768 tokens. However, you requested 1001200 tokens (1200 in the messages, 1000000 in the completion)."}"""))
+        assertEquals(32768 - 1200 - 64, parseRequestOutputLimit("""{"message":"This model's maximum context length is 32768 tokens. However, you requested 1001200 tokens (1200 in the messages, 1000000 in the completion)."}"""))
         assertEquals(null, parseOutputLimit("""{"error":{"message":"Unknown parameter: foo"}}"""))
+    }
+
+    @Test fun requestCapacityDoesNotPoisonModelLimit() = runBlocking {
+        OutputLimits.clear()
+        val asked = mutableListOf<Int>()
+        val server = testServer { exchange ->
+            asked += Json.parseToJsonElement(exchange.requestBody.readBytes().toString(Charsets.UTF_8)).jsonObject.getValue("max_tokens").jsonPrimitive.content.toInt()
+            if (asked.size == 1) {
+                val error = """{"error":{"message":"This model's maximum context length is 32768 tokens. However, you requested 35000 tokens (30000 in the messages, 5000 in the completion)."}}""".toByteArray()
+                exchange.sendResponseHeaders(400, error.size.toLong()); exchange.responseBody.write(error); exchange.close()
+            } else sendSse(exchange, sse("""{"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}""", "[DONE]"))
+        }
+        val client = HttpClient(CIO)
+        try {
+            val profile = ChatCompletionsProfile("local", "http://127.0.0.1:${server.address.port}", "model", requiresApiKey = false)
+            val provider = ChatCompletionsProvider(client, profile, emptyList()) { null }
+            repeat(2) { assertIs<ModelEvent.Completed>(provider.stream(ModelRequest("model", listOf(AgentMessage("user", "hello")), maxOutputTokens = 5000)).toList().last()) }
+            assertEquals(listOf(5000, 2704, 5000), asked)
+            assertNull(OutputLimits.known(profile.baseUrl, "model"))
+        } finally { client.close(); server.stop(0); OutputLimits.clear() }
     }
 
     @Test fun tooLargeMaxTokensIsClampedToTheProviderLimitAndRemembered() = runBlocking {

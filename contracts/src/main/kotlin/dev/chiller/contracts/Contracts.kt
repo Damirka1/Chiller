@@ -72,6 +72,8 @@ sealed interface ModelEvent {
 
 data class CapabilityReport(val profile: String, val tools: Boolean?, val reasoning: Boolean?, val liveVerified: Boolean = false)
 interface LlmProvider {
+    /** Known model/output budget ceiling before constructing context; null means unknown. */
+    fun outputTokenLimit(model: String): Int? = null
     suspend fun probe(): CapabilityReport
     fun stream(request: ModelRequest): Flow<ModelEvent>
 }

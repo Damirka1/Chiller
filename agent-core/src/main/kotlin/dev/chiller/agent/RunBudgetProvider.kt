@@ -24,6 +24,9 @@ class RunBudgetProvider(
         check(active == 0) { "Предыдущие запросы ещё завершаются" }
         requests = 0; output = 0
     }
+    override fun outputTokenLimit(model: String): Int = synchronized(lock) {
+        minOf(delegate.outputTokenLimit(model) ?: Int.MAX_VALUE, (maxOutputTokens - output).coerceAtLeast(1).toInt())
+    }
     override suspend fun probe() = delegate.probe()
     override fun stream(request: ModelRequest): Flow<ModelEvent> = flow {
         val reserved = synchronized(lock) {

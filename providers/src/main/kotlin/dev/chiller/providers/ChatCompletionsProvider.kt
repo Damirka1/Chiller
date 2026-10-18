@@ -104,6 +104,8 @@ class ChatCompletionsProvider private constructor(
         apiKey: () -> String?,
     ) : this(client, profile, apiKey, retryDelaysMs)
 
+    override fun outputTokenLimit(model: String): Int? = OutputLimits.known(profile.baseUrl, model)
+
     override suspend fun probe() = CapabilityReport(profile.id, tools = null, reasoning = profile.reasoningField?.let { true })
 
     override fun stream(request: ModelRequest): Flow<ModelEvent> = flow {
@@ -148,11 +150,11 @@ class ChatCompletionsProvider private constructor(
                 }
                 is AttemptOutcome.Failure -> {
                     // "max_tokens too large": learn the model's real ceiling and resend the same stateless request once.
-                    val limit = outcome.outputLimit
+                    val limit = outcome.outputLimit ?: outcome.requestOutputLimit
                     val requested = OutputLimits.effective(profile.baseUrl, modelId, request.maxOutputTokens)
                     if (limit != null && limit in 1 until requested && !clampedToProviderLimit && !emittedAny) {
-                        OutputLimits.learn(profile.baseUrl, modelId, limit)
-                        payload = requestJson(request).toString()
+                        if (outcome.outputLimit != null) OutputLimits.learn(profile.baseUrl, modelId, limit)
+                        payload = requestJson(request.copy(maxOutputTokens = minOf(request.maxOutputTokens, limit))).toString()
                         clampedToProviderLimit = true
                         attempt--
                         continue
@@ -196,6 +198,7 @@ class ChatCompletionsProvider private constructor(
                                 else -> "Provider request failed (HTTP $status)" + (providerMessage?.let { ": $it" } ?: "") },
                         ),
                         outputLimit = errorText?.let(::parseOutputLimit),
+                        requestOutputLimit = errorText?.let(::parseRequestOutputLimit),
                         retryable = status == 429 || status in 500..599,
                         retryAfterMs = response.headers[HttpHeaders.RetryAfter]?.trim()?.toLongOrNull()
                             ?.takeIf { it >= 0 && it <= 2 }?.times(1000),
@@ -340,7 +343,7 @@ private val RETRY_DELAYS_MS = listOf(500L, 1500L)
 
 private sealed interface AttemptOutcome {
     data class Streamed(val accumulator: StreamAccumulator, val sawDone: Boolean, val sawData: Boolean) : AttemptOutcome
-    data class Failure(val event: ModelEvent.Failed, val retryable: Boolean, val retryAfterMs: Long? = null, val outputLimit: Int? = null) : AttemptOutcome
+    data class Failure(val event: ModelEvent.Failed, val retryable: Boolean, val retryAfterMs: Long? = null, val outputLimit: Int? = null, val requestOutputLimit: Int? = null) : AttemptOutcome
 }
 
 private data class Delta(val text: String? = null, val reasoning: String? = null)
@@ -426,6 +429,11 @@ fun parseOutputLimit(errorText: String): Int? {
     RANGE_LIMIT.find(errorText)?.let { return it.groupValues[1].toIntOrNull() }
     AT_MOST_LIMIT.find(errorText)?.let { return it.groupValues[1].toIntOrNull() }
     LE_LIMIT.find(errorText)?.let { return it.groupValues[1].toIntOrNull() }
+    return null
+}
+
+/** Remaining capacity of this request, never cached as a model capability. */
+fun parseRequestOutputLimit(errorText: String): Int? {
     CONTEXT_LIMIT.find(errorText)?.let { m ->
         val window = m.groupValues[1].toIntOrNull() ?: return null
         val prompt = m.groupValues[2].toIntOrNull() ?: return null

@@ -327,9 +327,6 @@ class AgentCoordinator(
         var repeatedErrors = 0
         val schemaCharacters = enabled.sumOf { it.name.length + it.description.length + it.parameters.toString().length }
         val window = effectiveContextWindow(contextWindowTokens)
-        val reserve = maxOutputTokens.coerceAtMost(window / 2)
-        val requestCharacters = ((window - reserve).toLong() * 4 - schemaCharacters - 1024).coerceAtLeast(1024).coerceAtMost(Int.MAX_VALUE.toLong() - 1).toInt()
-        val planner = ContextPlanner(maxCharacters = requestCharacters + 1, outputReserveCharacters = 1)
         var lastMemory = events.read(sessionId).lastOrNull { it.type == "context.summary" }?.payload?.get("text")?.jsonPrimitive?.contentOrNull
         // A reply cut by the output limit is recovered a bounded number of times: nothing truncated is executed, the
         // model is told what happened on the next round only (the note is not part of the saved conversation).
@@ -338,6 +335,9 @@ class AgentCoordinator(
         repeat(maxRounds) { round ->
             currentCoroutineContext().ensureActive()
             stats.rounds = round + 1
+            val reserve = minOf(maxOutputTokens, provider.outputTokenLimit(model) ?: Int.MAX_VALUE, window / 2)
+            val requestCharacters = ((window - reserve).toLong() * 4 - schemaCharacters - 1024).coerceAtLeast(1024).coerceAtMost(Int.MAX_VALUE.toLong() - 1).toInt()
+            val planner = ContextPlanner(maxCharacters = requestCharacters + 1, outputReserveCharacters = 1)
             val history = _state.value.messages
             val fixed = listOfNotNull(system, guidance, map)
             var selection = planner.select(fixed + history)

@@ -30,6 +30,14 @@ class RunBudgetProviderTest {
         add(ModelEvent.Completed(AgentMessage("assistant", "ok"), "stop"))
     }
 
+    @Test fun `context planner sees remaining output allowance`() = runBlocking {
+        val delegate = FakeProvider { completed(6) }
+        val budget = RunBudgetProvider(delegate, maxOutputTokens = 10)
+        assertEquals(10, budget.outputTokenLimit("test"))
+        budget.stream(request(8)).toList()
+        assertEquals(4, budget.outputTokenLimit("test"))
+    }
+
     @Test fun `parent and children reserve from one shared cap concurrently`() = runBlocking<Unit> {
         val release = CompletableDeferred<Unit>()
         val bothStarted = CompletableDeferred<Unit>()
