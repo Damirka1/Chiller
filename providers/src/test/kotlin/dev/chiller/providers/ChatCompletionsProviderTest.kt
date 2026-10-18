@@ -50,6 +50,54 @@ class ChatCompletionsProviderTest {
         assertEquals("{\"path\":\"x\"}", completed.message.toolCalls.single().arguments)
     }
 
+    @Test fun outputLimitsAreReadFromProviderErrors() {
+        assertEquals(393216, parseOutputLimit("""{"error":{"message":"Invalid max_tokens value, the valid range of max_tokens is [1, 393216] (request_id: x)"}}"""))
+        assertEquals(16384, parseOutputLimit("""{"error":{"message":"max_tokens is too large: 1000000. This model supports at most 16384 completion tokens, whereas you provided 1000000."}}"""))
+        assertEquals(32768 - 1200 - 64, parseOutputLimit("""{"message":"This model's maximum context length is 32768 tokens. However, you requested 1001200 tokens (1200 in the messages, 1000000 in the completion)."}"""))
+        assertEquals(null, parseOutputLimit("""{"error":{"message":"Unknown parameter: foo"}}"""))
+    }
+
+    @Test fun tooLargeMaxTokensIsClampedToTheProviderLimitAndRemembered() = runBlocking {
+        OutputLimits.clear()
+        val bodies = mutableListOf<String>()
+        val server = testServer { exchange ->
+            val body = exchange.requestBody.readBytes().toString(Charsets.UTF_8)
+            bodies += body
+            val asked = Json.parseToJsonElement(body).jsonObject.getValue("max_tokens").jsonPrimitive.content.toInt()
+            if (asked > 8192) {
+                val error = """{"error":{"message":"Invalid max_tokens value, the valid range of max_tokens is [1, 8192]"}}""".toByteArray()
+                exchange.sendResponseHeaders(400, error.size.toLong()); exchange.responseBody.write(error); exchange.close()
+            } else sendSse(exchange, sse("""{"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}""", "[DONE]"))
+        }
+        val client = HttpClient(CIO)
+        try {
+            val profile = ChatCompletionsProfile("local", "http://127.0.0.1:${server.address.port}", "big-model", requiresApiKey = false)
+            val provider = ChatCompletionsProvider(client, profile, emptyList()) { null }
+            val first = provider.stream(ModelRequest("big-model", listOf(AgentMessage("user", "hi")), maxOutputTokens = 1_000_000)).toList()
+            assertIs<ModelEvent.Completed>(first.last())
+            assertEquals(listOf("1000000", "8192"), bodies.map { Json.parseToJsonElement(it).jsonObject.getValue("max_tokens").jsonPrimitive.content })
+            assertEquals(8192, OutputLimits.known(profile.baseUrl, "big-model"))
+            provider.stream(ModelRequest("big-model", listOf(AgentMessage("user", "again")), maxOutputTokens = 1_000_000)).toList()
+            assertEquals("8192", Json.parseToJsonElement(bodies.last()).jsonObject.getValue("max_tokens").jsonPrimitive.content, "the learned limit is used straight away")
+            assertEquals(3, bodies.size)
+        } finally { client.close(); server.stop(0); OutputLimits.clear() }
+    }
+
+    @Test fun otherBadRequestsShowTheProviderMessage() = runBlocking {
+        val server = testServer { exchange ->
+            exchange.requestBody.readBytes()
+            val error = """{"error":{"message":"Unsupported parameter: 'foo'"}}""".toByteArray()
+            exchange.sendResponseHeaders(400, error.size.toLong()); exchange.responseBody.write(error); exchange.close()
+        }
+        val client = HttpClient(CIO)
+        try {
+            val profile = ChatCompletionsProfile("local", "http://127.0.0.1:${server.address.port}", "m", requiresApiKey = false)
+            val failed = ChatCompletionsProvider(client, profile, emptyList()) { null }.stream(ModelRequest("m", listOf(AgentMessage("user", "hi")))).toList().last()
+            assertIs<ModelEvent.Failed>(failed)
+            assertEquals("Provider request failed (HTTP 400): Unsupported parameter: 'foo'", failed.message)
+        } finally { client.close(); server.stop(0) }
+    }
+
     @Test fun visionSendsRecentImagesAsDataUrlsAndOnlyOnce() = runBlocking {
         var body = ""
         val server = testServer { exchange ->

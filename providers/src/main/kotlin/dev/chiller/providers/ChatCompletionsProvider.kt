@@ -14,6 +14,7 @@ import io.ktor.client.request.header
 import io.ktor.client.request.preparePost
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsChannel
+import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.contentType
@@ -111,9 +112,11 @@ class ChatCompletionsProvider private constructor(
             emit(ModelEvent.Failed("MISSING_CREDENTIAL", "Provider credentials are not configured"))
             return@flow
         }
-        val payload = runCatching { requestJson(request) }.getOrElse {
+        var payload = runCatching { requestJson(request) }.getOrElse {
             emit(ModelEvent.Failed("INVALID_REQUEST", "Could not encode provider request")); return@flow
         }.toString()
+        val modelId = request.model.ifBlank { profile.model }
+        var clampedToProviderLimit = false
         var attempt = 0
         while (true) {
             attempt++
@@ -144,6 +147,16 @@ class ChatCompletionsProvider private constructor(
                     }
                 }
                 is AttemptOutcome.Failure -> {
+                    // "max_tokens too large": learn the model's real ceiling and resend the same stateless request once.
+                    val limit = outcome.outputLimit
+                    val requested = OutputLimits.effective(profile.baseUrl, modelId, request.maxOutputTokens)
+                    if (limit != null && limit in 1 until requested && !clampedToProviderLimit && !emittedAny) {
+                        OutputLimits.learn(profile.baseUrl, modelId, limit)
+                        payload = requestJson(request).toString()
+                        clampedToProviderLimit = true
+                        attempt--
+                        continue
+                    }
                     failure = outcome.event
                     retryable = outcome.retryable && !emittedAny
                     retryAfterMs = outcome.retryAfterMs
@@ -173,11 +186,16 @@ class ChatCompletionsProvider private constructor(
             }.execute { response ->
                 val status = response.status.value
                 if (status !in 200..299) {
+                    // Error bodies are small JSON; only 400s are read, for the provider's own explanation and limits.
+                    val errorText = if (status == 400) runCatching { response.bodyAsText().take(16_384) }.getOrNull() else null
+                    val providerMessage = errorText?.let(::providerErrorMessage)
                     outcome = AttemptOutcome.Failure(
                         ModelEvent.Failed(
                             when (status) { 401, 403 -> "AUTHENTICATION_FAILED"; 429 -> "RATE_LIMITED"; else -> "PROVIDER_HTTP_ERROR" },
-                            when (status) { 401, 403 -> "Provider rejected credentials (HTTP $status)"; 429 -> "Provider rate limit reached"; else -> "Provider request failed (HTTP $status)" },
+                            when (status) { 401, 403 -> "Provider rejected credentials (HTTP $status)"; 429 -> "Provider rate limit reached"
+                                else -> "Provider request failed (HTTP $status)" + (providerMessage?.let { ": $it" } ?: "") },
                         ),
+                        outputLimit = errorText?.let(::parseOutputLimit),
                         retryable = status == 429 || status in 500..599,
                         retryAfterMs = response.headers[HttpHeaders.RetryAfter]?.trim()?.toLongOrNull()
                             ?.takeIf { it >= 0 && it <= 2 }?.times(1000),
@@ -291,7 +309,7 @@ class ChatCompletionsProvider private constructor(
         return buildJsonObject {
             put("model", request.model.ifBlank { profile.model })
             put("messages", messages); put("stream", true)
-            put("max_tokens", request.maxOutputTokens)
+            put("max_tokens", OutputLimits.effective(profile.baseUrl, request.model.ifBlank { profile.model }, request.maxOutputTokens))
             if (request.tools.isNotEmpty()) put("tools", JsonArray(request.tools.map(::toolJson)))
             profile.thinkingOptions(request.thinking).forEach { (key, value) -> put(key, value) }
             put("stream_options", profile.streamOptions)
@@ -309,7 +327,8 @@ class ChatCompletionsProvider private constructor(
 }
 
 private const val MAX_SSE_FRAME_CHARS = 1_048_576
-private const val MAX_SSE_RESPONSE_CHARS = 8_388_608
+/** Counted, not stored: room for a reply at a model's full output limit (hundreds of thousands of tokens). */
+private const val MAX_SSE_RESPONSE_CHARS = 67_108_864
 private const val MAX_ATTEMPTS = 3
 /** Newest user messages whose images are sent, and the cap on images per request. */
 private const val VISION_RECENT_USER_MESSAGES = 2
@@ -321,7 +340,7 @@ private val RETRY_DELAYS_MS = listOf(500L, 1500L)
 
 private sealed interface AttemptOutcome {
     data class Streamed(val accumulator: StreamAccumulator, val sawDone: Boolean, val sawData: Boolean) : AttemptOutcome
-    data class Failure(val event: ModelEvent.Failed, val retryable: Boolean, val retryAfterMs: Long? = null) : AttemptOutcome
+    data class Failure(val event: ModelEvent.Failed, val retryable: Boolean, val retryAfterMs: Long? = null, val outputLimit: Int? = null) : AttemptOutcome
 }
 
 private data class Delta(val text: String? = null, val reasoning: String? = null)
@@ -383,3 +402,46 @@ private fun usageOf(root: JsonObject): TokenUsage? {
     )
     return parsed.takeUnless { it.isEmpty }
 }
+
+/**
+ * Output ceilings learned from providers, per endpoint and model, for this process. A request asks for what the
+ * caller wants; once a provider has said its maximum, later requests ask for at most that.
+ */
+object OutputLimits {
+    private val learned = java.util.concurrent.ConcurrentHashMap<String, Int>()
+    private fun key(baseUrl: String, model: String) = baseUrl.trimEnd('/') + "|" + model
+    fun effective(baseUrl: String, model: String, requested: Int): Int = learned[key(baseUrl, model)]?.let { minOf(it, requested) } ?: requested
+    fun learn(baseUrl: String, model: String, limit: Int) { learned[key(baseUrl, model)] = limit }
+    fun known(baseUrl: String, model: String): Int? = learned[key(baseUrl, model)]
+    internal fun clear() = learned.clear()
+}
+
+private val RANGE_LIMIT = Regex("""max_tokens[^\[]{0,40}\[\s*\d+\s*,\s*(\d+)\s*]""", RegexOption.IGNORE_CASE)
+private val AT_MOST_LIMIT = Regex("""at most (\d+) (?:completion |output )?tokens""", RegexOption.IGNORE_CASE)
+private val LE_LIMIT = Regex("""max_tokens[^0-9]{0,60}(?:<=|less than or equal to|must not exceed|maximum (?:value )?(?:is|of))\s*(\d+)""", RegexOption.IGNORE_CASE)
+private val CONTEXT_LIMIT = Regex("""maximum context length is (\d+) tokens.*?\((\d+) in the messages""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+
+/** The largest max_tokens a provider says it accepts, from its 400 error text; null when the error is about something else. */
+fun parseOutputLimit(errorText: String): Int? {
+    RANGE_LIMIT.find(errorText)?.let { return it.groupValues[1].toIntOrNull() }
+    AT_MOST_LIMIT.find(errorText)?.let { return it.groupValues[1].toIntOrNull() }
+    LE_LIMIT.find(errorText)?.let { return it.groupValues[1].toIntOrNull() }
+    CONTEXT_LIMIT.find(errorText)?.let { m ->
+        val window = m.groupValues[1].toIntOrNull() ?: return null
+        val prompt = m.groupValues[2].toIntOrNull() ?: return null
+        return (window - prompt - 64).takeIf { it > 0 }
+    }
+    return null
+}
+
+/** The provider's own error text from an OpenAI-style error body, shortened; never the request. */
+internal fun providerErrorMessage(body: String): String? = runCatching {
+    val root = kotlinx.serialization.json.Json.parseToJsonElement(body).jsonObject
+    val error = root["error"]
+    val text = when (error) {
+        is kotlinx.serialization.json.JsonObject -> error["message"]?.jsonPrimitive?.contentOrNull
+        is kotlinx.serialization.json.JsonPrimitive -> error.contentOrNull
+        else -> root["message"]?.jsonPrimitive?.contentOrNull
+    }
+    text?.replace(Regex("\\s+"), " ")?.take(200)
+}.getOrNull()
