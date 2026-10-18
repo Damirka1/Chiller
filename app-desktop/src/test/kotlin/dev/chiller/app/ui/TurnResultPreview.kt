@@ -28,9 +28,9 @@ fun main() {
     for (dark in listOf(false, true)) for ((name, result) in listOf("clean" to clean, "issues" to issues)) {
         lateinit var scene: ImageComposeScene
         SwingUtilities.invokeAndWait {
-            scene = ImageComposeScene(1520, 1040, Density(2f)) {
+            scene = ImageComposeScene(1520, 1300, Density(2f)) {
                 ChillerTheme(darkTheme = dark, reducedMotion = true) {
-                    Box(Modifier.fillMaxSize().background(LocalChillerPalette.current.canvas).padding(20.dp)) { TurnResultCard(state, result.copy(), Modifier, initiallyOpen = true) }
+                    Box(Modifier.fillMaxSize().background(LocalChillerPalette.current.canvas).padding(20.dp)) { TurnResultCard(state, result.copy(), Modifier, initiallyOpen = true, outside = if (name == "issues") dev.chiller.app.di.OutsideChanges(0, added = listOf("node_modules/.cache/build.json", "dist/bundle.js"), modified = listOf("package-lock.json")) else null) }
                 }
             }
         }

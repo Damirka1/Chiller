@@ -39,7 +39,7 @@ import dev.chiller.design.LocalChillerReducedMotion
  * starts expanded, otherwise it is one summary line that opens on click.
  */
 @Composable
-internal fun TurnResultCard(state: RunState, result: TurnResult, modifier: Modifier = Modifier, initiallyOpen: Boolean? = null) {
+internal fun TurnResultCard(state: RunState, result: TurnResult, modifier: Modifier = Modifier, initiallyOpen: Boolean? = null, outside: dev.chiller.app.di.OutsideChanges? = null) {
     val c = LocalChillerPalette.current
     val reduced = LocalChillerReducedMotion.current
     val issues = result.issues.isNotEmpty()
@@ -61,7 +61,7 @@ internal fun TurnResultCard(state: RunState, result: TurnResult, modifier: Modif
             Spacer(Modifier.width(9.dp))
             Text(title, color = c.text, fontSize = 13.sp, fontWeight = FontWeight.Medium)
             Spacer(Modifier.width(10.dp))
-            Text(summaryLine(result), color = c.muted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+            Text(summaryLine(result, outside?.count ?: 0), color = c.muted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
             Icon(if (open) Icons.Outlined.KeyboardArrowUp else Icons.Outlined.KeyboardArrowDown, if (open) "Свернуть итог" else "Развернуть итог", Modifier.size(15.dp), tint = c.faint)
         }
         AnimatedVisibility(open, enter = if (reduced) fadeIn(tween(0)) else expandVertically(tween(180)) + fadeIn(tween(140)), exit = if (reduced) fadeOut(tween(0)) else shrinkVertically(tween(150)) + fadeOut(tween(100))) {
@@ -86,6 +86,17 @@ internal fun TurnResultCard(state: RunState, result: TurnResult, modifier: Modif
                         }
                     }
                     if (result.files.size > 6) Text("и ещё ${result.files.size - 6}", color = c.faint, fontSize = 11.sp, modifier = Modifier.padding(start = 24.dp))
+                }
+                if (outside != null && outside.count > 0) Section("Вне инструментов агента") {
+                    Text("Изменено командами или вручную. Откат хода эти файлы не вернёт.", color = c.muted, fontSize = 11.sp, lineHeight = 16.sp)
+                    val rows = outside.added.map { it to "новый" } + outside.modified.map { it to "изменён" } + outside.deleted.map { it to "удалён" }
+                    rows.take(6).forEach { (path, label) ->
+                        Line(Icons.Outlined.Terminal, c.muted) {
+                            Text(path, color = c.text, fontSize = 12.sp, fontFamily = FontFamily.Monospace, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                            Spacer(Modifier.width(8.dp)); Text(label, color = c.faint, fontSize = 11.sp)
+                        }
+                    }
+                    if (rows.size > 6 || outside.truncated) Text("и ещё ${if (outside.truncated) "больше " else ""}${(outside.count - 6).coerceAtLeast(0)}", color = c.faint, fontSize = 11.sp, modifier = Modifier.padding(start = 24.dp))
                 }
                 if (result.commands.isNotEmpty()) Section("Команды") {
                     result.commands.forEach { run ->
@@ -115,13 +126,15 @@ internal fun TurnResultCard(state: RunState, result: TurnResult, modifier: Modif
 }
 
 /** One line for the collapsed card: counts only, e.g. "2 файла · проверки: 1 из 1 · показан 1 файл". */
-internal fun summaryLine(result: TurnResult): String = buildList {
+internal fun summaryLine(result: TurnResult, outside: Int = 0): String = buildList {
+    // Issues first: the line is cut at the end on narrow windows.
+    if (result.issues.isNotEmpty()) add("замечаний ${result.issues.size}")
     if (result.files.isNotEmpty()) add("${result.files.size} ${plural(result.files.size, "файл", "файла", "файлов")}")
     val checks = result.commands.filter { it.isCheck }
     if (checks.isNotEmpty()) add("проверки: ${checks.count { it.succeeded }} из ${checks.size} прошли")
     else if (result.commands.isNotEmpty()) add("${result.commands.size} ${plural(result.commands.size, "команда", "команды", "команд")}")
     if (result.presented.isNotEmpty()) add("показано ${result.presented.size}")
-    if (result.issues.isNotEmpty()) add("замечаний ${result.issues.size}")
+    if (outside > 0) add("вне журнала $outside")
 }.joinToString(" · ")
 
 @Composable

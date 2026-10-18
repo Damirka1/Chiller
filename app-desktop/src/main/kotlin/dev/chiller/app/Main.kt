@@ -132,7 +132,7 @@ fun main() = application {
                 runtime = dev.chiller.app.di.BuildInfo.runtime, os = dev.chiller.app.di.BuildInfo.os,
             ),
             onRewindTurn = { ids -> scope.launch { controller.rewindTurn(ids) } },
-            verify = state.verify, onDismissVerify = controller::dismissVerify, undoneChanges = state.undoneChanges,
+            verify = state.verify, onDismissVerify = controller::dismissVerify, undoneChanges = state.undoneChanges, outsideChanges = state.outside,
             comparison = dev.chiller.app.ui.ComparisonModel(
                 comparisonState, state.settings.baseUrl,
                 (listOf(state.settings.model) + state.catalog.models.map { it.id } + controller.configuredModels()).filter { it.isNotBlank() }.distinct(),

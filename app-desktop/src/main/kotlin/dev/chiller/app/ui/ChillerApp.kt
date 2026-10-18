@@ -147,6 +147,8 @@ fun ChillerApp(
     onRewindTurn: (List<String>) -> Unit = {},
     /** Changes already undone (from the session journal); rewind offers only what remains. */
     undoneChanges: Set<String> = emptySet(),
+    /** Files changed outside the agent's file tools during the latest turn. */
+    outsideChanges: dev.chiller.app.di.OutsideChanges? = null,
     /** Result of the project's check command after the last editing run. */
     verify: dev.chiller.app.di.VerifyState = dev.chiller.app.di.VerifyState(),
     onDismissVerify: () -> Unit = {},
@@ -381,7 +383,7 @@ fun ChillerApp(
                                             onDelete = { index, text -> if (!active) targetMessage(index, text)?.let { messageDeleteTarget = it; messageActionError = null } },
                                             onRecoverInterrupted = onRecoverInterrupted,
                                             modifier = Modifier.weight(1f).fillMaxWidth(),
-                                            onRewind = { ids -> if (!active) onRewindTurn(ids) }, undoneChanges = undoneChanges)
+                                            onRewind = { ids -> if (!active) onRewindTurn(ids) }, undoneChanges = undoneChanges, outsideChanges = outsideChanges)
                                     }
                                     Box(Modifier.fillMaxWidth().padding(horizontal = if (compact) 20.dp else 32.dp).padding(top = 6.dp, bottom = 18.dp), contentAlignment = Alignment.Center) {
                                         Column(Modifier.widthIn(max = 760.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1039,7 +1041,7 @@ private fun FolderToolbarChip(workspace: String?, onChoose: () -> Unit, enabled:
 }
 
 @Composable
-private fun Conversation(state: RunState, reduced: Boolean, onAnswer: (String) -> Unit, onUndo: (String) -> Unit, canUndo: Boolean, onRestoreDraft: (String) -> Unit, onPreviewFile: suspend (String) -> ByteArray?, onRevealFile: (String) -> Unit, onEdit: (Int, String) -> Unit, onDelete: (Int, String) -> Unit, onRecoverInterrupted: () -> Unit, modifier: Modifier, onRewind: (List<String>) -> Unit = {}, undoneChanges: Set<String> = emptySet()) {
+private fun Conversation(state: RunState, reduced: Boolean, onAnswer: (String) -> Unit, onUndo: (String) -> Unit, canUndo: Boolean, onRestoreDraft: (String) -> Unit, onPreviewFile: suspend (String) -> ByteArray?, onRevealFile: (String) -> Unit, onEdit: (Int, String) -> Unit, onDelete: (Int, String) -> Unit, onRecoverInterrupted: () -> Unit, modifier: Modifier, onRewind: (List<String>) -> Unit = {}, undoneChanges: Set<String> = emptySet(), outsideChanges: dev.chiller.app.di.OutsideChanges? = null) {
     val c = LocalChillerPalette.current
     val scroll = rememberLazyListState()
     val scope = rememberCoroutineScope()
@@ -1122,7 +1124,8 @@ private fun Conversation(state: RunState, reduced: Boolean, onAnswer: (String) -
             // A turn that did something ends with a card of facts; a plain answer keeps the short status line.
             val finished = state.status in setOf("completed", "failed", "cancelled", "interrupted")
             val result = if (finished) turnResult(state, undoneChanges) else null
-            if (result != null && !result.isEmpty) item(key = "turn-result") { TurnResultCard(state, result, entryModifier("turn-result")) }
+            val outside = outsideChanges?.takeIf { it.count > 0 && it.userIndex == state.messages.indexOfLast { m -> m.role == "user" } }
+            if (result != null && (!result.isEmpty || outside != null)) item(key = "turn-result") { TurnResultCard(state, result, entryModifier("turn-result"), outside = outside) }
             else {
                 if (state.status in setOf("completed", "cancelled", "interrupted")) item(key = "run-outcome") {
                     Text(runProgressLabel(state).orEmpty(), color = c.muted, fontSize = 12.sp, modifier = entryModifier("run-outcome").padding(start = 6.dp))

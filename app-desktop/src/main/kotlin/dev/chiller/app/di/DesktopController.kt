@@ -84,7 +84,7 @@ data class ModelCatalogState(
     val fetchedAt: String? = null,
     val stale: Boolean = false,
 )
-data class DesktopState(val run: RunState = RunState(), val sessions: List<SessionInfo> = emptyList(), val sessionId: String = newId(), val settings: DesktopSettings = DesktopSettings(), val apiKeyConfigured: Boolean = false, val allowProcesses: Boolean = false, val exportContent: String? = null, val exportFormat: String = "markdown", val exportSessionId: String? = null, val uiPreferences: UiPreferences = UiPreferences(), val connection: ConnectionState = ConnectionState(), val catalog: ModelCatalogState = ModelCatalogState(), val sessionWorkspaces: Map<String, String> = emptyMap(), val subagents: List<SubagentSnapshot> = emptyList(), val captureTargets: List<CaptureTarget> = emptyList(), val selectedCaptureTarget: String? = null, val activeProfile: String? = null, val verify: VerifyState = VerifyState(), val undoneChanges: Set<String> = emptySet())
+data class DesktopState(val run: RunState = RunState(), val sessions: List<SessionInfo> = emptyList(), val sessionId: String = newId(), val settings: DesktopSettings = DesktopSettings(), val apiKeyConfigured: Boolean = false, val allowProcesses: Boolean = false, val exportContent: String? = null, val exportFormat: String = "markdown", val exportSessionId: String? = null, val uiPreferences: UiPreferences = UiPreferences(), val connection: ConnectionState = ConnectionState(), val catalog: ModelCatalogState = ModelCatalogState(), val sessionWorkspaces: Map<String, String> = emptyMap(), val subagents: List<SubagentSnapshot> = emptyList(), val captureTargets: List<CaptureTarget> = emptyList(), val selectedCaptureTarget: String? = null, val activeProfile: String? = null, val verify: VerifyState = VerifyState(), val undoneChanges: Set<String> = emptySet(), val outside: OutsideChanges? = null)
 
 class DesktopController(
     private val directory: Path, initialCredential: String? = LocalCredentials.load(), connectionChecker: ConnectionChecker? = null, catalogClient: ModelCatalogClient? = null,
@@ -133,6 +133,7 @@ class DesktopController(
     private var coordinator: AgentCoordinator? = null
     private var processService: ProcessService? = null
     private var workspaceService: LocalWorkspace? = null
+    private var codeService: LocalReadOnlyCodeService? = null
     private var observer: Job? = null
     private var questions = PendingQuestions()
     private val preferencesStore = UiPreferencesStore(directory)
@@ -502,7 +503,7 @@ class DesktopController(
         // Leaving the demo returns to the project the user had open, not the throwaway demo folder.
         val current = _state.value.settings.workspace
         val workspace = if (current != null && isDemoFolder(current)) savedWorkspace?.takeIf { Files.isDirectory(Path.of(it)) } else current
-        _state.update { it.copy(sessionId = newId(), run = RunState(), verify = VerifyState(), settings = it.settings.copy(workspace = workspace)) }
+        _state.update { it.copy(sessionId = newId(), run = RunState(), verify = VerifyState(), outside = null, undoneChanges = emptySet(), settings = it.settings.copy(workspace = workspace)) }
     }
 
     /** Leaves the current project: a new dialog on the start screen without a folder. */
@@ -529,12 +530,13 @@ class DesktopController(
             resetEngine()
             val history = events.read(id)
             val savedRoot = history.firstOrNull { it.type == "session.workspace" }?.payload?.get("root")?.jsonPrimitive?.contentOrNull
-            _state.update { it.copy(sessionId = id, settings = it.settings.copy(workspace = savedRoot), run = RunState(), verify = VerifyState()) }
+            _state.update { it.copy(sessionId = id, settings = it.settings.copy(workspace = savedRoot), run = RunState(), verify = VerifyState(), outside = null, undoneChanges = emptySet()) }
             if (savedRoot == null) {
                 val messages = projectConversation(history)
                 _state.update { it.copy(run = RunState(messages = messages)) }
             } else buildEngine().restore()
-            _state.update { it.copy(undoneChanges = undoneChangeIds(history)) }
+            val outside = history.lastOrNull { it.type == "turn.outside_changes" }?.let { runCatching { json.decodeFromJsonElement(OutsideChanges.serializer(), it.payload) }.getOrNull() }
+            _state.update { it.copy(undoneChanges = undoneChangeIds(history), outside = outside) }
         } catch (_: Exception) { showError("Сессию не удалось восстановить. Её данные сохранены для проверки.") }
     }
 
@@ -568,6 +570,10 @@ class DesktopController(
         return try {
             val engine = coordinator ?: buildEngine().also { it.restore() }
             val changesBefore = engine.state.value.activities.count { it.diff != null && it.status == "completed" }
+            // Metadata snapshot before an editing turn: what changes outside the file tools is reported afterwards.
+            val turnIndex = engine.state.value.messages.size
+            val stampsBefore = if (mode == ExecutionMode.WORKSPACE_EDIT) withContext(Dispatchers.IO) { runCatching { codeService?.fileStamps() }.getOrNull() } else null
+            val stampSource = codeService
             if (!preserveAutoVerifyAttempt) autoVerifyEpoch++
             val runEpoch = autoVerifyEpoch
             val accepted = CompletableDeferred<Boolean>()
@@ -581,6 +587,7 @@ class DesktopController(
                 val completedRun = engine.state.value
                 if (!accepted.isCompleted) accepted.complete(false)
                 scope.launch { refreshSessions() }
+                scope.launch { recordOutsideChanges(session, stampSource, stampsBefore, completedRun, turnIndex) }
                 scope.launch { afterRun(session, mode, changesBefore, completedRun, runEpoch, engine) }
             }
             val wasAccepted = accepted.await()
@@ -642,6 +649,15 @@ class DesktopController(
      * check command (argv, no shell, project root, only with process permission). On failure the agent gets the
      * output and one more try, up to the configured attempts. Nothing runs when any of these is missing.
      */
+    private suspend fun recordOutsideChanges(session: String, code: LocalReadOnlyCodeService?, before: Map<String, dev.chiller.tools.FileStamp>?, run: RunState, turnIndex: Int) {
+        if (before == null || code == null || run.messages.getOrNull(turnIndex)?.role != "user") return
+        val after = withContext(Dispatchers.IO) { runCatching { code.fileStamps() }.getOrNull() } ?: return
+        val changes = outsideChanges(before, after, toolTouchedPaths(run.messages, turnIndex), turnIndex)
+        if (changes.count == 0) return
+        runCatching { events.append(session, "turn.outside_changes", json.encodeToJsonElement(OutsideChanges.serializer(), changes).jsonObject) }
+        _state.update { if (it.sessionId == session) it.copy(outside = changes) else it }
+    }
+
     private suspend fun afterRun(session: String, mode: ExecutionMode, changesBefore: Int, completedRun: RunState, runEpoch: Long, engine: AgentCoordinator) {
         val context = commands.withLock {
             val state = _state.value
@@ -771,7 +787,7 @@ class DesktopController(
         workspaceService = workspace
         val processes = processServiceFactory(root); processService = processes
         questions = PendingQuestions()
-        val code = LocalReadOnlyCodeService(workspace.root)
+        val code = LocalReadOnlyCodeService(workspace.root); codeService = code
         val builtin = BuiltinTools(workspace, processes, artifacts, questions, code = code, web = BoundedWebService(), screens = captureController)
         val baseProfile = if (java.net.URI(s.settings.baseUrl).host == "api.deepseek.com")
             ChatCompletionsProfile.deepSeekFlash(s.settings.baseUrl, s.settings.model)
