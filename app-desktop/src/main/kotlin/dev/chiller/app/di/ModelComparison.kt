@@ -79,7 +79,7 @@ class ModelComparison(private val directory: Path, private val scope: CoroutineS
             val reports = mutableListOf<EvalReport>()
             var complete = false
             // Every finished attempt is written at once: a stop, an error or a crash keeps what was paid for.
-            fun save() = runCatching {
+            fun save() {
                 val partial = (reports.size until sides.size).mapNotNull { index ->
                     _state.value.results[index]?.takeIf { it.isNotEmpty() }?.let { rows ->
                         EvalReport(sides[index].model, endpoint, stamp, SuiteSpec.DEFAULT_MAX_ROUNDS, SuiteSpec.DEFAULT_MAX_OUTPUT, repeats, rows, summarize(rows),
@@ -87,10 +87,8 @@ class ModelComparison(private val directory: Path, private val scope: CoroutineS
                     }
                 }
                 val record = ComparisonRecord(id, stamp, endpoint, sides, tasks.toList(), repeats, reports + partial, complete)
-                Files.createDirectories(folder)
-                val temp = folder.resolve("$id.json.tmp")
-                Files.writeString(temp, json.encodeToString(ComparisonRecord.serializer(), record))
-                Files.move(temp, folder.resolve("$id.json"), java.nio.file.StandardCopyOption.REPLACE_EXISTING, java.nio.file.StandardCopyOption.ATOMIC_MOVE)
+                try { writeReplacing(folder.resolve("$id.json"), json.encodeToString(ComparisonRecord.serializer(), record)) }
+                catch (error: Exception) { _state.update { it.copy(error = "Результаты не сохранены: ${error.javaClass.simpleName}: ${error.message?.take(200)}") } }
             }
             try {
                 sides.forEachIndexed { index, side ->
@@ -120,6 +118,27 @@ class ModelComparison(private val directory: Path, private val scope: CoroutineS
     }
 
     fun cancel() { job?.cancel() }
+
+    /**
+     * Atomic replace that tolerates Windows: a file written a moment ago may still be open in an antivirus or
+     * indexer scan, so the rename is retried briefly, then falls back to a plain write rather than losing data.
+     */
+    private fun writeReplacing(target: Path, text: String) {
+        Files.createDirectories(target.parent)
+        val temporary = Files.createTempFile(target.parent, ".comparison-", ".tmp")
+        try {
+            Files.writeString(temporary, text)
+            var last: java.io.IOException? = null
+            repeat(5) { attempt ->
+                try {
+                    try { Files.move(temporary, target, java.nio.file.StandardCopyOption.ATOMIC_MOVE, java.nio.file.StandardCopyOption.REPLACE_EXISTING) }
+                    catch (_: java.nio.file.AtomicMoveNotSupportedException) { Files.move(temporary, target, java.nio.file.StandardCopyOption.REPLACE_EXISTING) }
+                    return
+                } catch (error: java.io.IOException) { last = error; Thread.sleep(20L * (attempt + 1)) }
+            }
+            try { Files.writeString(target, text) } catch (error: java.io.IOException) { last?.let(error::addSuppressed); throw error }
+        } finally { Files.deleteIfExists(temporary) }
+    }
 
     /** Back to the setup form; does nothing while a comparison runs. */
     fun reset() { if (job?.isActive != true) _state.update { it.copy(results = emptyMap(), sides = emptyList(), tasks = emptyList(), error = null, shown = null) } }
