@@ -242,7 +242,7 @@ User explicitly resumed after limits reset. Read-only audit began at14:43 Asia/A
 ## Paste, vision, loss metrics, smart context — 17 October (late night)
 
 - Branch feat/paste-vision-context. Instant paste cards with background encoding (4K image ~160 ms, off the UI thread).
-- Vision: image_url parts for the two newest user messages, at most four images per request, downscaled to 1568 px JPEG; Settings → Agent → Изображения (auto by model id / on / off); the composer note says whether the model will see images. Offline tests only. The deepseek-flash id is text-only under "auto"; DeepSeek's page lists vision for the current Flash, but that endpoint has not been tested with images (force "on" to try). The Gemma server is unavailable.
+- Vision: image_url parts for the two newest user messages, at most four images per request, downscaled to 1568 px JPEG; Settings → Agent → Изображения (auto by model id / on / off); the composer note says whether the model will see images. Verified live on 18 October with :evals:liveVisionSmoke (see the audit follow-up below); the Gemma server is unavailable.
 - Eval loss metrics: repeated reads (same path and range with no write in between), failed file-changing calls and tool output characters, in the CLI line, report.md, summaries and the in-app comparison.
 - Compact profile: project map (files by folder with top-level declarations, ≤3000 chars) as a stable system message, find_symbols in the toolbox, prompt for fragment reads.
 - Live A/B, deepseek-flash, compact, 14 tasks, n=1 each: without map 14/14, 67 rounds, 78 calls, prompt 154 826, 120 s; with map 14/14, 56 rounds, 61 calls, prompt 143 344, 108 s. Navigation tasks went from 4 to 2 rounds; edit-large-file went from 4 to 5 rounds. Repeated reads and failed edits were 0 in both runs.
@@ -267,3 +267,20 @@ User explicitly resumed after limits reset. Read-only audit began at14:43 Asia/A
 Сырые результаты: `reports/local/night-audit-2026-10-18/` и два eval report от 20261018-043226 / 20261018-043727. Это ignored локальные артефакты. Команда обычного запуска: `./gradlew :app-desktop:run`.
 
 Завершение: одноразовая автоматизация `chiller` удалена; остановлен только проверенный собственный `caffeinate` PID 54050, pid-файл удалён. Повторных ночных запусков не назначено.
+
+## Night audit follow-up — 18 October
+
+Done:
+- Compact profile keeps `read_artifact` and `show_file` (P1).
+- Auto-verify session binding (P1) was already fixed by the audit commit d01041f; merged as is.
+- Paste/vision (P1): prepared images cached per stored file (LRU of 8, keyed by size and mtime); at most two pastes prepared at once; non-RGB sources converted directly at the pixel-limited size; the project map never exceeds maxChars. Binding to the original draft already held (the coroutine captures the owner key and its pending-card state); no change.
+- Live vision: new opt-in `:evals:liveVisionSmoke` (one request, image with a random 4-digit number, output cap 64). deepseek-flash read it 2/2 (265 prompt tokens, ~1.3 s), so "auto" now enables vision for deepseek-flash.
+- Repeated rewind (P2): undone ids come from the session journal (undoOf of workspace commits); the button offers only remaining changes and a second rewind is a no-op, also after restart.
+- Comparison (P2): the record is rewritten atomically after every attempt, the stopped side's attempts are kept, ids get a random suffix.
+
+Not done, deliberately:
+- Money ledger with reservations across helpers and retries (P2): a product feature of its own; the existing RunBudgetProvider already caps requests and output tokens per task.
+- Vision capability stored per endpoint+model: the model-id heuristic plus the manual switch cover the current providers; a per-endpoint probe needs a stored capability record and its own UI.
+- Native clipboard snapshot latency before the pending card: the transferable must be read synchronously before it expires; not measured or changed.
+- 30-repeat paste latency/heap benchmark, wider live corpus (Kotlin/TypeScript/large repo), 429/SSE-drop scenarios and a native-window soak: measurement work for a separate pass.
+- Feature ideas (confirmed-result card, safe return point overview): larger features, left for planning.
