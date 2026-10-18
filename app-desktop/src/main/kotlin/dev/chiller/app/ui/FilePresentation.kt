@@ -45,13 +45,17 @@ import kotlin.math.pow
 internal fun FilePresentationCard(file: FilePresentation, onPreviewFile: suspend (String) -> ByteArray?, onRevealFile: (String) -> Unit, showReveal: Boolean = true) {
     val c = LocalChillerPalette.current
     val imageMime = file.mimeType.lowercase() in setOf("image/png", "image/jpeg", "image/jpg")
-    var bitmap by remember(file.path, file.sizeBytes) { mutableStateOf<ImageBitmap?>(null) }
-    var attempted by remember(file.path, file.sizeBytes) { mutableStateOf(false) }
+    // The chat list disposes cards that scroll away; the cache gives a returning card its image in the first frame,
+    // so it comes back at full height instead of growing (and pushing the list) once a reload finishes.
+    val cacheKey = PreviewImages.key(file.path, file.sizeBytes)
+    var bitmap by remember(cacheKey) { mutableStateOf(PreviewImages.get(cacheKey)) }
+    var attempted by remember(cacheKey) { mutableStateOf(bitmap != null) }
     var viewing by remember(file.path, file.sizeBytes) { mutableStateOf(false) }
     val previewer by rememberUpdatedState(onPreviewFile)
     LaunchedEffect(file.path, file.sizeBytes, imageMime) {
-        if (imageMime && file.path.isNotBlank()) {
+        if (imageMime && file.path.isNotBlank() && bitmap == null) {
             bitmap = withContext(Dispatchers.IO) { runCatching { previewer(file.path)?.let(::decodePreviewImage) }.getOrNull() }
+            bitmap?.let { PreviewImages.put(cacheKey, it) }
             attempted = true
         }
     }
@@ -164,4 +168,32 @@ internal fun ImageViewer(file: FilePresentation, bitmap: ImageBitmap, onClose: (
             Text("Колесо / жест — масштаб · Перетаскивание — перемещение · 0 — вписать · Esc — закрыть", color = c.faint, fontSize = 11.sp, modifier = Modifier.padding(10.dp))
         }
     }
+}
+
+/**
+ * Decoded image previews shared by all cards, least recently used first out, within a pixel budget (about
+ * 4 bytes per pixel). Keyed by path and size, the identity a presentation card already carries.
+ */
+internal object PreviewImages {
+    private const val MAX_PIXELS = 24_000_000L
+    private val cache = LinkedHashMap<String, ImageBitmap>(16, .75f, true)
+    private var pixels = 0L
+
+    fun key(path: String, sizeBytes: Long): String = "$path#$sizeBytes"
+
+    @Synchronized fun get(key: String): ImageBitmap? = cache[key]
+
+    @Synchronized fun put(key: String, image: ImageBitmap) {
+        cache.remove(key)?.let { pixels -= it.width.toLong() * it.height }
+        cache[key] = image; pixels += image.width.toLong() * image.height
+        val iterator = cache.entries.iterator()
+        while (pixels > MAX_PIXELS && cache.size > 1 && iterator.hasNext()) {
+            val eldest = iterator.next()
+            if (eldest.key == key) continue
+            pixels -= eldest.value.width.toLong() * eldest.value.height
+            iterator.remove()
+        }
+    }
+
+    @Synchronized internal fun clear() { cache.clear(); pixels = 0 }
 }
