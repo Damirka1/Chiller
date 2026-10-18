@@ -86,6 +86,15 @@ tasks.register<JavaExec>("richResultsPreview") {
     if (providers.gradleProperty("richResultsInteractive").isPresent) args("--interactive")
 }
 
+tasks.register<JavaExec>("turnResultPreview") {
+    group = "verification"
+    description = "Render the turn result card (clean and with issues, both themes) into build/reports/turn-result. Synthetic data."
+    dependsOn(tasks.named("testClasses"))
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass.set("dev.chiller.app.ui.TurnResultPreviewKt")
+    jvmArgs("--enable-native-access=ALL-UNNAMED")
+}
+
 // README screenshots from the scripted demo through the real loop; no provider or key.
 tasks.register<JavaExec>("readmeShots") {
     group = "documentation"

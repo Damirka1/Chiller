@@ -1119,10 +1119,16 @@ private fun Conversation(state: RunState, reduced: Boolean, onAnswer: (String) -
                     if (state.question == null) ShimmerText(label, reduced) else Text(label, color = c.accent, fontSize = 12.sp)
                 }
             }
-            if (state.status in setOf("completed", "cancelled", "interrupted")) item(key = "run-outcome") {
-                Text(runProgressLabel(state).orEmpty(), color = c.muted, fontSize = 12.sp, modifier = entryModifier("run-outcome").padding(start = 6.dp))
+            // A turn that did something ends with a card of facts; a plain answer keeps the short status line.
+            val finished = state.status in setOf("completed", "failed", "cancelled", "interrupted")
+            val result = if (finished) turnResult(state, undoneChanges) else null
+            if (result != null && !result.isEmpty) item(key = "turn-result") { TurnResultCard(state, result, entryModifier("turn-result")) }
+            else {
+                if (state.status in setOf("completed", "cancelled", "interrupted")) item(key = "run-outcome") {
+                    Text(runProgressLabel(state).orEmpty(), color = c.muted, fontSize = 12.sp, modifier = entryModifier("run-outcome").padding(start = 6.dp))
+                }
+                if (state.status in setOf("completed", "failed", "cancelled") && state.modelRounds > 0) item(key = "run-summary") { Box(entryModifier("run-summary")) { RunSummaryLine(state) } }
             }
-            if (state.status in setOf("completed", "failed", "cancelled") && state.modelRounds > 0) item(key = "run-summary") { Box(entryModifier("run-summary")) { RunSummaryLine(state) } }
             state.question?.let { q -> item(key = "question-${q.id}") { Box(entryModifier("question-${q.id}")) { Question(q, onAnswer, state.status != "interrupted") } } }
             state.error?.let { error -> item(key = "error") { Column(entryModifier("error")) { Row(Modifier.fillMaxWidth().padding(8.dp), horizontalArrangement = Arrangement.spacedBy(9.dp)) {
                 Icon(Icons.Outlined.ErrorOutline, null, Modifier.size(16.dp), tint = c.negative)

@@ -1,0 +1,150 @@
+package dev.chiller.app.ui
+
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.*
+import androidx.compose.material3.Icon
+import androidx.compose.material3.Text
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.pointerHoverIcon
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import dev.chiller.contracts.RunState
+import dev.chiller.design.LocalChillerPalette
+import dev.chiller.design.LocalChillerReducedMotion
+
+/**
+ * The end of a turn as facts: changed files, commands with their exit codes, files shown and what is still
+ * unresolved. It replaces the plain "answer ready" line when the turn did anything; with open issues it
+ * starts expanded, otherwise it is one summary line that opens on click.
+ */
+@Composable
+internal fun TurnResultCard(state: RunState, result: TurnResult, modifier: Modifier = Modifier, initiallyOpen: Boolean? = null) {
+    val c = LocalChillerPalette.current
+    val reduced = LocalChillerReducedMotion.current
+    val issues = result.issues.isNotEmpty()
+    var open by remember(issues) { mutableStateOf(initiallyOpen ?: issues) }
+    val (title, tint, icon) = when {
+        state.status == "failed" -> Triple("Ошибка", c.negative, Icons.Outlined.ErrorOutline)
+        state.status == "cancelled" -> Triple("Остановлено", c.muted, Icons.Outlined.StopCircle)
+        state.status == "interrupted" -> Triple("Прервано", c.muted, Icons.Outlined.StopCircle)
+        issues -> Triple("Готово, но есть что проверить", c.negative, Icons.Outlined.ReportProblem)
+        else -> Triple("Готово", c.positive, Icons.Outlined.CheckCircle)
+    }
+    val shape = RoundedCornerShape(12.dp)
+    Column(modifier.fillMaxWidth().clip(shape).background(c.surface).border(1.dp, if (issues) c.negative.copy(alpha = .35f) else c.border, shape)) {
+        Row(
+            Modifier.fillMaxWidth().pointerHoverIcon(PointerIcon.Hand).clickable(role = Role.Button) { open = !open }.padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(icon, null, Modifier.size(16.dp), tint = tint)
+            Spacer(Modifier.width(9.dp))
+            Text(title, color = c.text, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+            Spacer(Modifier.width(10.dp))
+            Text(summaryLine(result), color = c.muted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+            Icon(if (open) Icons.Outlined.KeyboardArrowUp else Icons.Outlined.KeyboardArrowDown, if (open) "Свернуть итог" else "Развернуть итог", Modifier.size(15.dp), tint = c.faint)
+        }
+        AnimatedVisibility(open, enter = if (reduced) fadeIn(tween(0)) else expandVertically(tween(180)) + fadeIn(tween(140)), exit = if (reduced) fadeOut(tween(0)) else shrinkVertically(tween(150)) + fadeOut(tween(100))) {
+            Column(Modifier.padding(start = 14.dp, end = 14.dp, bottom = 12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                if (result.issues.isNotEmpty()) Section("Требует внимания") {
+                    result.issues.forEach { issue -> Line(Icons.Outlined.ReportProblem, c.negative) { Text(issue, color = c.text, fontSize = 12.sp, lineHeight = 17.sp) } }
+                }
+                if (result.files.isNotEmpty()) Section("Изменено") {
+                    result.files.take(6).forEach { file ->
+                        Line(fileIcon(file.kind), if (file.undone) c.faint else c.muted) {
+                            Text(file.path, color = if (file.undone) c.faint else c.text, fontSize = 12.sp, fontFamily = FontFamily.Monospace, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                            Spacer(Modifier.width(8.dp))
+                            when {
+                                file.undone -> Text("откачено", color = c.faint, fontSize = 11.sp)
+                                file.kind == "deleted" -> Text("удалён", color = c.negative, fontSize = 11.sp)
+                                else -> {
+                                    if (file.kind == "created") { Text("новый", color = c.positive, fontSize = 11.sp); Spacer(Modifier.width(6.dp)) }
+                                    if (file.added > 0) Text("+${file.added}", color = c.positive, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+                                    if (file.removed > 0) { Spacer(Modifier.width(4.dp)); Text("−${file.removed}", color = c.negative, fontSize = 11.sp, fontFamily = FontFamily.Monospace) }
+                                }
+                            }
+                        }
+                    }
+                    if (result.files.size > 6) Text("и ещё ${result.files.size - 6}", color = c.faint, fontSize = 11.sp, modifier = Modifier.padding(start = 24.dp))
+                }
+                if (result.commands.isNotEmpty()) Section("Команды") {
+                    result.commands.forEach { run ->
+                        val (label, color) = when {
+                            run.succeeded -> "код 0" to c.positive
+                            run.state == "timed_out" -> "таймаут" to (if (run.isCheck) c.negative else c.muted)
+                            run.failed -> "код ${run.exitCode}" to (if (run.isCheck) c.negative else c.muted)
+                            run.state == "running" -> "результат не прочитан" to c.faint
+                            else -> run.state to c.faint
+                        }
+                        Line(Icons.Outlined.Terminal, c.muted) {
+                            Text(run.command, color = c.text, fontSize = 12.sp, fontFamily = FontFamily.Monospace, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                            Spacer(Modifier.width(8.dp))
+                            Box(Modifier.size(6.dp).clip(CircleShape).background(color)); Spacer(Modifier.width(5.dp))
+                            Text(label, color = color, fontSize = 11.sp)
+                        }
+                    }
+                }
+                if (result.presented.isNotEmpty()) Section("Показано") {
+                    result.presented.forEach { path -> Line(Icons.Outlined.Image, c.muted) { Text(path, color = c.text, fontSize = 12.sp, fontFamily = FontFamily.Monospace, maxLines = 1, overflow = TextOverflow.Ellipsis) } }
+                }
+                val stats = runSummaryParts(state)
+                if (stats.isNotEmpty()) Text(stats.joinToString("  ·  "), color = c.faint, fontSize = 11.sp, lineHeight = 16.sp)
+            }
+        }
+    }
+}
+
+/** One line for the collapsed card: counts only, e.g. "2 файла · проверки: 1 из 1 · показан 1 файл". */
+internal fun summaryLine(result: TurnResult): String = buildList {
+    if (result.files.isNotEmpty()) add("${result.files.size} ${plural(result.files.size, "файл", "файла", "файлов")}")
+    val checks = result.commands.filter { it.isCheck }
+    if (checks.isNotEmpty()) add("проверки: ${checks.count { it.succeeded }} из ${checks.size} прошли")
+    else if (result.commands.isNotEmpty()) add("${result.commands.size} ${plural(result.commands.size, "команда", "команды", "команд")}")
+    if (result.presented.isNotEmpty()) add("показано ${result.presented.size}")
+    if (result.issues.isNotEmpty()) add("замечаний ${result.issues.size}")
+}.joinToString(" · ")
+
+@Composable
+private fun Section(title: String, content: @Composable ColumnScope.() -> Unit) {
+    val c = LocalChillerPalette.current
+    Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+        Text(title, color = c.faint, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+        content()
+    }
+}
+
+@Composable
+private fun Line(icon: ImageVector, tint: androidx.compose.ui.graphics.Color, content: @Composable RowScope.() -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Icon(icon, null, Modifier.size(14.dp), tint = tint)
+        Spacer(Modifier.width(10.dp))
+        content()
+    }
+}
+
+private fun fileIcon(kind: String): ImageVector = when (kind) {
+    "created" -> Icons.Outlined.NoteAdd
+    "deleted" -> Icons.Outlined.Delete
+    "moved" -> Icons.Outlined.DriveFileMove
+    else -> Icons.Outlined.Edit
+}
