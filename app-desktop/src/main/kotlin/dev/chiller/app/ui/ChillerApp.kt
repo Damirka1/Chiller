@@ -548,11 +548,11 @@ private fun Sidebar(
             Text("Chiller", color = c.text, fontSize = 15.sp, fontWeight = FontWeight.Medium, letterSpacing = (-.4f).sp)
             Spacer(Modifier.weight(1f))
         }
-        ChillerControl("Новый диалог", onNew, Modifier.fillMaxWidth(), icon = Icons.Outlined.Add, enabled = enabled, trailing = "⌘ N")
+        ChillerControl("Новый диалог", onNew, Modifier.fillMaxWidth(), icon = Icons.Outlined.Add, enabled = enabled, trailing = shortcut("N"))
         SidebarSearch(query, { query = it }, searchFocus)
         Spacer(Modifier.height(10.dp))
         if (workspace == null) {
-            ChillerControl("Открыть проект…", onChoose, Modifier.fillMaxWidth(), icon = Icons.Outlined.FolderOpen, enabled = enabled, trailing = "⌘ O")
+            ChillerControl("Открыть проект…", onChoose, Modifier.fillMaxWidth(), icon = Icons.Outlined.FolderOpen, enabled = enabled, trailing = shortcut("O"))
         } else {
             Text("Проект", color = c.muted, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp))
             val branch by produceState<String?>(null, workspace) { value = withContext(Dispatchers.IO) { gitBranch(java.nio.file.Path.of(workspace)) } }
@@ -622,7 +622,7 @@ private fun SidebarSearch(query: String, onQuery: (String) -> Unit, focus: Focus
             decorationBox = { inner -> Box { if (query.isEmpty()) Text("Поиск", color = c.faint, fontSize = 12.sp, lineHeight = 18.sp); inner() } },
         )
         if (query.isNotEmpty()) Icon(Icons.Outlined.Close, "Очистить поиск", Modifier.size(14.dp).clip(CircleShape).clickable { onQuery("") }, tint = c.faint)
-        else Text("⌘ K", color = c.faint, fontSize = 11.sp)
+        else Text(shortcut("K"), color = c.faint, fontSize = 11.sp)
     }
 }
 

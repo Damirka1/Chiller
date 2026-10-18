@@ -468,14 +468,13 @@ private fun PathRow(title: String, path: String, onOpen: () -> Unit) {
 private fun KeysSection() {
     val c = LocalChillerPalette.current
     Card {
-        listOf("⌘ N" to "Новый диалог", "⌘ O" to "Открыть проект", "⌘ K" to "Поиск по диалогам", "⌘ ↵" to "Отправить", "⌘ ." to "Остановить задачу",
-            "⌘ ," to "Настройки", "Esc" to "Закрыть меню, настройки или поиск", "↑ ↓ ↵" to "Выбор в меню модели", "Tab" to "Навигация с клавиатуры (видимый фокус)").forEach { (keys, label) ->
+        listOf(shortcut("N") to "Новый диалог", shortcut("O") to "Открыть проект", shortcut("K") to "Поиск по диалогам", shortcut("↵") to "Отправить", shortcut(".") to "Остановить задачу",
+            shortcut(",") to "Настройки", "Esc" to "Закрыть меню, настройки или поиск", "↑ ↓ ↵" to "Выбор в меню модели", "Tab" to "Навигация с клавиатуры (видимый фокус)").forEach { (keys, label) ->
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 2.dp)) {
                 Text(label, color = c.text, fontSize = 13.sp, modifier = Modifier.weight(1f))
                 Text(keys, color = c.muted, fontSize = 12.sp, fontFamily = FontFamily.Monospace, modifier = Modifier.clip(RoundedCornerShape(6.dp)).border(1.dp, c.border, RoundedCornerShape(6.dp)).padding(horizontal = 8.dp, vertical = 3.dp))
             }
         }
-        Text("На Windows и Linux вместо ⌘ используется Ctrl.", color = c.faint, fontSize = 11.sp)
     }
 }
 

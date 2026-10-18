@@ -82,7 +82,7 @@ internal fun StartScreen(
                     Spacer(Modifier.height(8.dp))
                     Text("Откройте папку проекта — или перетащите её в окно", color = c.muted, fontSize = 13.sp, lineHeight = 20.sp, textAlign = TextAlign.Center)
                     Spacer(Modifier.height(20.dp))
-                    ChillerControl("Открыть проект…", onOpenFolder, icon = Icons.Outlined.FolderOpen, style = ControlStyle.OUTLINE, trailing = "⌘ O", inlineTrailing = true)
+                    ChillerControl("Открыть проект…", onOpenFolder, icon = Icons.Outlined.FolderOpen, style = ControlStyle.OUTLINE, trailing = shortcut("O"), inlineTrailing = true)
                 }
                 Spacer(Modifier.height(if (tight) 18.dp else 26.dp))
                 resume?.let { item ->
@@ -93,14 +93,14 @@ internal fun StartScreen(
                 if (recent.isNotEmpty()) {
                     Row(Modifier.fillMaxWidth().padding(bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                         Text("Недавние проекты", color = c.muted, fontSize = 12.sp, lineHeight = 18.sp, modifier = Modifier.weight(1f).padding(start = 4.dp))
-                        ChillerControl("Открыть другой…", onOpenFolder, icon = Icons.Outlined.FolderOpen, trailing = "⌘ O", inlineTrailing = true)
+                        ChillerControl("Открыть другой…", onOpenFolder, icon = Icons.Outlined.FolderOpen, trailing = shortcut("O"), inlineTrailing = true)
                     }
                     Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(c.surface).border(1.dp, c.border, RoundedCornerShape(12.dp)).padding(4.dp)) {
                         recent.take(if (tight) 3 else 5).forEach { project -> RecentProjectRow(project) { onOpenPath(project.path) } }
                     }
                     Spacer(Modifier.height(16.dp))
                 } else if (hasHistory) {
-                    ChillerControl("Открыть проект…", onOpenFolder, icon = Icons.Outlined.FolderOpen, style = ControlStyle.OUTLINE, trailing = "⌘ O", inlineTrailing = true)
+                    ChillerControl("Открыть проект…", onOpenFolder, icon = Icons.Outlined.FolderOpen, style = ControlStyle.OUTLINE, trailing = shortcut("O"), inlineTrailing = true)
                     Spacer(Modifier.height(16.dp))
                 }
                 connection?.let { ConnectionRow(modelName, connectionLine, connectionColor, it); Spacer(Modifier.height(16.dp)) }
@@ -225,7 +225,7 @@ private fun ConnectionRow(modelName: String, line: String, color: Color, prompt:
 private fun ShortcutHints() {
     val c = LocalChillerPalette.current
     Row(horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically) {
-        listOf("⌘ O" to "проект", "⌘ K" to "поиск", "⌘ N" to "новый диалог", "⌘ ↵" to "отправить").forEach { (keys, label) ->
+        listOf(shortcut("O") to "проект", shortcut("K") to "поиск", shortcut("N") to "новый диалог", shortcut("↵") to "отправить").forEach { (keys, label) ->
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(keys, color = c.muted, fontSize = 11.sp, lineHeight = 15.sp, modifier = Modifier.clip(RoundedCornerShape(5.dp)).border(1.dp, c.border, RoundedCornerShape(5.dp)).padding(horizontal = 5.dp, vertical = 1.dp))
                 Spacer(Modifier.width(6.dp))
