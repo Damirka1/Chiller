@@ -101,4 +101,19 @@ class ReadOnlyCodeServiceTest {
             assertTrue(service.projectMap(maxChars = 200)!!.length <= 200)
         } finally { root.toFile().deleteRecursively() }
     }
+
+    @Test fun largeProjectsAreListedForSymbolsAndStamps() = runBlocking<Unit> {
+        val root = Files.createTempDirectory("chiller-large-list")
+        try {
+            val dir = Files.createDirectories(root.resolve("src/some_rather_long_module_directory_name"))
+            repeat(3000) { Files.writeString(dir.resolve("generated_source_file_with_a_long_name_$it.txt"), "x") }
+            Files.writeString(dir.resolve("Target.kt"), "class NeedleInLargeProject\n")
+            val service = LocalReadOnlyCodeService(root.toString())
+            assertTrue("NeedleInLargeProject" in service.findSymbols("Needle", null, 10).data!!.toString(), "find_symbols works past the old 48 KiB listing cap")
+            val stamps = service.fileStamps()!!
+            assertEquals(3001, stamps.size)
+            assertEquals(1L, stamps.getValue("src/some_rather_long_module_directory_name/generated_source_file_with_a_long_name_7.txt").size)
+            assertEquals(null, service.fileStamps(limit = 100), "over the limit there is no partial snapshot")
+        } finally { root.toFile().deleteRecursively() }
+    }
 }

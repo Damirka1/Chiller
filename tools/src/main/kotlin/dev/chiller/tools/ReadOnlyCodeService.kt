@@ -28,7 +28,14 @@ interface ReadOnlyCodeService {
      * [maxChars]. Null when the project cannot be scanned. Lexical, like [findSymbols]; not a parser.
      */
     suspend fun projectMap(maxChars: Int = 3000): String? = null
+    /**
+     * Size and modification time of every non-ignored project file, for noticing changes made outside the
+     * file tools. Null when the listing fails or the project has more than [limit] files. Metadata only.
+     */
+    suspend fun fileStamps(limit: Int = 20_000): Map<String, FileStamp>? = null
 }
+
+data class FileStamp(val size: Long, val modifiedMillis: Long)
 
 class LocalReadOnlyCodeService(workspaceRoot: String) : ReadOnlyCodeService {
     private val root = Path.of(workspaceRoot).toAbsolutePath().normalize().toRealPath()
@@ -93,6 +100,19 @@ class LocalReadOnlyCodeService(workspaceRoot: String) : ReadOnlyCodeService {
         ToolResult(true, buildJsonObject { put("matches", matches); put("lexical", true) }, truncated = scanTruncated || matches.size >= limit)
     }
 
+    override suspend fun fileStamps(limit: Int): Map<String, FileStamp>? = withContext(Dispatchers.IO) {
+        val listing = try { runRgFileList(null) } catch (_: ToolException) { return@withContext null }
+        if (listing.truncated) return@withContext null
+        val names = listing.text.split('\u0000').filter(String::isNotEmpty)
+        if (names.size > limit) return@withContext null
+        names.mapNotNull { name ->
+            val rel = runCatching { checkedPath(name) }.getOrNull() ?: return@mapNotNull null
+            val attrs = runCatching { Files.readAttributes(root.resolve(rel), java.nio.file.attribute.BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS) }.getOrNull()
+                ?.takeIf { it.isRegularFile } ?: return@mapNotNull null
+            rel to FileStamp(attrs.size(), attrs.lastModifiedTime().toMillis())
+        }.toMap()
+    }
+
     override suspend fun projectMap(maxChars: Int): String? = withContext(Dispatchers.IO) {
         val listing = try { runRgFileList(null) } catch (_: ToolException) { return@withContext null }
         val names = listing.text.split('\u0000').filter(String::isNotEmpty).mapNotNull { runCatching { checkedPath(it) }.getOrNull() }.take(5000)
@@ -155,19 +175,19 @@ class LocalReadOnlyCodeService(workspaceRoot: String) : ReadOnlyCodeService {
             redirectErrorStream(false)
         }.start() } catch (_: Exception) { throw ToolException("RG_UNAVAILABLE", "ripgrep is required for bounded symbol file discovery") }
         process.outputStream.close()
-        val stdout = ByteArrayOutputStream(OUTPUT_CAP + 1)
+        val stdout = ByteArrayOutputStream(64 * 1024)
         val stderr = ByteArrayOutputStream(4096)
         fun drain(stream: java.io.InputStream, target: ByteArrayOutputStream, cap: Int) = Thread {
             stream.use { input -> val buffer = ByteArray(4096); while (true) { val n = input.read(buffer); if (n < 0) break; val remaining = cap + 1 - target.size(); if (remaining > 0) target.write(buffer, 0, minOf(n, remaining)) } }
         }.apply { isDaemon = true; start() }
-        val outThread = drain(process.inputStream, stdout, OUTPUT_CAP)
+        val outThread = drain(process.inputStream, stdout, LIST_CAP)
         val errThread = drain(process.errorStream, stderr, 4096)
         try {
             if (!runInterruptible { process.waitFor(TIMEOUT_SECONDS, TimeUnit.SECONDS) }) throw ToolException("TIMEOUT", "Symbol file discovery exceeded its time limit")
             outThread.join(1000); errThread.join(1000)
             if (process.exitValue() > 1) throw ToolException("SEARCH_FAILED", stderr.toByteArray().toString(Charsets.UTF_8).take(1000))
             val captured = stdout.toByteArray()
-            CommandOutput(captured.copyOf(minOf(captured.size, OUTPUT_CAP)).toString(Charsets.UTF_8), captured.size > OUTPUT_CAP)
+            CommandOutput(captured.copyOf(minOf(captured.size, LIST_CAP)).toString(Charsets.UTF_8), captured.size > LIST_CAP)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } finally {
@@ -233,6 +253,8 @@ class LocalReadOnlyCodeService(workspaceRoot: String) : ReadOnlyCodeService {
 
     companion object {
         private const val OUTPUT_CAP = 48 * 1024
+        /** The internal file list is never sent to the model; ~2 MiB covers about 20k paths. */
+        private const val LIST_CAP = 2 * 1024 * 1024
         private const val MAX_FILE_BYTES = 512 * 1024L
         private const val MAX_TOTAL_SCAN_BYTES = 8 * 1024 * 1024L
         private const val TIMEOUT_SECONDS = 4L
