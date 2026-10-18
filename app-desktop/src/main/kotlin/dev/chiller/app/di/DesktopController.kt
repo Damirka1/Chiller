@@ -32,7 +32,11 @@ import java.nio.file.StandardCopyOption
 @Serializable
 data class DesktopSettings(val baseUrl: String = "https://api.deepseek.com", val model: String = "deepseek-flash", val thinking: Boolean = false, val workspace: String? = null, val rememberedModels: Map<String, List<String>> = emptyMap(), val recentWorkspaces: List<String> = emptyList(), val agent: AgentOptions = AgentOptions(), val credentialOrigins: List<String> = emptyList(),
     /** Check command per project root, e.g. "./gradlew test"; used by auto-verify. */
-    val verifyCommands: Map<String, String> = emptyMap())
+    val verifyCommands: Map<String, String> = emptyMap(),
+    val modelCatalogs: Map<String, CachedModelCatalog> = emptyMap())
+
+@Serializable
+data class CachedModelCatalog(val models: List<ProviderModel>, val fetchedAt: String)
 
 /** How the agent runs; applied from the next dialog. Bounded so a typo cannot start an unbounded run. */
 @Serializable
@@ -73,7 +77,7 @@ internal data class AutoVerifyContext(
     val epoch: Long,
 ) {
     fun isCurrent(state: DesktopState, currentProcessService: ProcessService?, currentEpoch: Long): Boolean =
-        state.sessionId == sessionId && state.settings == settings && state.allowProcesses == allowProcesses &&
+        state.sessionId == sessionId && state.settings.copy(modelCatalogs = emptyMap()) == settings.copy(modelCatalogs = emptyMap()) && state.allowProcesses == allowProcesses &&
             currentProcessService === processService && currentEpoch == epoch
 }
 data class ConnectionState(val status: String = "unverified", val message: String = "", val checkedAt: String? = null)
@@ -176,6 +180,8 @@ class DesktopController(
         _state.update { it.copy(settings = settings, uiPreferences = preferencesStore.load()) }
         _state.update { it.copy(apiKeyConfigured = ready(), connection = connectionForUnverified()) }
         saveSettings(settings)
+        restoreCachedCatalog()
+        refreshModelsIfConfigured()
     }
 
     suspend fun configure(url: String, model: String, thinking: Boolean, key: String?) = commands.withLock { configureLocked(url, model, thinking, key) }
@@ -195,10 +201,11 @@ class DesktopController(
         return (listOf(settings.model) + discovered + settings.rememberedModels[normalizeEndpoint(settings.baseUrl)].orEmpty()).distinct().take(20)
     }
 
-    /** Explicit model listing. It is a separate user action from the paid connection check. */
+    /** A bounded GET listing; automatic at startup/configuration, manually refreshable. Never runs inference. */
     fun refreshModels(): Job = synchronized(catalogLifecycleLock) {
         val revision = catalogRevision.incrementAndGet()
         catalogJob?.cancel()
+        _state.update { it.copy(catalog = it.catalog.copy(status = "loading", message = "")) }
         scope.launch {
             val snapshot = commands.withLock {
                 if (revision != catalogRevision.get()) return@withLock null
@@ -216,7 +223,19 @@ class DesktopController(
                 ModelCatalogResult(errorCode = "NETWORK", message = "Network error or request timed out")
             }
             commands.withLock {
-                if (revision != catalogRevision.get() || profile != _state.value.settings) return@withLock
+                if (revision != catalogRevision.get() || normalizeEndpoint(profile.baseUrl) != normalizeEndpoint(_state.value.settings.baseUrl) || key != credential) return@withLock
+                if (result.ok) {
+                    val cache = LinkedHashMap(_state.value.settings.modelCatalogs)
+                    val endpoint = normalizeEndpoint(profile.baseUrl)
+                    cache.remove(endpoint)
+                    cache[endpoint] = CachedModelCatalog(result.models.take(500), Instant.now().toString())
+                    while (cache.size > 16) cache.remove(cache.keys.first())
+                    val settings = _state.value.settings.copy(modelCatalogs = cache)
+                    try { saveSettings(settings) }
+                    catch (cancelled: CancellationException) { throw cancelled }
+                    catch (_: Exception) { /* Discovery still works when the optional disk cache cannot be saved. */ }
+                    _state.update { it.copy(settings = settings) }
+                }
                 _state.update { state ->
                     val previous = state.catalog
                     state.copy(catalog = if (result.ok) {
@@ -227,6 +246,15 @@ class DesktopController(
                 }
             }
         }.also { catalogJob = it }
+    }
+
+    private fun refreshModelsIfConfigured() {
+        if (ready()) refreshModels()
+    }
+
+    private fun restoreCachedCatalog() {
+        val cached = _state.value.settings.modelCatalogs[normalizeEndpoint(currentBaseUrl())] ?: return
+        _state.update { it.copy(catalog = ModelCatalogState(models = cached.models.take(500), fetchedAt = cached.fetchedAt, stale = true)) }
     }
 
     fun cancelCatalogRefresh() = synchronized(catalogLifecycleLock) { invalidateCatalogLocked() }
@@ -467,6 +495,7 @@ class DesktopController(
         val oldSettings = _state.value.settings
         val oldCredential = credential
         val nextUrl = url.trimEnd('/')
+        val previousTargetCredential = originOf(nextUrl)?.let { credentials[it] }
         // Keys belong to origins: switching endpoints picks that endpoint's own key (or none), never carries one over.
         originOf(nextUrl)?.let { origin -> if (key != null) { envOrigins.remove(origin); secureOrigins.remove(origin); if (key.isBlank()) credentials.remove(origin) else credentials[origin] = key } }
         var next = oldSettings.copy(baseUrl = nextUrl, model = model.trim(), thinking = thinking)
@@ -474,11 +503,19 @@ class DesktopController(
         val nextCredential = originOf(nextUrl)?.let { credentials[it] }
         val profileChanged = oldSettings.baseUrl != next.baseUrl || oldSettings.model != next.model || oldSettings.thinking != next.thinking || oldCredential != nextCredential
         if (profileChanged) invalidateConnectionCheck()
-        if (oldSettings.baseUrl != next.baseUrl || oldCredential != nextCredential) invalidateCatalog()
+        val catalogChanged = normalizeEndpoint(oldSettings.baseUrl) != normalizeEndpoint(next.baseUrl) || oldCredential != nextCredential
+        if (catalogChanged) {
+            invalidateCatalog()
+            if (previousTargetCredential != nextCredential) next = next.copy(modelCatalogs = next.modelCatalogs.filterKeys { originOf(it) != originOf(next.baseUrl) })
+        }
         _state.update { it.copy(settings = next, sessionId = newId(), run = RunState(), verify = VerifyState()) }
         _state.update { it.copy(apiKeyConfigured = ready(), connection = if (profileChanged) connectionForUnverified() else it.connection) }
         saveSettings(next)
         resetEngine()
+        if (catalogChanged) {
+            restoreCachedCatalog()
+            refreshModelsIfConfigured()
+        }
     }
 
     private suspend fun chooseWorkspaceLocked(path: Path) {
@@ -952,7 +989,8 @@ class DesktopController(
         val origin = originOf(currentBaseUrl()) ?: return@withLock false
         try {
             if (credentialStore.supported) withContext(Dispatchers.IO) { credentialStore.delete(origin) }
-            val next = _state.value.settings.copy(credentialOrigins = _state.value.settings.credentialOrigins - origin)
+            val next = _state.value.settings.copy(credentialOrigins = _state.value.settings.credentialOrigins - origin,
+                modelCatalogs = _state.value.settings.modelCatalogs.filterKeys { originOf(it) != origin })
             saveSettings(next)
             credentials.remove(origin); envOrigins.remove(origin); secureOrigins.remove(origin)
             invalidateConnectionCheck(); invalidateCatalog()

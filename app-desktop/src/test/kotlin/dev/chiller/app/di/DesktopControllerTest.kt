@@ -22,7 +22,7 @@ class DesktopControllerTest {
     @TempDir lateinit var directory: Path
 
     @Test fun `message delete and edit project history without replaying effects`() = runBlocking {
-        val controller = DesktopController(directory, initialCredential = null)
+        val controller = DesktopController(directory, initialCredential = null, catalogClient = OfflineCatalog)
         try {
             controller.initialize()
             val session = controller.state.value.sessionId
@@ -46,7 +46,7 @@ class DesktopControllerTest {
     }
 
     @Test fun `attachments belong to a session and an attachment-only message is accepted`() = runBlocking {
-        val controller = DesktopController(directory, initialCredential = null)
+        val controller = DesktopController(directory, initialCredential = null, catalogClient = OfflineCatalog)
         try {
             controller.initialize()
             val attachment = assertNotNull(controller.importTextAttachment("данные".repeat(1000)))
@@ -58,7 +58,7 @@ class DesktopControllerTest {
     }
 
     @Test fun `late import remains bound to its original session after switching chats`() = runBlocking {
-        val controller = DesktopController(directory, initialCredential = null)
+        val controller = DesktopController(directory, initialCredential = null, catalogClient = OfflineCatalog)
         try {
             controller.initialize()
             val owner = controller.state.value.sessionId
@@ -80,7 +80,7 @@ class DesktopControllerTest {
         java.nio.file.Files.writeString(project.resolve("keep.txt"), "user data")
         val store = JsonlEventStore(root.resolve("sessions"))
         store.append("old", "message", kotlinx.serialization.json.buildJsonObject { put("role", kotlinx.serialization.json.JsonPrimitive("user")); put("content", kotlinx.serialization.json.JsonPrimitive("old")) })
-        val controller = DesktopController(root, initialCredential = null)
+        val controller = DesktopController(root, initialCredential = null, catalogClient = OfflineCatalog)
         try {
             controller.initialize()
             assertFalse(controller.deleteSession("old"))
@@ -97,7 +97,7 @@ class DesktopControllerTest {
     }
 
     @Test fun `endpoint can be applied without knowing a model and blank model cannot send`() = runBlocking {
-        val controller = DesktopController(directory, initialCredential = null)
+        val controller = DesktopController(directory, initialCredential = null, catalogClient = OfflineCatalog)
         try {
             controller.initialize()
             controller.configure("https://example.test/v1", "", false, "synthetic")
@@ -116,14 +116,14 @@ class DesktopControllerTest {
             override fun save(origin: String, key: String) { entries[origin] = key }
             override fun delete(origin: String) { entries.remove(origin) }
         }
-        val first = DesktopController(directory, initialCredential = null, credentialStore = store)
+        val first = DesktopController(directory, initialCredential = null, credentialStore = store, catalogClient = OfflineCatalog)
         try {
             first.initialize()
             first.configure("https://example.test/v1", "fixture", false, "fixture-secret")
             assertTrue(first.saveCredential())
             assertFalse(java.nio.file.Files.readString(directory.resolve("settings.json")).contains("fixture-secret"))
         } finally { first.close() }
-        val second = DesktopController(directory, initialCredential = null, credentialStore = store)
+        val second = DesktopController(directory, initialCredential = null, credentialStore = store, catalogClient = OfflineCatalog)
         try {
             second.initialize()
             assertTrue(second.state.value.apiKeyConfigured)
@@ -138,7 +138,7 @@ class DesktopControllerTest {
         val store = JsonlEventStore(directory.resolve("sessions"))
         val message = AgentMessage("user", "Offline fixture")
         store.append("offline-fixture", "message", Json.encodeToJsonElement(AgentMessage.serializer(), message).jsonObject)
-        val controller = DesktopController(directory, initialCredential = null)
+        val controller = DesktopController(directory, initialCredential = null, catalogClient = OfflineCatalog)
         try {
             controller.initialize()
             controller.selectSession("offline-fixture")
@@ -150,7 +150,7 @@ class DesktopControllerTest {
     }
 
     @Test fun `rewinding the demo turn restores every file it changed`() = runBlocking {
-        val controller = DesktopController(directory.resolve("rewind"), initialCredential = null)
+        val controller = DesktopController(directory.resolve("rewind"), initialCredential = null, catalogClient = OfflineCatalog)
         try {
             controller.initialize()
             controller.startDemo()
@@ -183,7 +183,7 @@ class DesktopControllerTest {
 
     @Test fun `new dialog after the demo returns to the chosen project and close leaves it`() = runBlocking {
         val project = java.nio.file.Files.createDirectories(directory.resolve("work/app")).toRealPath()
-        val controller = DesktopController(directory.resolve("data"), initialCredential = null)
+        val controller = DesktopController(directory.resolve("data"), initialCredential = null, catalogClient = OfflineCatalog)
         try {
             controller.initialize()
             controller.chooseWorkspace(project)
@@ -201,12 +201,12 @@ class DesktopControllerTest {
             controller.closeWorkspace()
             assertNull(controller.state.value.settings.workspace)
         } finally { controller.close() }
-        val restarted = DesktopController(directory.resolve("data"), initialCredential = null)
+        val restarted = DesktopController(directory.resolve("data"), initialCredential = null, catalogClient = OfflineCatalog)
         try { restarted.initialize(); assertNull(restarted.state.value.settings.workspace) } finally { restarted.close() }
     }
 
     @Test fun `keys stay with their endpoint and loopback servers need none`() = runBlocking {
-        val controller = DesktopController(directory, initialCredential = "deepseek-key", namedKeys = mapOf("OPENAI_API_KEY" to "openai-key"))
+        val controller = DesktopController(directory, initialCredential = "deepseek-key", namedKeys = mapOf("OPENAI_API_KEY" to "openai-key"), catalogClient = OfflineCatalog)
         try {
             controller.initialize()
             assertTrue(controller.state.value.apiKeyConfigured)
@@ -224,7 +224,7 @@ class DesktopControllerTest {
     }
 
     @Test fun `offline send acknowledges durable user message and deduplicates request id`() = runBlocking {
-        val controller = DesktopController(directory, initialCredential = null)
+        val controller = DesktopController(directory, initialCredential = null, catalogClient = OfflineCatalog)
         try {
             controller.initialize()
             val id = controller.state.value.sessionId
@@ -239,7 +239,7 @@ class DesktopControllerTest {
     }
 
     @Test fun `configured send without workspace is rejected and leaves journal unchanged`() = runBlocking {
-        val controller = DesktopController(directory, initialCredential = "synthetic-key")
+        val controller = DesktopController(directory, initialCredential = "synthetic-key", catalogClient = OfflineCatalog)
         try {
             controller.initialize()
             val id = controller.state.value.sessionId
@@ -252,7 +252,7 @@ class DesktopControllerTest {
     }
 
     @Test fun `model selection remembers ids changes session and endpoint change clears credential`() = runBlocking {
-        val controller = DesktopController(directory, initialCredential = "synthetic-key")
+        val controller = DesktopController(directory, initialCredential = "synthetic-key", catalogClient = OfflineCatalog)
         try {
             controller.initialize()
             val originalSession = controller.state.value.sessionId
@@ -266,7 +266,7 @@ class DesktopControllerTest {
     }
 
     @Test fun `preferences rename and explicit export target persist through controller`() = runBlocking {
-        val controller = DesktopController(directory, initialCredential = null)
+        val controller = DesktopController(directory, initialCredential = null, catalogClient = OfflineCatalog)
         try {
             controller.initialize()
             val firstSession = controller.state.value.sessionId
@@ -294,7 +294,7 @@ class DesktopControllerTest {
                 return gate.await()
             }
         }
-        val controller = DesktopController(directory, initialCredential = "synthetic-key", connectionChecker = checker)
+        val controller = DesktopController(directory, initialCredential = "synthetic-key", connectionChecker = checker, catalogClient = OfflineCatalog)
         try {
             controller.initialize()
             assertEquals("unverified", controller.state.value.connection.status)
@@ -327,7 +327,7 @@ class DesktopControllerTest {
                 }
             }
         }
-        val controller = DesktopController(directory, initialCredential = "synthetic-key", connectionChecker = checker)
+        val controller = DesktopController(directory, initialCredential = "synthetic-key", connectionChecker = checker, catalogClient = OfflineCatalog)
         try {
             controller.initialize()
             val oldJob = controller.checkConnection()

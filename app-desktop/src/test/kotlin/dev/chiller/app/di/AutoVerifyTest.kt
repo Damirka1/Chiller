@@ -51,6 +51,9 @@ class AutoVerifyTest {
         val current = DesktopState(sessionId = "session-one", settings = settings, allowProcesses = true, run = completedRun)
 
         assertTrue(context.isCurrent(current, processService, 7))
+        assertTrue(context.isCurrent(current.copy(settings = settings.copy(modelCatalogs = mapOf(
+            "https://api.deepseek.com" to CachedModelCatalog(listOf(dev.chiller.contracts.ProviderModel("discovered")), "now")
+        ))), processService, 7), "catalog cache updates do not invalidate the project's verification")
         assertFalse(context.isCurrent(current.copy(sessionId = "session-two"), processService, 7))
         assertFalse(context.isCurrent(current.copy(settings = settings.copy(workspace = "/project/two")), processService, 7))
         assertFalse(context.isCurrent(current.copy(settings = settings.copy(agent = settings.agent.copy(autoVerify = false))), processService, 7))
@@ -62,7 +65,7 @@ class AutoVerifyTest {
         val root = Files.createTempDirectory("verify-session-switch")
         val project = Files.createDirectories(root.resolve("project"))
         val processService = FakeProcessService()
-        val controller = DesktopController(root.resolve("data"), initialCredential = null, processServiceFactory = { processService })
+        val controller = DesktopController(root.resolve("data"), initialCredential = null, processServiceFactory = { processService }, catalogClient = OfflineCatalog)
         try {
             controller.initialize()
             controller.chooseWorkspace(project)

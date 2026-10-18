@@ -1,5 +1,7 @@
 # Chiller — текущий статус
 
+> 18.10, каталог моделей: автоматическая загрузка при старте и смене подключения, постоянный кеш и сохранение списка при сетевой ошибке. Полный offline-прогон: 299 тестов, smoke и сборка прошли; после финального уточнения сброса кеша повторно прошли 14 целевых тестов и сборка.
+
 > 18.10, локальный master включает завершённые изменения paste/vision и исправления достоверности результатов: 294 offline-теста, smoke и distributable прошли. Итоговая карточка больше не принимает слова модели за проверку; внешние изменения tool-written файлов сверяются по bounded hash с журналом успешных правок. Подробности в конце RUN_REPORT.
 
 > Актуальная дополнительная проверка 18.10: [ночной аудит](NIGHT_AUDIT_2026_10_18.md), master после d01041f — 264 offline-теста, smoke и distributable пройдены с `--rerun-tasks`; live full 14/14 + compact 5/5 + три специальных сценария. Ниже сохранён предыдущий срез и его ограничения. Это исторический checkpoint до локального объединения paste/vision.
@@ -41,7 +43,7 @@ offline smoke, сборка и синтетические отрисовки о�
 | Контракты | реализовано | `contracts/Contracts.kt` — источник истины; String ID, `ToolEffect`, typed results |
 | Агентный цикл | реализовано | до 24 раундов (настраивается), параллельные READ-вызовы, эффекты строго по порядку, отмена, лимит повторяющихся ошибок |
 | Провайдер DeepSeek | live-подтверждён | SSE, thinking replay, usage, bounded retry 429/5xx до первого delta |
-| Каталог моделей | реализовано | явное `GET /models` с bounded-разбором, кэш на endpoint, ручной fallback; список не доказывает поддержку tools/reasoning |
+| Каталог моделей | реализовано | автоматическое `GET /models` при старте/смене подключения, bounded-разбор, постоянный кеш на endpoint, ручное обновление/fallback; список не доказывает поддержку tools/reasoning |
 | Файловые инструменты | реализовано | 25 основных tools (плюс 2 screenshot tools на macOS): Git status/diff/log/show, lexical find_symbols, Kotlin read_symbol, read_diagnostics; `replace_text` (точная замена, число совпадений обязано совпасть, через тот же snapshot/undo) и `update_plan` (чек-лист модели); snapshot-lineage, clamp чтения, компактный search с context; auto-mkdir, show_file, web_search/web_fetch |
 | Инструкции проекта | реализовано | `AGENTS.md`, `CLAUDE.md`, `.chiller/instructions.md` → отдельное system-сообщение (≤12k символов, без symlink), читаются раз на диалог; права не дают |
 | Трассировка | реализовано | JSONL на раунд: запрос как его собрал Chiller (не wire-формат) и ответ, usage, finish, время; desktop — в данных приложения, eval — в `reports/local/evals` |

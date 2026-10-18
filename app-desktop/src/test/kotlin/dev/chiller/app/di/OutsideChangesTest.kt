@@ -89,7 +89,7 @@ class OutsideChangesTest {
             start()
         }
         val data = temp.resolve("data")
-        val controller = DesktopController(data, initialCredential = null)
+        val controller = DesktopController(data, initialCredential = null, catalogClient = OfflineCatalog)
         try {
             controller.initialize()
             controller.configure("http://127.0.0.1:${server.address.port}/v1", "fake-model", false, null)
@@ -105,7 +105,7 @@ class OutsideChangesTest {
             assertTrue(outside.deleted.isEmpty())
             val session = controller.state.value.sessionId
 
-            val reopened = DesktopController(data, initialCredential = null)
+            val reopened = DesktopController(data, initialCredential = null, catalogClient = OfflineCatalog)
             try {
                 reopened.initialize()
                 reopened.selectSession(session)

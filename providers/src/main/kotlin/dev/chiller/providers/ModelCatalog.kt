@@ -26,7 +26,7 @@ import java.net.URI
 /**
  * Lists models from a single OpenAI-compatible `GET /models` endpoint.
  *
- * One request, no fallback probing and no retries: discovery is an explicit user action.
+ * One request, no fallback probing and no retries: the caller decides when discovery is needed.
  * The HTTP client is supplied by the caller so redirect policy, proxy and TLS stay centralized.
  */
 class KtorModelCatalogClient(private val client: HttpClient) : ModelCatalogClient {
