@@ -5,6 +5,7 @@ import dev.chiller.evals.EvalReport
 import dev.chiller.evals.EvalResult
 import dev.chiller.evals.SuiteSpec
 import dev.chiller.evals.runEvalSuite
+import dev.chiller.evals.summarize
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -69,11 +70,27 @@ class ModelComparison(private val directory: Path, private val scope: CoroutineS
 
     fun start(endpoint: String, key: () -> String?, sides: List<ComparisonSide>, tasks: Set<String>, repeats: Int, requestExtras: JsonObject) {
         if (job?.isActive == true || sides.isEmpty() || tasks.isEmpty()) return
-        val id = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss"))
+        val stamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss"))
+        // Two starts within one second must not share a record.
+        val id = "$stamp-${java.util.UUID.randomUUID().toString().take(6)}"
         _state.update { it.copy(running = true, sides = sides, tasks = tasks.toList(), results = emptyMap(), current = null, error = null, shown = null) }
         job = scope.launch {
             val reports = mutableListOf<EvalReport>()
             var complete = false
+            // Every finished attempt is written at once: a stop, an error or a crash keeps what was paid for.
+            fun save() = runCatching {
+                val partial = (reports.size until sides.size).mapNotNull { index ->
+                    _state.value.results[index]?.takeIf { it.isNotEmpty() }?.let { rows ->
+                        EvalReport(sides[index].model, endpoint, stamp, SuiteSpec.DEFAULT_MAX_ROUNDS, SuiteSpec.DEFAULT_MAX_OUTPUT, repeats, rows, summarize(rows),
+                            profile = ModelProfiles.resolve(sides[index].profile, sides[index].model).id)
+                    }
+                }
+                val record = ComparisonRecord(id, stamp, endpoint, sides, tasks.toList(), repeats, reports + partial, complete)
+                Files.createDirectories(folder)
+                val temp = folder.resolve("$id.json.tmp")
+                Files.writeString(temp, json.encodeToString(ComparisonRecord.serializer(), record))
+                Files.move(temp, folder.resolve("$id.json"), java.nio.file.StandardCopyOption.REPLACE_EXISTING, java.nio.file.StandardCopyOption.ATOMIC_MOVE)
+            }
             try {
                 sides.forEachIndexed { index, side ->
                     _state.update { it.copy(current = side.label) }
@@ -81,6 +98,7 @@ class ModelComparison(private val directory: Path, private val scope: CoroutineS
                     reports += withContext(Dispatchers.IO) {
                         runEvalSuite(SuiteSpec(endpoint, side.model, key, side.profile, tasks, repeats, requestExtras = requestExtras, outDir = outDir)) { result ->
                             _state.update { s -> s.copy(current = "${side.label} · ${result.task}", results = s.results + (index to (s.results[index].orEmpty() + result))) }
+                            save()
                         }
                     }
                 }
@@ -91,12 +109,8 @@ class ModelComparison(private val directory: Path, private val scope: CoroutineS
                 _state.update { it.copy(error = (error.message ?: error.javaClass.simpleName).take(300)) }
             } finally {
                 withContext(NonCancellable) {
-                    // Partial results are kept too: they cost money and still say something.
-                    val record = ComparisonRecord(id, id, endpoint, sides, tasks.toList(), repeats, reports, complete)
-                    runCatching {
-                        Files.createDirectories(folder)
-                        Files.writeString(folder.resolve("$id.json"), json.encodeToString(ComparisonRecord.serializer(), record))
-                    }
+                    // Partial results are kept too, including the stopped side: they cost money and still say something.
+                    withContext(Dispatchers.IO) { save() }
                     _state.update { it.copy(running = false, current = null) }
                     loadHistory()
                 }

@@ -25,14 +25,19 @@ data class SuiteSpec(
     val profileId: String = "auto",
     val taskIds: Set<String>? = null,
     val repeats: Int = 1,
-    val maxRounds: Int = 14,
-    val maxOutputTokens: Int = 2048,
+    val maxRounds: Int = DEFAULT_MAX_ROUNDS,
+    val maxOutputTokens: Int = DEFAULT_MAX_OUTPUT,
     val thinking: Boolean = false,
     val requestExtras: JsonObject = JsonObject(emptyMap()),
     val outDir: Path,
     /** Overrides the profile's project map, for A/B runs; null keeps the profile's choice. */
     val projectMap: Boolean? = null,
-)
+) {
+    companion object {
+        const val DEFAULT_MAX_ROUNDS = 14
+        const val DEFAULT_MAX_OUTPUT = 2048
+    }
+}
 
 /**
  * Runs the tasks sequentially and writes report.json/report.md plus traces into [SuiteSpec.outDir].
