@@ -45,6 +45,50 @@ class AgentCoordinatorTest {
         assertEquals("failed", fixture.coordinator.state.value.status)
     }
 
+    @Test fun truncatedToolCallIsNotExecutedAndTheModelIsToldToWriteInParts() = runTest {
+        val tools = RecordingTools()
+        val requests = mutableListOf<ModelRequest>()
+        val provider = ScriptedProvider { request -> flow {
+            requests += request
+            if (requests.size == 1) emit(ModelEvent.Failed("INCOMPLETE_TOOL_CALL", "Provider truncated a tool call; it was not executed"))
+            else emit(ModelEvent.Completed(AgentMessage("assistant", "done in parts"), "stop"))
+        } }
+        val events = MemoryEvents()
+        val fixture = fixture(provider, tools, eventStore = events, dispatcher = StandardTestDispatcher(testScheduler))
+        fixture.coordinator.send("big file", ExecutionMode.WORKSPACE_EDIT)
+        advanceUntilIdle()
+        assertEquals("completed", fixture.coordinator.state.value.status)
+        assertEquals(0, tools.executed.size, "nothing truncated is executed")
+        val notice = requests[1].messages.last()
+        assertTrue(notice.role == "user" && "cut off" in notice.content.orEmpty() && "in parts" in notice.content.orEmpty())
+        assertTrue(fixture.coordinator.state.value.messages.none { "[Chiller]" in it.content.orEmpty() }, "the note is not part of the conversation")
+        assertEquals(1, events.records.count { it.type == "run.truncated" })
+    }
+
+    @Test fun textCutByTheLimitIsKeptAndContinued() = runTest {
+        val requests = mutableListOf<ModelRequest>()
+        val provider = ScriptedProvider { request -> flow {
+            requests += request
+            if (requests.size == 1) emit(ModelEvent.Completed(AgentMessage("assistant", "first half"), "length"))
+            else emit(ModelEvent.Completed(AgentMessage("assistant", "second half"), "stop"))
+        } }
+        val fixture = fixture(provider, dispatcher = StandardTestDispatcher(testScheduler))
+        fixture.coordinator.send("long answer", ExecutionMode.PLAN)
+        advanceUntilIdle()
+        assertEquals("completed", fixture.coordinator.state.value.status)
+        assertEquals(listOf("first half", "second half"), fixture.coordinator.state.value.messages.filter { it.role == "assistant" }.map { it.content })
+        assertTrue("Continue exactly where it stopped" in requests[1].messages.last().content.orEmpty())
+    }
+
+    @Test fun repeatedTruncationStopsInsteadOfLooping() = runTest {
+        val provider = ScriptedProvider { _ -> flow { emit(ModelEvent.Failed("INCOMPLETE_TOOL_CALL", "Provider truncated a tool call; it was not executed")) } }
+        val fixture = fixture(provider, dispatcher = StandardTestDispatcher(testScheduler))
+        fixture.coordinator.send("huge", ExecutionMode.WORKSPACE_EDIT)
+        advanceUntilIdle()
+        assertEquals("failed", fixture.coordinator.state.value.status)
+        assertEquals(3, provider.calls, "two recoveries, then the third truncation fails the run")
+    }
+
     @Test fun planModeSendsOnlyReadAndInteractionToolSpecs() = runTest {
         val requests = mutableListOf<ModelRequest>()
         val provider = ScriptedProvider { request -> flow {

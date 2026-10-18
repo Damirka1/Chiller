@@ -326,6 +326,10 @@ class AgentCoordinator(
         val requestCharacters = ((window - reserve).toLong() * 4 - schemaCharacters - 1024).coerceAtLeast(1024).coerceAtMost(Int.MAX_VALUE.toLong() - 1).toInt()
         val planner = ContextPlanner(maxCharacters = requestCharacters + 1, outputReserveCharacters = 1)
         var lastMemory = events.read(sessionId).lastOrNull { it.type == "context.summary" }?.payload?.get("text")?.jsonPrimitive?.contentOrNull
+        // A reply cut by the output limit is recovered a bounded number of times: nothing truncated is executed, the
+        // model is told what happened on the next round only (the note is not part of the saved conversation).
+        var truncations = 0
+        var truncationNotice: AgentMessage? = null
         repeat(maxRounds) { round ->
             currentCoroutineContext().ensureActive()
             stats.rounds = round + 1
@@ -359,7 +363,9 @@ class AgentCoordinator(
             var roundUsage = TokenUsage()
             var finishReason: String? = null
             val roundStarted = System.nanoTime()
-            val request = ModelRequest(model, selection.messages, enabled, thinking, reserve)
+            val request = ModelRequest(model, selection.messages + listOfNotNull(truncationNotice), enabled, thinking, reserve)
+            var truncatedCall = false
+            var truncatedText = false
             try {
                 provider.stream(request).collect { event ->
                     check(!terminated) { "Provider emitted after terminal event" }
@@ -373,18 +379,34 @@ class AgentCoordinator(
                         }
                         is ModelEvent.Completed -> {
                             finishReason = event.finishReason; completion = event.message
-                            require(event.finishReason in setOf("stop", "tool_calls")) { "Incomplete or unsupported completion reason; no action executed" }
+                            if (event.finishReason == "length" && event.message.toolCalls.isEmpty() && event.message.role == "assistant" && truncations < MAX_TRUNCATION_RECOVERIES) truncatedText = true
+                            else require(event.finishReason in setOf("stop", "tool_calls")) { "Incomplete or unsupported completion reason; no action executed" }
                             require(event.message.role == "assistant") { "Invalid model message role" }
                             terminated = true; completion = event.message
                         }
-                        is ModelEvent.Failed -> { terminated = true; throw IllegalStateException("${event.code}: ${event.message}") }
+                        is ModelEvent.Failed -> {
+                            terminated = true
+                            if (event.code == "INCOMPLETE_TOOL_CALL" && truncations < MAX_TRUNCATION_RECOVERIES) truncatedCall = true
+                            else throw IllegalStateException("${event.code}: ${event.message}")
+                        }
                     }
                 }
             } catch (error: Throwable) {
                 trace(id, round, request, completion, finishReason, roundUsage, roundStarted, error.message ?: error.javaClass.simpleName)
                 throw error
             }
-            trace(id, round, request, completion, finishReason, roundUsage, roundStarted, null)
+            trace(id, round, request, completion, finishReason, roundUsage, roundStarted, if (truncatedCall) "INCOMPLETE_TOOL_CALL: recovered" else null)
+            if (truncatedCall || truncatedText) {
+                truncations++
+                events.append(sessionId, "run.truncated", buildJsonObject {
+                    put("runId", id); put("round", round + 1); put("kind", if (truncatedCall) "tool_call" else "text"); put("maxOutputTokens", reserve)
+                })
+                if (truncatedText) completion?.let { partial -> appendMessage(partial.copy(origin = MessageOrigin(MessageOriginKind.MODEL, model))) }
+                truncationNotice = AgentMessage("user", if (truncatedCall) TRUNCATED_CALL_NOTICE else TRUNCATED_TEXT_NOTICE)
+                _state.update { it.copy(streamingText = "") }
+                return@repeat
+            }
+            truncationNotice = null
             val response = completion ?: throw IllegalStateException("Stream interrupted before completion; no tool was executed")
             appendMessage(response.copy(origin = MessageOrigin(MessageOriginKind.MODEL, model)))
             _state.update { it.copy(streamingText = "") }
@@ -474,6 +496,10 @@ class AgentCoordinator(
         }
     }
 }
+
+private const val MAX_TRUNCATION_RECOVERIES = 2
+private const val TRUNCATED_CALL_NOTICE = "[Chiller] Your previous reply reached the output token limit and its tool call was cut off. Nothing was executed and that call is discarded. Do not resend it in one piece: write large content in parts. Create the file with a first part well under the limit, then add the remaining parts with further edits, one part per call."
+private const val TRUNCATED_TEXT_NOTICE = "[Chiller] Your previous message reached the output token limit and was cut off. Continue exactly where it stopped, without repeating what you already wrote."
 
 private const val SYSTEM_PROMPT = """You are Chiller, a precise coding assistant working in the user's project through tools.
 - Inspect before editing: search_text / list_files to locate, read_file to see exact lines. Paths are workspace-relative.
