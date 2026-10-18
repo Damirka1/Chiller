@@ -1137,7 +1137,9 @@ private fun Conversation(state: RunState, reduced: Boolean, onAnswer: (String) -
                 }
             }
             // The model's checklist for this turn, kept under the latest messages and updated live.
-            currentTurnPlan(state.messages)?.let { steps ->
+            currentTurnPlan(state.messages)?.takeUnless {
+                state.status in setOf("completed", "failed", "cancelled", "interrupted") && !turnResult(state, undoneChanges).isEmpty
+            }?.let { steps ->
                 item(key = "turn-plan") { PlanChecklist(steps, running = state.status in setOf("preparing", "streaming", "executing"), modifier = entryModifier("turn-plan")) }
             }
             if (state.status in setOf("preparing", "streaming", "executing")) item(key = "run-status") {

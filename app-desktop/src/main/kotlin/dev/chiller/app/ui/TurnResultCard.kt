@@ -62,6 +62,9 @@ internal fun TurnResultCard(state: RunState, result: TurnResult, modifier: Modif
             Spacer(Modifier.width(9.dp))
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                 Text(title, color = c.text, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                currentTurnPlan(state.messages)?.let { steps ->
+                    Text("План модели: ${steps.count { it.status == "done" }}/${steps.size}", color = c.faint, fontSize = 11.sp)
+                }
                 Text(summaryLine(result, outside?.count ?: 0), color = c.muted, fontSize = 12.sp, lineHeight = 17.sp)
             }
             Spacer(Modifier.width(8.dp))
@@ -69,6 +72,9 @@ internal fun TurnResultCard(state: RunState, result: TurnResult, modifier: Modif
         }
         AnimatedVisibility(open, enter = if (reduced) fadeIn(tween(0)) else expandVertically(tween(180)) + fadeIn(tween(140)), exit = if (reduced) fadeOut(tween(0)) else shrinkVertically(tween(150)) + fadeOut(tween(100))) {
             Column(Modifier.padding(start = 14.dp, end = 14.dp, bottom = 12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                currentTurnPlan(state.messages)?.let { steps ->
+                    Section("План модели") { steps.forEach { Text("${if (it.status == "done") "✓" else "○"} ${it.title}", color = c.muted, fontSize = 12.sp, lineHeight = 18.sp) } }
+                }
                 if (result.issues.isNotEmpty()) Section("Требует внимания") {
                     result.issues.forEach { issue -> Line(Icons.Outlined.ReportProblem, c.negative) { Text(issue, color = c.text, fontSize = 12.sp, lineHeight = 17.sp) } }
                 }
