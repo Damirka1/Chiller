@@ -12,6 +12,24 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 class ReadOnlyCodeServiceTest {
+    @org.junit.jupiter.api.Test fun `file stamps hash touched files even when ignored and detect same metadata overwrite`() = kotlinx.coroutines.runBlocking<Unit> {
+        val project = java.nio.file.Files.createTempDirectory("file-stamp-hash")
+        try {
+            java.nio.file.Files.writeString(project.resolve(".gitignore"), "ignored.txt\n")
+            val file = java.nio.file.Files.writeString(project.resolve("ignored.txt"), "first")
+            val stamp = java.nio.file.Files.getLastModifiedTime(file)
+            val service = LocalReadOnlyCodeService(project.toString())
+            val first = service.fileStamps(hashPaths = setOf("ignored.txt"))!!.getValue("ignored.txt")
+            java.nio.file.Files.writeString(file, "other")
+            java.nio.file.Files.setLastModifiedTime(file, stamp)
+            val second = service.fileStamps(hashPaths = setOf("ignored.txt"))!!.getValue("ignored.txt")
+            kotlin.test.assertEquals(first.size, second.size)
+            kotlin.test.assertEquals(first.modifiedMillis, second.modifiedMillis)
+            kotlin.test.assertNotNull(first.contentHash)
+            kotlin.test.assertNotEquals(first.contentHash, second.contentHash)
+        } finally { project.toFile().deleteRecursively() }
+    }
+
     @Test fun findsLexicalSymbolsInFreshNonGitWorkspaceWithIgnores() = runBlocking<Unit> {
         val root = Files.createTempDirectory("chiller-symbols-no-git")
         val outside = Files.createTempFile("chiller-outside-symbol", ".kt")

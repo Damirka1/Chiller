@@ -48,8 +48,8 @@ internal fun TurnResultCard(state: RunState, result: TurnResult, modifier: Modif
         state.status == "failed" -> Triple("Ошибка", c.negative, Icons.Outlined.ErrorOutline)
         state.status == "cancelled" -> Triple("Остановлено", c.muted, Icons.Outlined.StopCircle)
         state.status == "interrupted" -> Triple("Прервано", c.muted, Icons.Outlined.StopCircle)
-        issues -> Triple("Готово, но есть что проверить", c.negative, Icons.Outlined.ReportProblem)
-        else -> Triple("Готово", c.positive, Icons.Outlined.CheckCircle)
+        issues -> Triple("Завершено с замечаниями", c.negative, Icons.Outlined.ReportProblem)
+        else -> Triple("Ход завершён", c.positive, Icons.Outlined.CheckCircle)
     }
     val shape = RoundedCornerShape(12.dp)
     Column(modifier.fillMaxWidth().clip(shape).background(c.surface).border(1.dp, if (issues) c.negative.copy(alpha = .35f) else c.border, shape)) {
@@ -59,9 +59,11 @@ internal fun TurnResultCard(state: RunState, result: TurnResult, modifier: Modif
         ) {
             Icon(icon, null, Modifier.size(16.dp), tint = tint)
             Spacer(Modifier.width(9.dp))
-            Text(title, color = c.text, fontSize = 13.sp, fontWeight = FontWeight.Medium)
-            Spacer(Modifier.width(10.dp))
-            Text(summaryLine(result, outside?.count ?: 0), color = c.muted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                Text(title, color = c.text, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                Text(summaryLine(result, outside?.count ?: 0), color = c.muted, fontSize = 12.sp, lineHeight = 17.sp)
+            }
+            Spacer(Modifier.width(8.dp))
             Icon(if (open) Icons.Outlined.KeyboardArrowUp else Icons.Outlined.KeyboardArrowDown, if (open) "Свернуть итог" else "Развернуть итог", Modifier.size(15.dp), tint = c.faint)
         }
         AnimatedVisibility(open, enter = if (reduced) fadeIn(tween(0)) else expandVertically(tween(180)) + fadeIn(tween(140)), exit = if (reduced) fadeOut(tween(0)) else shrinkVertically(tween(150)) + fadeOut(tween(100))) {
@@ -88,7 +90,7 @@ internal fun TurnResultCard(state: RunState, result: TurnResult, modifier: Modif
                     if (result.files.size > 6) Text("и ещё ${result.files.size - 6}", color = c.faint, fontSize = 11.sp, modifier = Modifier.padding(start = 24.dp))
                 }
                 if (outside != null && outside.count > 0) Section("Вне инструментов агента") {
-                    Text("Изменено командами или вручную. Откат хода эти файлы не вернёт.", color = c.muted, fontSize = 11.sp, lineHeight = 16.sp)
+                    Text("Есть изменения вне журнала или их покрытие не подтверждено. Откат хода не гарантирует восстановление этих файлов.", color = c.muted, fontSize = 11.sp, lineHeight = 16.sp)
                     val rows = outside.added.map { it to "новый" } + outside.modified.map { it to "изменён" } + outside.deleted.map { it to "удалён" }
                     rows.take(6).forEach { (path, label) ->
                         Line(Icons.Outlined.Terminal, c.muted) {
@@ -132,7 +134,7 @@ internal fun summaryLine(result: TurnResult, outside: Int = 0): String = buildLi
     if (result.files.isNotEmpty()) add("${result.files.size} ${plural(result.files.size, "файл", "файла", "файлов")}")
     val checks = result.commands.filter { it.isCheck }
     if (checks.isNotEmpty()) add("проверки: ${checks.count { it.succeeded }} из ${checks.size} прошли")
-    else if (result.commands.isNotEmpty()) add("${result.commands.size} ${plural(result.commands.size, "команда", "команды", "команд")}")
+    else add(if (result.commands.isEmpty()) "проверки не запускались" else "проверки не подтверждены")
     if (result.presented.isNotEmpty()) add("показано ${result.presented.size}")
     if (outside > 0) add("вне журнала $outside")
 }.joinToString(" · ")

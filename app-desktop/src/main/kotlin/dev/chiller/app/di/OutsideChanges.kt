@@ -24,20 +24,43 @@ data class OutsideChanges(
     val count: Int get() = added.size + modified.size + deleted.size
 }
 
-private val FILE_TOOLS = setOf("edit_file", "replace_text", "create_file", "move_file", "delete_file", "create_directory")
+/** Final expected states from successful, journaled changes in this turn (null means absent).
+ * Failed calls never exclude a path. A move covers both its original and destination path.
+ */
+fun toolExpectedStates(messages: List<AgentMessage>, userIndex: Int, activities: List<dev.chiller.contracts.Activity>, journal: List<dev.chiller.contracts.StoredEvent>): Map<String, String?> {
+    val end = (userIndex + 1 until messages.size).firstOrNull { messages[it].role == "user" } ?: messages.size
+    val calls = messages.subList((userIndex + 1).coerceAtMost(messages.size), end).flatMap { it.toolCalls }.map { it.id }.toSet()
+    val ids = activities.filter { it.toolCallId in calls && it.status == "completed" }.mapNotNull { activity ->
+        runCatching { Json.parseToJsonElement(activity.output).jsonObject["data"]?.jsonObject?.get("id")?.jsonPrimitive?.contentOrNull }.getOrNull()
+    }.toSet()
+    return buildMap {
+        journal.filter { it.type == "workspace.commit" && it.payload["changeId"]?.jsonPrimitive?.contentOrNull in ids }.forEach { event ->
+            val path = event.payload["path"]?.jsonPrimitive?.contentOrNull ?: return@forEach
+            val operation = event.payload["operation"]?.jsonPrimitive?.contentOrNull
+            if (operation == "mkdir") return@forEach
+            val hash = event.payload["afterHash"]?.jsonPrimitive?.contentOrNull
+            if (operation == "move") {
+                put(path, null)
+                event.payload["destination"]?.jsonPrimitive?.contentOrNull?.let { put(it, hash) }
+            } else put(path, hash)
+        }
+    }
+}
 
-/** Paths the file tools touched in the turn after [userIndex] (both ends of a move). */
-fun toolTouchedPaths(messages: List<AgentMessage>, userIndex: Int): Set<String> =
-    messages.drop(userIndex + 1).flatMap { it.toolCalls }.filter { it.name in FILE_TOOLS }.flatMap { call ->
-        val args = runCatching { Json.parseToJsonElement(call.arguments).jsonObject }.getOrNull() ?: return@flatMap emptyList()
-        listOfNotNull(args["path"]?.jsonPrimitive?.contentOrNull, args["destination"]?.jsonPrimitive?.contentOrNull)
-    }.map { it.removePrefix("./") }.toSet()
-
-/** Compares two snapshots; paths the file tools touched are excluded, since the journal already covers them. */
-fun outsideChanges(before: Map<String, FileStamp>, after: Map<String, FileStamp>, toolPaths: Set<String>, userIndex: Int, limit: Int = 200): OutsideChanges {
-    val added = (after.keys - before.keys - toolPaths).sorted()
-    val deleted = (before.keys - after.keys - toolPaths).sorted()
-    val modified = after.keys.intersect(before.keys).filter { it !in toolPaths && after[it] != before[it] }.sorted()
-    val total = added.size + deleted.size + modified.size
-    return OutsideChanges(userIndex, added.take(limit), modified.take(limit), deleted.take(limit), truncated = total > added.take(limit).size + modified.take(limit).size + deleted.take(limit).size)
+/** Compare the final files against the journal, not merely the names passed to tools.
+ * An unknown hash is reported conservatively; metadata alone cannot prove that undo covers a file.
+ */
+fun outsideChanges(before: Map<String, FileStamp>, after: Map<String, FileStamp>, expected: Map<String, String?>, userIndex: Int, limit: Int = 200): OutsideChanges {
+    val candidates = (before.keys + after.keys + expected.keys).filter { path ->
+        if (path in expected) {
+            val hash = expected[path]
+            if (hash == null) path in after else after[path]?.contentHash != hash
+        } else before[path] != after[path]
+    }.sorted()
+    val added = candidates.filter { it !in before && it in after }
+    val deleted = candidates.filter { it in before && it !in after || it in expected && expected[it] != null && it !in after }
+    val modified = candidates.filter { it in before && it in after }
+    var remaining = limit.coerceAtLeast(0)
+    fun bounded(paths: List<String>): List<String> = paths.take(remaining).also { remaining -= it.size }
+    return OutsideChanges(userIndex, bounded(added), bounded(modified), bounded(deleted), truncated = candidates.size > limit)
 }

@@ -50,13 +50,20 @@ class TurnResultTest {
         assertEquals(listOf("Результат «npm test» не прочитан: неизвестно, прошла ли проверка", "Правка «b.py» не применилась"), issues)
     }
 
-    @Test fun `a claimed check without any check command is flagged, a stated non-check is not`() {
-        fun issues(answer: String) = turnResult(RunState(status = "completed", messages = listOf(AgentMessage("user", "go"), AgentMessage("assistant", answer)))).issues
-        assertEquals(1, issues("Исправил функцию, все тесты проходят.").size)
-        assertEquals(1, issues("Fixed. All tests passed.").size)
-        assertTrue(issues("Исправил функцию. Тесты не запускал: команды отключены.").isEmpty())
-        assertTrue(issues("Renamed the variable.").isEmpty())
-        assertTrue(claimsVerification("Проверил: всё работает.") && !claimsVerification("Без запуска проверок."))
+    @Test fun `model wording never establishes that checks ran`() {
+        val result = turnResult(RunState(status = "completed", messages = listOf(AgentMessage("user", "go"), AgentMessage("assistant", "All tests passed. Все тесты проходят."))))
+        assertTrue(result.commands.isEmpty())
+        assertTrue("проверки не запускались" in summaryLine(result))
+    }
+
+    @Test fun `check commands are recognized from invocations not argument substrings`() {
+        listOf(listOf("echo", "test passed"), listOf("cat", "test_results.txt"), listOf("git", "diff", "build.gradle"),
+            listOf("cargo", "--version"), listOf("gradlew", "tasks"), listOf("npm", "install"), listOf("python3", "-c", "print('test')"),
+            listOf("pytest", "--help"), listOf("sh", "-c", "echo test; pytest")).forEach { assertFalse(isCheckCommand(it), it.toString()) }
+        listOf(listOf("pytest"), listOf("python3", "-m", "pytest"), listOf("python3", "checks.py"), listOf("./gradlew", ":app:test"),
+            listOf("npm", "run", "lint"), listOf("cargo", "test"), listOf("go", "vet", "./..."), listOf("sh", "-c", "python3 -m pytest -q")).forEach {
+            assertTrue(isCheckCommand(it), it.toString())
+        }
     }
 
     @Test fun `only the latest turn counts and a plain answer is empty`() {

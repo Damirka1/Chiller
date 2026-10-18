@@ -651,8 +651,9 @@ class DesktopController(
      */
     private suspend fun recordOutsideChanges(session: String, code: LocalReadOnlyCodeService?, before: Map<String, dev.chiller.tools.FileStamp>?, run: RunState, turnIndex: Int) {
         if (before == null || code == null || run.messages.getOrNull(turnIndex)?.role != "user") return
-        val after = withContext(Dispatchers.IO) { runCatching { code.fileStamps() }.getOrNull() } ?: return
-        val changes = outsideChanges(before, after, toolTouchedPaths(run.messages, turnIndex), turnIndex)
+        val expected = toolExpectedStates(run.messages, turnIndex, run.activities, events.read(session))
+        val after = withContext(Dispatchers.IO) { runCatching { code.fileStamps(hashPaths = expected.keys) }.getOrNull() } ?: return
+        val changes = outsideChanges(before, after, expected, turnIndex)
         if (changes.count == 0) return
         runCatching { events.append(session, "turn.outside_changes", json.encodeToJsonElement(OutsideChanges.serializer(), changes).jsonObject) }
         _state.update { if (it.sessionId == session) it.copy(outside = changes) else it }

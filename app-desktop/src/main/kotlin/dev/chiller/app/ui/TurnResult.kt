@@ -33,20 +33,42 @@ data class TurnResult(
 
 private val FILE_CHANGE_TOOLS = setOf("edit_file", "replace_text", "create_file", "move_file", "delete_file", "create_directory")
 
-/** Commands whose failure means the work is not done (unlike grep or ls, where a non-zero exit is normal). */
-internal fun isCheckCommand(argv: List<String>): Boolean {
-    val text = argv.joinToString(" ").lowercase()
-    val words = listOf("test", "pytest", "check", "lint", "gradlew", "gradle", "mvn", "cargo", "go vet", "tsc", "mypy", "ruff",
-        "flake8", "eslint", "ktlint", "detekt", "build", "verify", "compile", "unittest", "jest", "vitest", "make")
-    return words.any { it in text }
+/** Recognize explicit check invocations by executable/subcommand, never words in arbitrary arguments.
+ * Unknown scripts stay ordinary commands. This describes what was run, not test coverage or correctness.
+ */
+internal fun isCheckCommand(argv: List<String>): Boolean = checkCommand(argv, 0)
+
+private fun checkCommand(argv: List<String>, depth: Int): Boolean {
+    if (argv.isEmpty() || depth > 2) return false
+    fun name(value: String) = value.replace('\\', '/').substringAfterLast('/').lowercase().removeSuffix(".exe").removeSuffix(".cmd").removeSuffix(".bat")
+    val executable = name(argv.first())
+    val args = argv.drop(1)
+    if (args.any { it in setOf("--help", "-h", "--version", "-V") }) return false
+    if (executable in setOf("sh", "bash", "zsh", "cmd")) {
+        if (args.size != 2 || args[0].lowercase() !in setOf("-c", "/c")) return false
+        val script = args[1]
+        if (script.any { it in ";|&<>$`\n\r()" }) return false
+        val parsed = runCatching { dev.chiller.app.di.splitCommand(script) }.getOrNull() ?: return false
+        return checkCommand(parsed, depth + 1)
+    }
+    if (executable.matches(Regex("python([23](\\.\\d+)?)?"))) {
+        if (args.firstOrNull() == "-m") return args.getOrNull(1) in setOf("pytest", "unittest", "mypy", "compileall", "ruff", "flake8")
+        val script = args.firstOrNull()?.let(::name) ?: return false
+        return script.matches(Regex("(checks?|tests?(_[a-z0-9_]+)?|[a-z0-9_]+_test)\\.py"))
+    }
+    val task = args.firstOrNull() ?: return executable in setOf("pytest", "jest", "vitest", "tsc", "mypy", "flake8", "eslint", "ktlint", "detekt")
+    return when (executable) {
+        "pytest", "jest", "vitest", "tsc", "mypy", "flake8", "eslint", "ktlint", "detekt" -> !args.any { it in setOf("--help", "-h", "--version", "-V") }
+        "ruff" -> task in setOf("check", "format") && (task != "format" || "--check" in args)
+        "cargo" -> task in setOf("test", "check", "build", "clippy")
+        "go" -> task in setOf("test", "vet", "build")
+        "npm", "pnpm", "yarn", "bun" -> (if (task == "run") args.getOrNull(1) else task) in setOf("test", "check", "lint", "build", "typecheck", "type-check")
+        "gradlew", "gradle" -> args.any { !it.startsWith("-") && it.substringAfterLast(':').let { t -> t in setOf("test", "check", "build", "assemble", "lint", "detekt", "ktlintCheck") || t.matches(Regex("(compile|test)[A-Z][A-Za-z0-9]*")) } }
+        "mvn", "mvnw" -> args.any { it in setOf("test", "verify", "package", "compile") }
+        "make", "gmake" -> task in setOf("test", "check", "lint", "build", "verify")
+        else -> false
+    }
 }
-
-/** Claims of verification in the final answer; a sentence with a negation ("не запускал тесты") is not a claim. */
-private val CLAIM = Regex("""(тест\p{L}*|провер\p{L}*|прош(ли|ла|ёл|ел)|pass(ed|es)?|tests?|verified|checks?)""", RegexOption.IGNORE_CASE)
-private val NEGATION = Regex("""(^|[\s(«"])(не|нет|без|not|no|without|cannot|can't|didn't|did not|unable)([\s,.)»"]|$)""", RegexOption.IGNORE_CASE)
-
-internal fun claimsVerification(answer: String): Boolean =
-    answer.split(Regex("""(?<=[.!?\n])\s+""")).any { sentence -> CLAIM.containsMatchIn(sentence) && !NEGATION.containsMatchIn(sentence) }
 
 fun turnResult(state: RunState, undone: Set<String> = emptySet()): TurnResult {
     val start = state.messages.indexOfLast { it.role == "user" }
@@ -79,7 +101,7 @@ fun turnResult(state: RunState, undone: Set<String> = emptySet()): TurnResult {
         when (call.name) {
             "run_process" -> {
                 val argv = runCatching { Json.parseToJsonElement(call.arguments).jsonObject["argv"]!!.jsonArray.map { it.jsonPrimitive.content } }.getOrDefault(emptyList())
-                commandsById[id] = CommandRun(argv.joinToString(" ").take(160), outcome, exit, isCheckCommand(argv))
+                commandsById[id] = CommandRun(argv.joinToString(" "), outcome, exit, isCheckCommand(argv))
             }
             "read_process", "stop_process" -> commandsById[id]?.let { commandsById[id] = it.copy(state = outcome, exitCode = exit ?: it.exitCode) }
         }
@@ -96,16 +118,14 @@ fun turnResult(state: RunState, undone: Set<String> = emptySet()): TurnResult {
                 add(if (run.state == "timed_out") "«${run.command}» не уложилась во время и не перезапускалась успешно"
                     else "«${run.command}» завершилась с кодом ${run.exitCode} и после этого не прошла")
             }
-        commands.filter { it.isCheck && it.state == "running" && commands.none { other -> other.command == it.command && (other.succeeded || other.failed) } }
+        commands.filter { it.isCheck && !it.succeeded && !it.failed && commands.none { other -> other.command == it.command && (other.succeeded || other.failed) } }
             .distinctBy { it.command }.forEach { add("Результат «${it.command}» не прочитан: неизвестно, прошла ли проверка") }
         // A failed change counts unless the same path was changed successfully later.
         activities.withIndex().filter { (index, a) ->
             a.name in FILE_CHANGE_TOOLS && a.status == "failed" &&
                 activities.drop(index + 1).none { it.name in FILE_CHANGE_TOOLS && it.status == "completed" && it.target == a.target }
         }.map { it.value.target }.distinct().forEach { add("Правка «$it» не применилась") }
-        val answer = turn.lastOrNull { it.role == "assistant" && !it.content.isNullOrBlank() }?.content.orEmpty()
-        if (state.status == "completed" && commands.none { it.isCheck } && claimsVerification(answer))
-            add("В ответе говорится о проверке, но в этом ходе команды проверки не запускались")
+
     }
     return TurnResult(files.values.toList(), commands, presented, issues)
 }

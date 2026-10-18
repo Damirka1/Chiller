@@ -30,12 +30,12 @@ interface ReadOnlyCodeService {
     suspend fun projectMap(maxChars: Int = 3000): String? = null
     /**
      * Size and modification time of every non-ignored project file, for noticing changes made outside the
-     * file tools. Null when the listing fails or the project has more than [limit] files. Metadata only.
+     * file tools. Null when the listing fails or the project has more than [limit] files. Content is hashed only for [hashPaths], bounded to 8 MiB per file.
      */
-    suspend fun fileStamps(limit: Int = 20_000): Map<String, FileStamp>? = null
+    suspend fun fileStamps(limit: Int = 20_000, hashPaths: Set<String> = emptySet()): Map<String, FileStamp>? = null
 }
 
-data class FileStamp(val size: Long, val modifiedMillis: Long)
+data class FileStamp(val size: Long, val modifiedMillis: Long, val contentHash: String? = null)
 
 class LocalReadOnlyCodeService(workspaceRoot: String) : ReadOnlyCodeService {
     private val root = Path.of(workspaceRoot).toAbsolutePath().normalize().toRealPath()
@@ -100,16 +100,32 @@ class LocalReadOnlyCodeService(workspaceRoot: String) : ReadOnlyCodeService {
         ToolResult(true, buildJsonObject { put("matches", matches); put("lexical", true) }, truncated = scanTruncated || matches.size >= limit)
     }
 
-    override suspend fun fileStamps(limit: Int): Map<String, FileStamp>? = withContext(Dispatchers.IO) {
+    override suspend fun fileStamps(limit: Int, hashPaths: Set<String>): Map<String, FileStamp>? = withContext(Dispatchers.IO) {
         val listing = try { runRgFileList(null) } catch (_: ToolException) { return@withContext null }
         if (listing.truncated) return@withContext null
         val names = listing.text.split('\u0000').filter(String::isNotEmpty)
         if (names.size > limit) return@withContext null
-        names.mapNotNull { name ->
+        var hashBytesLeft = 32L * 1024 * 1024
+        (names + hashPaths).distinct().mapNotNull { name ->
             val rel = runCatching { checkedPath(name) }.getOrNull() ?: return@mapNotNull null
             val attrs = runCatching { Files.readAttributes(root.resolve(rel), java.nio.file.attribute.BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS) }.getOrNull()
                 ?.takeIf { it.isRegularFile } ?: return@mapNotNull null
-            rel to FileStamp(attrs.size(), attrs.lastModifiedTime().toMillis())
+            val hash = if (rel in hashPaths && attrs.size() <= 8L * 1024 * 1024 && attrs.size() <= hashBytesLeft) runCatching {
+                Files.newByteChannel(root.resolve(rel), setOf(StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS)).use { channel ->
+                    val digest = java.security.MessageDigest.getInstance("SHA-256")
+                    val buffer = java.nio.ByteBuffer.allocate(8192)
+                    var total = 0L
+                    while (channel.read(buffer) >= 0) {
+                        total += buffer.position()
+                        hashBytesLeft -= buffer.position()
+                        check(hashBytesLeft >= 0) { "Snapshot hash budget exhausted" }
+                        check(total <= 8L * 1024 * 1024) { "File grew beyond hash limit" }
+                        buffer.flip(); digest.update(buffer); buffer.clear()
+                    }
+                    digest.digest().joinToString("") { "%02x".format(it) }
+                }
+            }.getOrNull() else null
+            rel to FileStamp(attrs.size(), attrs.lastModifiedTime().toMillis(), hash)
         }.toMap()
     }
 

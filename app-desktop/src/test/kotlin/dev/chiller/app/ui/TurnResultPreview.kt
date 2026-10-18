@@ -25,10 +25,10 @@ fun main() {
         commands = listOf(CommandRun("python3 -m pytest -q", "exited", 1, true), CommandRun("npm run lint", "running", null, true)),
         issues = listOf("«python3 -m pytest -q» завершилась с кодом 1 и после этого не прошла", "Результат «npm run lint» не прочитан: неизвестно, прошла ли проверка", "Правка «src/api.py» не применилась"))
     val output = Path.of("build/reports/turn-result"); Files.createDirectories(output)
-    for (dark in listOf(false, true)) for ((name, result) in listOf("clean" to clean, "issues" to issues)) {
+    for (width in listOf(1520, 900)) for (dark in listOf(false, true)) for ((name, result) in listOf("clean" to clean, "issues" to issues)) {
         lateinit var scene: ImageComposeScene
         SwingUtilities.invokeAndWait {
-            scene = ImageComposeScene(1520, 1300, Density(2f)) {
+            scene = ImageComposeScene(width, if (width < 1000) 2200 else 1300, Density(2f)) {
                 ChillerTheme(darkTheme = dark, reducedMotion = true) {
                     Box(Modifier.fillMaxSize().background(LocalChillerPalette.current.canvas).padding(20.dp)) { TurnResultCard(state, result.copy(), Modifier, initiallyOpen = true, outside = if (name == "issues") dev.chiller.app.di.OutsideChanges(0, added = listOf("node_modules/.cache/build.json", "dist/bundle.js"), modified = listOf("package-lock.json")) else null) }
                 }
@@ -36,7 +36,7 @@ fun main() {
         }
         try {
             repeat(6) { SwingUtilities.invokeAndWait { scene.render(it * 100_000_000L).close() } }
-            SwingUtilities.invokeAndWait { scene.render(1_000_000_000L).use { img -> img.encodeToData()!!.use { Files.write(output.resolve("${if (dark) "dark" else "light"}-$name.png"), it.bytes) } } }
+            SwingUtilities.invokeAndWait { scene.render(1_000_000_000L).use { img -> img.encodeToData()!!.use { Files.write(output.resolve("${if (dark) "dark" else "light"}-$name${if (width < 1000) "-narrow" else ""}.png"), it.bytes) } } }
         } finally { SwingUtilities.invokeAndWait { scene.close() } }
     }
     println("Turn result cards rendered to $output")
