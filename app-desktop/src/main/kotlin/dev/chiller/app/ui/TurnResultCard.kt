@@ -45,6 +45,7 @@ internal fun TurnResultCard(state: RunState, result: TurnResult, modifier: Modif
     val issues = result.issues.isNotEmpty()
     var open by remember(issues) { mutableStateOf(initiallyOpen ?: issues) }
     val (title, tint, icon) = when {
+        state.status == "failed" && state.error?.let(::isStepLimitError) == true -> Triple("Остановлено: лимит шагов", c.muted, Icons.Outlined.StopCircle)
         state.status == "failed" -> Triple("Ошибка", c.negative, Icons.Outlined.ErrorOutline)
         state.status == "cancelled" -> Triple("Остановлено", c.muted, Icons.Outlined.StopCircle)
         state.status == "interrupted" -> Triple("Прервано", c.muted, Icons.Outlined.StopCircle)

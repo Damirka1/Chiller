@@ -229,18 +229,15 @@ private fun AgentSection(data: SettingsData, actions: SettingsActions) {
     ProfileCard(data, actions)
     VerifyCard(data, actions)
     Card {
-        SectionTitle("Лимиты прогона", "Ограничивают одну задачу. Применяются со следующего диалога.")
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text("Шагов модели за задачу", color = c.text, fontSize = 13.sp)
-                Text("Каждый шаг — один запрос к модели", color = c.faint, fontSize = 11.sp)
+        SectionTitle("Лимиты прогона", "Ограничивают одну задачу. Применяются со следующего сообщения, история сохраняется.")
+        Text("Шагов модели за задачу", color = c.text, fontSize = 13.sp)
+        Text("Каждый шаг — один запрос к модели; большой файл или длинная задача может занять десятки шагов", color = c.faint, fontSize = 11.sp, lineHeight = 16.sp)
+        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            // Same chips as the other limits; a value saved by the old stepper still shows as its own selected chip.
+            val steps = listOf(24, 48, 96, 200).let { if (a.maxRounds != AgentOptions.UNLIMITED && a.maxRounds !in it) (it + a.maxRounds).sorted() else it }
+            (steps.map { it to "$it" } + (AgentOptions.UNLIMITED to "Без лимита")).forEach { (v, label) ->
+                ChillerControl(label, { actions.agent(a.copy(maxRounds = v)) }, style = if (a.maxRounds == v) ControlStyle.SELECTED else ControlStyle.QUIET)
             }
-            val unlimitedRounds = a.maxRounds == AgentOptions.UNLIMITED
-            ChillerIconButton(Icons.Outlined.Remove, "Меньше", { actions.agent(a.copy(maxRounds = if (unlimitedRounds) 200 else a.maxRounds - 4)) }, enabled = unlimitedRounds || a.maxRounds > 4)
-            Text(if (unlimitedRounds) "∞" else "${a.maxRounds}", color = c.text, fontSize = 14.sp, fontWeight = FontWeight.Medium, modifier = Modifier.widthIn(min = 36.dp), textAlign = androidx.compose.ui.text.style.TextAlign.Center)
-            ChillerIconButton(Icons.Outlined.Add, "Больше", { actions.agent(a.copy(maxRounds = (a.maxRounds + 4).coerceAtMost(200))) }, enabled = !unlimitedRounds && a.maxRounds < 200)
-            Spacer(Modifier.width(6.dp))
-            ChillerControl("Без лимита", { actions.agent(a.copy(maxRounds = AgentOptions.UNLIMITED)) }, style = if (unlimitedRounds) ControlStyle.SELECTED else ControlStyle.QUIET)
         }
         Text("Общий бюджет: основной агент и все помощники", color = c.text, fontSize = 13.sp)
         Text("Логические запросы к модели на всю задачу; транспортные повторы не считаются", color = c.faint, fontSize = 11.sp, lineHeight = 16.sp)
@@ -331,7 +328,7 @@ private fun ProfileCard(data: SettingsData, actions: SettingsActions) {
     val a = data.agent
     val resolved = effectiveProfile(a, data.model)
     Card {
-        SectionTitle("Профиль модели", "Маленьким моделям проще с коротким списком инструментов и пошаговым промптом. Применяется со следующего диалога.")
+        SectionTitle("Профиль модели", "Маленьким моделям проще с коротким списком инструментов и пошаговым промптом. Применяется со следующего сообщения.")
         Row(Modifier.clip(RoundedCornerShape(8.dp)).background(c.sidebar).padding(2.dp), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
             listOf("auto" to "Авто", "full" to "Полный", "compact" to "Компактный").forEach { (id, label) ->
                 ChillerControl(label, { actions.agent(a.copy(profile = id)) }, style = if (a.profile == id) ControlStyle.SELECTED else ControlStyle.QUIET)

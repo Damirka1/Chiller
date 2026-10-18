@@ -67,7 +67,8 @@ class AgentCoordinator(
     private var runId: String? = null
 
     init {
-        require(maxRounds in 1..200) { "maxRounds must be between 1 and 200" }
+        // Up to 1000: the desktop's "no step limit" runs with a 500-step backstop.
+        require(maxRounds in 1..1_000) { "maxRounds must be between 1 and 1000" }
         // "Model maximum" arrives as Int.MAX_VALUE: each round asks for at most half the context window, and the
         // provider clamps that to the model's real ceiling.
         require(maxOutputTokens >= 1) { "maxOutputTokens must be positive" }

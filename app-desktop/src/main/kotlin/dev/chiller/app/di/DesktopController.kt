@@ -159,6 +159,8 @@ class DesktopController(
     val screenshotSupported: Boolean get() = captureController.supported
 
     private var coordinator: AgentCoordinator? = null
+    /** Agent settings changed since the engine was built: the next message rebuilds it, history restored from the journal. */
+    private var engineStale = false
     private var processService: ProcessService? = null
     private var workspaceService: LocalWorkspace? = null
     private var codeService: LocalReadOnlyCodeService? = null
@@ -629,6 +631,8 @@ class DesktopController(
         }
         if (_state.value.settings.workspace == null) return rejected("Перед отправкой выберите рабочую папку")
         return try {
+            if (engineStale && coordinator != null) resetEngine()
+            engineStale = false
             val engine = coordinator ?: buildEngine().also { it.restore() }
             val changesBefore = engine.state.value.activities.count { it.diff != null && it.status == "completed" }
             // Metadata snapshot before an editing turn: what changes outside the file tools is reported afterwards.
@@ -955,6 +959,7 @@ class DesktopController(
 
     suspend fun updateAgentOptions(options: AgentOptions) = commands.withLock {
         val settings = _state.value.settings.copy(agent = options.sanitized())
+        if (settings.agent != _state.value.settings.agent) engineStale = true
         _state.update { it.copy(settings = settings, verify = VerifyState()) }
         saveSettings(settings)
     }

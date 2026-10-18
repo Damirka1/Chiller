@@ -244,6 +244,20 @@ fun ChillerApp(
     val demoCompleted = isCompletedDemo(isDemo, state.status)
     val empty = state.messages.none { it.role in setOf("user", "assistant") } && state.activities.isEmpty() && state.error == null
     val contextNote = state.contextEstimatedTokens?.let { tokens -> "Оценка входа ≈ $tokens токенов${state.contextReportedTokens?.let { "; провайдер: $it" }.orEmpty()}${if (state.droppedContextMessages > 0 || state.prunedContextResults > 0) " · контекст сокращён" else ""}" }
+    // "Продолжить" after the step limit: the same task goes on in the current mode, with its history.
+    val continueTask: () -> Unit = {
+        if (!active && !pendingSend) {
+            pendingSend = true; sendError = null
+            scope.launch {
+                try {
+                    val receipt = onSend(CONTINUE_PROMPT, mode, newId())
+                    if (!receipt.accepted && latestSession == receipt.sessionId) sendError = receipt.reason ?: "Сообщение не принято"
+                } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+                catch (_: Exception) { sendError = "Не удалось продолжить." }
+                finally { pendingSend = false }
+            }
+        }
+    }
     val send = {
         if ((draft.isNotBlank() || draftAttachments.isNotEmpty()) && !active && !pendingSend && !composing && (pendingImportsBySession[draftKey] ?: 0) == 0) {
             val sentKey = draftKey; val sentText = draft; val requestId = newId()
@@ -384,7 +398,7 @@ fun ChillerApp(
                                                 onDelete = { index, text -> if (!active) targetMessage(index, text)?.let { messageDeleteTarget = it; messageActionError = null } },
                                                 onRecoverInterrupted = onRecoverInterrupted,
                                                 modifier = Modifier.weight(1f).fillMaxWidth(),
-                                                onRewind = { ids -> if (!active) onRewindTurn(ids) }, undoneChanges = undoneChanges, outsideChanges = outsideChanges)
+                                                onRewind = { ids -> if (!active) onRewindTurn(ids) }, onContinue = continueTask, undoneChanges = undoneChanges, outsideChanges = outsideChanges)
                                         }
                                     }
                                     Box(Modifier.fillMaxWidth().padding(horizontal = if (compact) 20.dp else 32.dp).padding(top = 6.dp, bottom = 18.dp), contentAlignment = Alignment.Center) {
@@ -1055,7 +1069,7 @@ private fun FolderToolbarChip(workspace: String?, onChoose: () -> Unit, enabled:
 }
 
 @Composable
-private fun Conversation(state: RunState, reduced: Boolean, onAnswer: (String) -> Unit, onUndo: (String) -> Unit, canUndo: Boolean, onRestoreDraft: (String) -> Unit, onPreviewFile: suspend (String) -> ByteArray?, onRevealFile: (String) -> Unit, onEdit: (Int, String) -> Unit, onDelete: (Int, String) -> Unit, onRecoverInterrupted: () -> Unit, modifier: Modifier, onRewind: (List<String>) -> Unit = {}, undoneChanges: Set<String> = emptySet(), outsideChanges: dev.chiller.app.di.OutsideChanges? = null) {
+private fun Conversation(state: RunState, reduced: Boolean, onAnswer: (String) -> Unit, onUndo: (String) -> Unit, canUndo: Boolean, onRestoreDraft: (String) -> Unit, onPreviewFile: suspend (String) -> ByteArray?, onRevealFile: (String) -> Unit, onEdit: (Int, String) -> Unit, onDelete: (Int, String) -> Unit, onRecoverInterrupted: () -> Unit, modifier: Modifier, onRewind: (List<String>) -> Unit = {}, onContinue: () -> Unit = {}, undoneChanges: Set<String> = emptySet(), outsideChanges: dev.chiller.app.di.OutsideChanges? = null) {
     val c = LocalChillerPalette.current
     // Begin at the tail even for restored long conversations; LazyColumn clamps to the final item.
     val scroll = rememberLazyListState(initialFirstVisibleItemIndex = Int.MAX_VALUE)
@@ -1152,7 +1166,11 @@ private fun Conversation(state: RunState, reduced: Boolean, onAnswer: (String) -
                 Icon(Icons.Outlined.ErrorOutline, null, Modifier.size(16.dp), tint = c.negative)
                 Text(error, color = c.negative, fontSize = 12.sp, lineHeight = 20.sp)
             }
-                state.messages.lastOrNull { it.role == "user" }?.content?.let { text -> ChillerControl("Вернуть текст в поле", { onRestoreDraft(text) }) }
+                if (isStepLimitError(error)) Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    ChillerControl("Продолжить", onContinue, icon = Icons.Outlined.PlayArrow, style = ControlStyle.OUTLINE)
+                    Text("Шагов не хватило: агент продолжит ту же задачу. Лимит меняется в Настройки → Агент.", color = c.faint, fontSize = 11.sp, lineHeight = 16.sp, modifier = Modifier.align(Alignment.CenterVertically))
+                }
+                else state.messages.lastOrNull { it.role == "user" }?.content?.let { text -> ChillerControl("Вернуть текст в поле", { onRestoreDraft(text) }) }
             } } }
             if (!canUndo && (state.status == "interrupted" || state.activities.any { it.status == "interrupted" })) item(key = "recover-interrupted") {
                 Column(entryModifier("recover-interrupted").padding(start = 34.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
@@ -1483,3 +1501,9 @@ internal fun toolLabel(name: String) = when (name) {
 
 /** Plan and Edit alternate; Shift+Tab in the composer calls this. */
 internal fun toggledMode(mode: ExecutionMode): ExecutionMode = if (mode == ExecutionMode.PLAN) ExecutionMode.WORKSPACE_EDIT else ExecutionMode.PLAN
+
+/** What "Продолжить" sends after the step limit stopped a run. */
+internal const val CONTINUE_PROMPT = "Продолжай с того места, где остановился."
+
+/** The coordinator's message for a run stopped by the step limit (not a failure of the task itself). */
+internal fun isStepLimitError(error: String): Boolean = error.startsWith("Достигнут лимит") && "шагов" in error
