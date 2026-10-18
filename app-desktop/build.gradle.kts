@@ -50,7 +50,13 @@ compose.desktop {
     }
 }
 // Run from the repository root so the root .env and relative paths resolve as in the README.
-tasks.withType<JavaExec>().matching { it.name == "run" }.configureEach { workingDir = rootProject.projectDir }
+tasks.withType<JavaExec>().matching { it.name == "run" }.configureEach {
+    workingDir = rootProject.projectDir
+    // A dev run is a bare `java` process, so the Dock would say "java". -Xdock is macOS-only (other JVMs reject it),
+    // which is why it is set here and not in application.jvmArgs, which also go into the Windows installer's launcher.
+    // An argument provider, because the Compose plugin replaces this task's jvmArgs list when it runs.
+    if (System.getProperty("os.name").lowercase().contains("mac")) jvmArgumentProviders.add(CommandLineArgumentProvider { listOf("-Xdock:name=Chiller") })
+}
 
 // Version and build metadata shown in Settings → About. The commit comes from CI when available.
 val versionResources = layout.buildDirectory.dir("generated/version")
