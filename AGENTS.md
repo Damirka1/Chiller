@@ -1,17 +1,12 @@
 # Chiller — working agreement
 
-## Current scope
+## Project
 
-The user authorized a focused implementation pass on 17 October 2026: make the tool loop faster and more model-friendly, keep the desktop UI beautiful, and validate it against DeepSeek V4.1 Flash. Read `docs/STATUS.md` first, then `docs/RUN_REPORT.md` for history. The integration branch is `master`.
+Kotlin/JVM, Compose Desktop, custom Chiller design system. Focus and Studio are layouts of one app. Integration branch: `master`.
 
-Live DeepSeek checks are allowed for this pass with small, explicit budgets. The key comes from the user's local `.env` (`API_TOKEN` or `DEEPSEEK_API_KEY`) or the environment. Never print it, never stage `.env`, never copy it into tests, docs or subagent prompts. Gemma on vLLM is out of scope until the server is available; do not claim its integration verified.
+Read `README.md`, `CONTRIBUTING.md` and `docs/ARCHITECTURE.md`; for relevant changes read `docs/DESIGN.md` and `docs/PROVIDERS.md`. Shared contracts in `contracts/src/main/kotlin/dev/chiller/contracts/Contracts.kt` are the source of truth.
 
-## Project decisions
-
-- Kotlin/JVM, Compose Desktop, custom Chiller design system; Focus and Studio are two layouts of one app.
-- DeepSeek V4.1 Flash is the development provider. API model ID: `deepseek-flash`.
-- Read `README.md`, `docs/STATUS.md`, `docs/MODULES.md`, `docs/CONTRACTS.md` and the assigned BACKLOG items before implementation. Read `docs/DESIGN.md` for UI work and `docs/PROVIDERS.md` for provider work.
-- `contracts/src/main/kotlin/dev/chiller/contracts/Contracts.kt` is the frozen source of truth; draft API sketches in older docs lose to it.
+Live requests require an explicitly authorized budget. Keys come only from configured environment/.env or app credentials; never print or commit them. Gemma/vLLM has not been live-verified.
 
 ## Collaboration during an authorized implementation run
 

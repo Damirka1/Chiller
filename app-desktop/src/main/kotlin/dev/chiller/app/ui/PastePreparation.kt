@@ -50,7 +50,7 @@ fun encodePastedImage(image: Image, maxBytes: Int = MAX_PASTED_IMAGE_BYTES, maxP
     var buffered = asRgbBuffer(image, width, height)
     var scaled = factor < 1.0
     // Large images: estimate the PNG size from a centre crop and shrink before the first full encode, instead of
-    // encoding a too-big PNG and retrying (measured: 8K noise 5.4 s → see docs/RUN_REPORT.md).
+    // encoding a too-big PNG and retrying (measured: 8K noise 5.4 s → see docs/PASTE_BENCHMARK.md).
     if (width.toLong() * height > 2_000_000) {
         val predicted = predictPngBytes(buffered)
         if (predicted > maxBytes * 0.9) {
