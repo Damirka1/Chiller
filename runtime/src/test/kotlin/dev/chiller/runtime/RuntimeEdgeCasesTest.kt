@@ -25,8 +25,7 @@ class RuntimeEdgeCasesTest {
                 ),
                 "owned-run",
             )
-            withTimeout(3_000) { while (!Files.exists(pidFile)) delay(10) }
-            val pid = Files.readString(pidFile).trim().toLong()
+            val pid = awaitPid(pidFile)
 
             service.stopRun("owned-run")
 
@@ -109,8 +108,7 @@ class RuntimeEdgeCasesTest {
             "close-run",
         )
         try {
-            withTimeout(3_000) { while (!Files.exists(pidFile)) delay(10) }
-            val pid = Files.readString(pidFile).trim().toLong()
+            val pid = awaitPid(pidFile)
 
             service.close()
 
@@ -228,5 +226,15 @@ class RuntimeEdgeCasesTest {
             root.toFile().deleteRecursively()
             outside.toFile().deleteRecursively()
         }
+    }
+
+    /** The shell creates the file on '>' before writing the number: wait for a complete line, not just the file. */
+    private suspend fun awaitPid(pidFile: Path): Long = withTimeout(3_000) {
+        var pid: Long? = null
+        while (pid == null) {
+            pid = runCatching { Files.readString(pidFile) }.getOrNull()?.takeIf { it.endsWith("\n") }?.trim()?.toLongOrNull()
+            if (pid == null) delay(10)
+        }
+        pid
     }
 }
