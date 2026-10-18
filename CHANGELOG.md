@@ -2,7 +2,7 @@
 
 Все заметные изменения Chiller. Формат — [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/), версии — [SemVer](https://semver.org/lang/ru/). Release candidate (`-rc.N`) — сборка для проверки перед стабильной версией; установщики у неё получают номер без суффикса (`1.2.0`), этого требуют DMG и MSI.
 
-## [Unreleased]
+## [1.2.0-rc.2] — 2026-10-18
 
 Исправления по итогам проверки 1.2.0-rc.1.
 
@@ -84,5 +84,6 @@
 
 Первый публичный preview: настольное приложение с режимами Focus и Studio, инструменты для работы с кодом со снимками файлов и откатом, процессы, помощники-субагенты, готовые пресеты OpenAI-совместимых провайдеров, страница настроек и сборки DMG/MSI в CI.
 
+[1.2.0-rc.2]: https://github.com/Damirka1/Chiller/compare/v1.2.0-rc.1...v1.2.0-rc.2
 [1.2.0-rc.1]: https://github.com/Damirka1/Chiller/compare/v1.1.0...v1.2.0-rc.1
 [1.1.0]: https://github.com/Damirka1/Chiller/releases/tag/v1.1.0
