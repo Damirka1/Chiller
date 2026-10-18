@@ -86,7 +86,7 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
       - name: Build installer
         shell: bash
-        run: ./gradlew :app-desktop:${{ matrix.task }} -PchillerVersion=${{ steps.version.outputs.version }} --stacktrace
+        run: ./gradlew :app-desktop:${{ matrix.task }} -PchillerVersion=${{ steps.version.outputs.version }} -PchillerDisplayVersion=${GITHUB_REF_NAME#v} --stacktrace
       - uses: actions/upload-artifact@v4
         with:
           name: installer-${{ runner.os }}

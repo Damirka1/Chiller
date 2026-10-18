@@ -40,6 +40,10 @@ compose.desktop {
             packageName = if (preview) "ChillerPreview" else "Chiller"
             macOS.bundleID = if (preview) "dev.chiller.preview" else "dev.chiller.app"
             packageVersion = project.version.toString()
+            // Shown as the publisher in Windows "Installed apps" and as the copyright in the macOS bundle.
+            vendor = "Damirka1"
+            copyright = "© 2026 Damirka1. Apache License 2.0."
+            description = "Chiller — coding agent harness"
             licenseFile.set(rootProject.layout.projectDirectory.file("LICENSE"))
             macOS.iconFile.set(project.file("icons/Chiller.icns"))
             macOS.infoPlist {
@@ -68,18 +72,28 @@ tasks.withType<JavaExec>().matching { it.name == "run" }.configureEach {
     if (System.getProperty("os.name").lowercase().contains("mac")) jvmArgumentProviders.add(CommandLineArgumentProvider { listOf("-Xdock:name=Chiller") })
 }
 
-// Version and build metadata shown in Settings → About. The commit comes from CI when available.
+// Version and build metadata shown in Settings → About. Release builds pass the full tag (1.2.0-rc.2) as
+// chillerDisplayVersion, since installers only accept the numeric version; CI adds its run number.
 val versionResources = layout.buildDirectory.dir("generated/version")
+fun git(vararg args: String): Provider<String> = provider {
+    runCatching { providers.exec { commandLine("git", *args); workingDir = rootDir; isIgnoreExitValue = true }.standardOutput.asText.get().trim() }.getOrDefault("")
+}
 val writeVersion by tasks.registering {
     val version = project.version.toString()
-    val commit = providers.environmentVariable("GITHUB_SHA").orElse("local")
+    val displayVersion = providers.gradleProperty("chillerDisplayVersion").orElse(version)
+    val commit = providers.environmentVariable("GITHUB_SHA").orElse(git("rev-parse", "HEAD")).map { it.ifBlank { "local" } }
+    val commitDate = git("log", "-1", "--format=%cs")
+    val buildNumber = providers.environmentVariable("GITHUB_RUN_NUMBER").orElse("")
     inputs.property("version", version)
+    inputs.property("displayVersion", displayVersion)
     inputs.property("commit", commit)
+    inputs.property("commitDate", commitDate)
+    inputs.property("buildNumber", buildNumber)
     outputs.dir(versionResources)
     doLast {
         val file = versionResources.get().file("chiller-version.properties").asFile
         file.parentFile.mkdirs()
-        file.writeText("version=$version\ncommit=${commit.get().take(12)}\n")
+        file.writeText("version=$version\ndisplayVersion=${displayVersion.get()}\ncommit=${commit.get().take(12)}\ncommitDate=${commitDate.get()}\nbuildNumber=${buildNumber.get()}\n")
     }
 }
 sourceSets.named("main") { resources.srcDir(versionResources) }

@@ -25,8 +25,19 @@ object BuildInfo {
         java.util.Properties().apply { runCatching { BuildInfo::class.java.getResourceAsStream("/chiller-version.properties")?.use { load(it) } } }
     }
     val version: String get() = props.getProperty("version") ?: "dev"
+    /** The full version including a pre-release suffix, e.g. 1.2.0-rc.2. */
+    val displayVersion: String get() = props.getProperty("displayVersion")?.takeIf { it.isNotBlank() } ?: version
+    val prerelease: Boolean get() = isPrerelease(displayVersion)
     val commit: String get() = props.getProperty("commit") ?: "local"
+    /** "#57 · 2026-10-18" for a CI build; a local build shows when its classes were built. */
+    val build: String get() = buildLabel(props.getProperty("buildNumber").orEmpty(), props.getProperty("commitDate").orEmpty(), BuildStamp.value)
     val runtime: String get() = "${System.getProperty("java.vendor", "")} ${System.getProperty("java.version", "")}".trim()
     val os: String get() = "${System.getProperty("os.name", "")} ${System.getProperty("os.version", "")} (${System.getProperty("os.arch", "")})"
 }
 
+
+internal fun isPrerelease(version: String): Boolean = '-' in version
+
+internal fun buildLabel(number: String, commitDate: String, localStamp: String): String =
+    if (number.isNotBlank()) listOf("#$number", commitDate).filter { it.isNotBlank() }.joinToString(" · ")
+    else "локальная · $localStamp"

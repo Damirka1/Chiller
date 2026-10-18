@@ -144,7 +144,7 @@ fun main() = application {
                 workspace = state.settings.workspace, verifyCommand = state.settings.workspace?.let { state.settings.verifyCommands[it] }.orEmpty(),
                 suggestedVerifyCommand = state.settings.workspace?.let { root -> runCatching { dev.chiller.app.di.suggestVerifyCommand(java.nio.file.Path.of(root)) }.getOrNull() },
                 agent = state.settings.agent, recent = state.settings.recentWorkspaces, dataDir = controller.dataDirectory().toString(), demoCount = demoCount,
-                version = dev.chiller.app.di.BuildInfo.version, build = BuildStamp.value, commit = dev.chiller.app.di.BuildInfo.commit,
+                version = dev.chiller.app.di.BuildInfo.displayVersion, build = dev.chiller.app.di.BuildInfo.build, commit = dev.chiller.app.di.BuildInfo.commit,
                 runtime = dev.chiller.app.di.BuildInfo.runtime, os = dev.chiller.app.di.BuildInfo.os,
             ),
             onRewindTurn = { ids -> scope.launch { controller.rewindTurn(ids) } },

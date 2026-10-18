@@ -25,6 +25,9 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
+import kotlinx.coroutines.delay
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.key.*
@@ -478,6 +481,15 @@ private fun KeysSection() {
     }
 }
 
+internal fun aboutRows(data: SettingsData): List<Pair<String, String>> = listOf(
+    "Версия" to data.version, "Сборка" to data.build, "Коммит" to data.commit,
+    "Среда выполнения" to data.runtime, "Система" to data.os, "Данные" to homeRelative(data.dataDir),
+)
+
+/** Plain text for bug reports; the data folder is left out because it contains the user's home path. */
+internal fun aboutText(rows: List<Pair<String, String>>): String =
+    "Chiller\n" + rows.filter { it.first != "Данные" }.joinToString("\n") { (k, v) -> "$k: ${v.ifBlank { "—" }}" }
+
 @Composable
 private fun AboutSection(data: SettingsData, actions: SettingsActions) {
     val c = LocalChillerPalette.current
@@ -485,15 +497,33 @@ private fun AboutSection(data: SettingsData, actions: SettingsActions) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(48.dp).clip(RoundedCornerShape(12.dp)).background(c.accent.copy(alpha = .12f)), contentAlignment = Alignment.Center) { ChillerMark(Modifier.size(28.dp), c.accent) }
             Spacer(Modifier.width(14.dp))
-            Column {
-                Text("Chiller ${data.version}", color = c.text, fontSize = 18.sp, fontWeight = FontWeight.Medium)
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Chiller ${data.version}", color = c.text, fontSize = 18.sp, fontWeight = FontWeight.Medium)
+                    if ('-' in data.version) Text("предварительная версия", color = c.muted, fontSize = 11.sp, modifier = Modifier.padding(start = 10.dp).clip(RoundedCornerShape(5.dp)).background(c.selected).padding(horizontal = 7.dp, vertical = 2.dp))
+                }
                 Text("Harness для локальных и облачных моделей", color = c.muted, fontSize = 12.sp)
+                Text("© 2026 Damirka1 · Apache License 2.0", color = c.faint, fontSize = 11.sp)
             }
         }
-        listOf("Версия" to data.version, "Сборка" to data.build, "Коммит" to data.commit, "Среда выполнения" to data.runtime, "Система" to data.os, "Данные" to homeRelative(data.dataDir)).forEach { (k, v) ->
-            Row { Text(k, color = c.faint, fontSize = 12.sp, modifier = Modifier.width(150.dp)); Text(v.ifBlank { "—" }, color = c.text, fontSize = 12.sp, fontFamily = FontFamily.Monospace) }
+        val rows = aboutRows(data)
+        rows.forEach { (k, v) ->
+            Row {
+                Text(k, color = c.faint, fontSize = 12.sp, modifier = Modifier.width(150.dp))
+                val commitUrl = if (k == "Коммит" && Regex("[0-9a-f]{7,40}").matches(v)) "https://github.com/Damirka1/Chiller/commit/$v" else null
+                if (commitUrl != null) Text(v, color = c.accent, fontSize = 12.sp, fontFamily = FontFamily.Monospace, modifier = Modifier.pointerHoverIcon(PointerIcon.Hand).clickable { actions.openUrl(commitUrl) })
+                else Text(v.ifBlank { "—" }, color = c.text, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+            }
         }
-        ChillerControl("Репозиторий на GitHub", { actions.openUrl("https://github.com/Damirka1/Chiller") }, icon = Icons.AutoMirrored.Outlined.OpenInNew)
+        val clipboard = LocalClipboardManager.current
+        var copied by remember { mutableStateOf(false) }
+        LaunchedEffect(copied) { if (copied) { delay(1500); copied = false } }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            ChillerControl(if (copied) "Скопировано" else "Скопировать сведения", {
+                clipboard.setText(AnnotatedString(aboutText(rows))); copied = true
+            }, icon = if (copied) Icons.Outlined.Check else Icons.Outlined.ContentCopy, style = ControlStyle.OUTLINE)
+            ChillerControl("Репозиторий на GitHub", { actions.openUrl("https://github.com/Damirka1/Chiller") }, icon = Icons.AutoMirrored.Outlined.OpenInNew)
+        }
     }
     Card {
         SectionTitle("Диагностика окружения", "Локальные проверки версий, без запросов к модели")
