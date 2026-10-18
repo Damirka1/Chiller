@@ -39,6 +39,7 @@ import androidx.compose.ui.unit.sp
 import dev.chiller.app.di.*
 import dev.chiller.contracts.CaptureTarget
 import dev.chiller.design.*
+import kotlinx.coroutines.launch
 
 /** Everything the settings page shows. Keys themselves are never part of it — only where they came from. */
 data class SettingsData(
@@ -175,6 +176,7 @@ private fun ConnectionSection(data: SettingsData, actions: SettingsActions) {
             Box(Modifier.size(7.dp).clip(CircleShape).background(color)); Spacer(Modifier.width(8.dp))
             Text(if (changed) "Изменения не применены" else data.connection.message.ifBlank { line }, color = if (data.connection.status == "failed" && !changed) c.negative else c.muted, fontSize = 12.sp)
         }
+        Text("Ключ: ${if (data.keyConfigured) "настроен" else "не задан"} · каталог: ${if (data.catalog.models.isEmpty()) "не загружен" else "${data.catalog.models.size} моделей"}. Проверка генерации — отдельный запрос.", color = c.faint, fontSize = 11.sp, lineHeight = 17.sp)
         Text("Применение начинает новый диалог. Проверка отправляет один короткий запрос без файлов и инструментов. Ключ действует до выхода, если не сохранён явно в Keychain; из .env и переменных окружения читается при запуске. Вживую в Chiller проверен только DeepSeek.", color = c.faint, fontSize = 11.sp, lineHeight = 17.sp)
     }
 }
@@ -493,6 +495,19 @@ private fun AboutSection(data: SettingsData, actions: SettingsActions) {
             Row { Text(k, color = c.faint, fontSize = 12.sp, modifier = Modifier.width(150.dp)); Text(v.ifBlank { "—" }, color = c.text, fontSize = 12.sp, fontFamily = FontFamily.Monospace) }
         }
         ChillerControl("Репозиторий на GitHub", { actions.openUrl("https://github.com/Damirka1/Chiller") }, icon = Icons.AutoMirrored.Outlined.OpenInNew)
+    }
+    Card {
+        SectionTitle("Диагностика окружения", "Локальные проверки версий, без запросов к модели")
+        val scope = rememberCoroutineScope()
+        var running by remember { mutableStateOf(false) }
+        var results by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
+        ChillerControl(if (running) "Проверяю…" else "Проверить окружение", {
+            running = true
+            scope.launch { try { results = EnvironmentDiagnostics.inspect() } finally { running = false } }
+        }, enabled = !running, style = ControlStyle.OUTLINE)
+        results.forEach { (name, value) -> Text("$name: $value", color = c.muted, fontSize = 12.sp, lineHeight = 18.sp) }
+        Text("Разрешения Chiller: команды ${if (data.allowProcesses) "включены" else "выключены"}; интернет ${if (data.agent.allowNetwork) "включён" else "выключен"}.", color = c.muted, fontSize = 12.sp)
+        Text("Снимки экрана: ${if (data.screenshotSupported) "поддерживаются; системный доступ проверяется при выборе окна" else "не поддерживаются на этой платформе"}.", color = c.muted, fontSize = 12.sp)
     }
     Card {
         SectionTitle("Что проверено", null)
