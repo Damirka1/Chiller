@@ -284,3 +284,11 @@ Not done, deliberately:
 - Native clipboard snapshot latency before the pending card: the transferable must be read synchronously before it expires; not measured or changed.
 - 30-repeat paste latency/heap benchmark, wider live corpus (Kotlin/TypeScript/large repo), 429/SSE-drop scenarios and a native-window soak: measurement work for a separate pass.
 - Feature ideas (confirmed-result card, safe return point overview): larger features, left for planning.
+
+## Result card, outside changes, paste benchmark — 18 October (morning)
+
+- Turn result card: built from tool calls and results only. Files with line counts, commands with their last exit code, shown files and issues: a failed check-like command with no later success, an unread check result, an edit that never applied, an answer claiming a check when none ran (sentences with a negation excluded). Collapsed when clean, open with issues; issues lead the collapsed line. Five rule tests; both states rendered offscreen in light/dark.
+- Outside changes: metadata snapshot (size, mtime) of non-ignored files before and after an editing turn; paths touched by file tools are subtracted; the rest is shown as "changed by commands or by hand, rewind will not restore". Journaled and restored with the session. End-to-end controller test with a fake loopback model: the tool's file is excluded, the command's file is reported, and the record survives reopening.
+- Found while doing it: the internal ripgrep file list shared the 48 KiB model-output cap, so find_symbols failed with OUTPUT_LIMIT and the project map was cut on projects above ~1500 files. The list has its own 2 MiB cap now; regression test with 3001 files.
+- Paste benchmark (30 repeats): poorly compressible images took seconds (8K noise 5.4 s). PNG size is now predicted from a centre crop and misses shrink proportionally: 8K noise 269 ms, 4K noise 116 ms, 8K photo 666 ms; screenshots unchanged at 50–200 ms; text up to 8 MiB under 20 ms; vision payload reused after the first round (112 ms → 0.09 ms). Native clipboard read and first paint are not measured.
+- Checks: 289 tests, all executed; offline smoke passed. Not verified: the card and the outside-changes section in the running app by hand, Gemma/vLLM.
