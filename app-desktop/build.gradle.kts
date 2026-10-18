@@ -1,5 +1,9 @@
+import java.nio.file.Files
+import java.util.concurrent.TimeUnit
+
 plugins { id("org.jetbrains.compose"); id("org.jetbrains.kotlin.plugin.compose") }
 apply(from = rootProject.file("build-support/ripgrep.gradle.kts"))
+apply(from = rootProject.file("build-support/notices.gradle.kts"))
 
 dependencies {
     // JNA 5.18.1 (Apache-2.0/LGPL-2.1 dual license): macOS Security.framework credential storage.
@@ -131,7 +135,12 @@ tasks.register<JavaExec>("readmeShots") {
 }
 
 // Only app execution/packaging downloads the pinned native tool; offline unit checks do not.
-tasks.matching { it.name in setOf("prepareAppResources", "run") }.configureEach { dependsOn("prepareRipgrep") }
+tasks.matching { it.name in setOf("prepareAppResources", "run") }.configureEach { dependsOn("prepareRipgrep", "prepareThirdPartyNotices") }
+// Compose does not notice files our own tasks put into appResourcesRootDir; without an explicit input a local package
+// could keep stale notices or a stale ripgrep.
+tasks.matching { it.name in setOf("prepareAppResources", "createDistributable") }.configureEach {
+    inputs.dir(layout.buildDirectory.dir("bundled-resources")).withPropertyName("bundledResources")
+}
 // jpackage copies resource files without their executable bit. Restore it in the app image before installers run.
 tasks.matching { it.name == "createDistributable" }.configureEach {
     doLast {
@@ -142,3 +151,31 @@ tasks.matching { it.name == "createDistributable" }.configureEach {
         }
     }
 }
+
+val verifyBundledRipgrep by tasks.registering {
+    group = "verification"
+    description = "Search Unicode paths using the packaged ripgrep with PATH empty."
+    dependsOn("createDistributable")
+    doLast {
+        val binaries = fileTree(layout.buildDirectory.dir("compose/binaries/main/app")) { include("**/resources/tools/rg", "**/resources/tools/rg.exe") }.files
+        check(binaries.size == 1) { "Missing or ambiguous packaged ripgrep" }
+        val binary = binaries.single()
+        val fixture = Files.createTempDirectory("chiller поиск ").toFile()
+        try {
+            File(fixture, "данные с пробелом.txt").writeText("chiller-bundled-search\n")
+            val command = ProcessBuilder(binary.absolutePath, "--no-config", "--files", "--", ".").directory(fixture).redirectErrorStream(true)
+            command.environment()["PATH"] = ""
+            val process = command.start()
+            check(process.waitFor(15, TimeUnit.SECONDS)) { process.destroyForcibly(); "Bundled ripgrep timed out" }
+            val text = process.inputStream.bufferedReader(Charsets.UTF_8).readText()
+            check(process.exitValue() == 0 && text.contains("данные с пробелом.txt")) { "Packaged ripgrep cannot list Unicode files: $text" }
+            val search = ProcessBuilder(binary.absolutePath, "--no-config", "--fixed-strings", "chiller-bundled-search", ".").directory(fixture).redirectErrorStream(true)
+            search.environment()["PATH"] = ""
+            val child = search.start()
+            check(child.waitFor(15, TimeUnit.SECONDS)) { child.destroyForcibly(); "Bundled search timed out" }
+            check(child.exitValue() == 0 && child.inputStream.bufferedReader().readText().contains("chiller-bundled-search")) { "Bundled search failed" }
+            println("Packaged ripgrep: list/search passed with empty PATH and Unicode paths")
+        } finally { fixture.deleteRecursively() }
+    }
+}
+tasks.matching { it.name in setOf("packageDmg", "packageMsi") }.configureEach { dependsOn(verifyBundledRipgrep) }
