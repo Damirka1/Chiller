@@ -104,8 +104,8 @@ class AttachmentRepositoryTest {
 
     @Test fun `vision setting forces or follows the model id`() {
         assertTrue(visionEnabled(AgentOptions(), "gemma-4-26b-a4b"))
-        assertTrue(!visionEnabled(AgentOptions(), "deepseek-flash"))
-        assertTrue(visionEnabled(AgentOptions(vision = "on"), "deepseek-flash"))
+        assertTrue(!visionEnabled(AgentOptions(), "qwen2.5-coder-7b"))
+        assertTrue(visionEnabled(AgentOptions(vision = "on"), "qwen2.5-coder-7b"))
         assertTrue(!visionEnabled(AgentOptions(vision = "off"), "gpt-4o"))
         assertEquals("auto", AgentOptions(vision = "maybe").sanitized().vision)
     }

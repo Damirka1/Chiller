@@ -74,7 +74,7 @@ class ChatCompletionsProviderTest {
             assertEquals("data:image/jpeg;base64,QUJD", last[1].jsonObject.getValue("image_url").jsonObject.getValue("url").jsonPrimitive.content)
             assertTrue("not attached again" in messages.first().jsonObject.getValue("content").jsonPrimitive.content, "old images stay text references")
             assertEquals(listOf("new"), loaded)
-            assertTrue(VisionModels.likely("gemma-4-26b-a4b") && !VisionModels.likely("deepseek-flash") && !VisionModels.likely("gemma-3-1b-it"))
+            assertTrue(VisionModels.likely("gemma-4-26b-a4b") && VisionModels.likely("deepseek-flash") && !VisionModels.likely("qwen2.5-coder-7b") && !VisionModels.likely("gemma-3-1b-it"))
         } finally { client.close(); server.stop(0) }
     }
 

@@ -75,7 +75,9 @@ fun interface ImageInput { fun load(artifactId: String): ModelImage? }
  * text-only, and the user can force it either way in settings.
  */
 object VisionModels {
-    private val patterns = listOf("gemma-3", "gemma3", "gemma-4", "gemma4", "gpt-4o", "gpt-4.1", "gpt-5", "o3", "o4", "claude", "gemini", "-vl", "vl-", "vision", "llava", "pixtral", "qwen2.5-vl", "qwen-vl", "llama-4", "grok-2-vision", "minicpm-v", "internvl", "molmo")
+    private val patterns = listOf("gemma-3", "gemma3", "gemma-4", "gemma4", "gpt-4o", "gpt-4.1", "gpt-5", "o3", "o4", "claude", "gemini", "-vl", "vl-", "vision", "llava", "pixtral", "qwen2.5-vl", "qwen-vl", "llama-4", "grok-2-vision", "minicpm-v", "internvl", "molmo",
+        // Verified live with :evals:liveVisionSmoke on 18 October 2026.
+        "deepseek-flash")
     fun likely(modelId: String): Boolean {
         val id = modelId.lowercase()
         if (Regex("""gemma-?3-?1b""").containsMatchIn(id)) return false

@@ -23,6 +23,13 @@ tasks.register<JavaExec>("liveDeepSeekSmoke") {
     classpath = sourceSets["main"].runtimeClasspath
     mainClass.set("dev.chiller.evals.LiveDeepSeekSmokeKt")
 }
+tasks.register<JavaExec>("liveVisionSmoke") {
+    group = "verification"
+    description = "Opt-in: one request with an image of a random number; passes only if the model reads it. Needs a key; never part of check."
+    classpath = sourceSets["main"].runtimeClasspath
+    mainClass.set("dev.chiller.evals.LiveVisionSmokeKt")
+    workingDir = rootProject.projectDir
+}
 tasks.register<JavaExec>("liveEval") {
     group = "verification"
     description = "Opt-in live evaluation on the eval task set with a report in reports/local/evals. Needs a key (or a loopback endpoint); never part of check."
