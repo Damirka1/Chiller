@@ -76,13 +76,22 @@ internal enum class SettingsSection(val title: String, val icon: ImageVector) {
 
 /** The settings section list. Lives in the app sidebar while it is shown, otherwise at the page's left edge. */
 @Composable
-internal fun SettingsNav(section: SettingsSection, onSection: (SettingsSection) -> Unit, onClose: () -> Unit, modifier: Modifier = Modifier) {
+internal fun SettingsNav(
+    section: SettingsSection, onSection: (SettingsSection) -> Unit, onClose: () -> Unit, modifier: Modifier = Modifier,
+    /** Connection status colour shown next to "Подключение"; the sidebar footer that normally shows it is hidden here. */
+    connectionDot: androidx.compose.ui.graphics.Color? = null,
+) {
     val c = LocalChillerPalette.current
     Column(modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
         ChillerControl("Назад к диалогу", onClose, Modifier.fillMaxWidth(), icon = Icons.AutoMirrored.Outlined.ArrowBack, trailing = "esc", inlineTrailing = true)
         Spacer(Modifier.height(14.dp))
         Text("Настройки", color = c.text, fontSize = 20.sp, fontWeight = FontWeight.Medium, letterSpacing = (-.4).sp, modifier = Modifier.padding(start = 10.dp, bottom = 10.dp))
-        SettingsSection.entries.forEach { s -> ChillerControl(s.title, { onSection(s) }, Modifier.fillMaxWidth(), icon = s.icon, style = if (s == section) ControlStyle.SELECTED else ControlStyle.QUIET) }
+        SettingsSection.entries.forEach { s ->
+            Box(contentAlignment = Alignment.CenterEnd) {
+                ChillerControl(s.title, { onSection(s) }, Modifier.fillMaxWidth(), icon = s.icon, style = if (s == section) ControlStyle.SELECTED else ControlStyle.QUIET)
+                if (s == SettingsSection.CONNECTION && connectionDot != null) Box(Modifier.padding(end = 12.dp).size(7.dp).clip(CircleShape).background(connectionDot))
+            }
+        }
     }
 }
 
@@ -98,7 +107,12 @@ internal fun SettingsPage(
     val c = LocalChillerPalette.current
     val focus = remember { androidx.compose.ui.focus.FocusRequester() }
     LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
-    Row(modifier.focusRequester(focus).onPreviewKeyEvent { if (it.type == KeyEventType.KeyDown && it.key == Key.Escape) { actions.close(); true } else false }.focusable()) {
+    Row(modifier.focusRequester(focus).onPreviewKeyEvent { if (it.type == KeyEventType.KeyDown && it.key == Key.Escape) { actions.close(); true } else false }
+        // Arrows switch sections only when no field took them first (this listener runs after the focused child).
+        .onKeyEvent {
+            val step = when { it.type != KeyEventType.KeyDown -> 0; it.key == Key.DirectionDown -> 1; it.key == Key.DirectionUp -> -1; else -> 0 }
+            if (step == 0) false else { onSection(SettingsSection.entries[(section.ordinal + step).coerceIn(0, SettingsSection.entries.lastIndex)]); true }
+        }.focusable()) {
         if (showNav) {
             SettingsNav(section, onSection, actions.close, Modifier.width(220.dp).fillMaxHeight().padding(start = 16.dp, top = 8.dp, end = 8.dp))
             Box(Modifier.width(1.dp).fillMaxHeight().background(c.border.copy(alpha = .6f)))
@@ -486,7 +500,7 @@ private fun KeysSection() {
     val c = LocalChillerPalette.current
     Card {
         listOf(shortcut("N") to "Новый диалог", shortcut("O") to "Открыть проект", shortcut("K") to "Поиск по диалогам", shortcut("↵") to "Отправить", shortcut(".") to "Остановить задачу",
-            shortcut(",") to "Настройки", "Esc" to "Закрыть меню, настройки или поиск", "↑ ↓ ↵" to "Выбор в меню модели", "Tab" to "Навигация с клавиатуры (видимый фокус)").forEach { (keys, label) ->
+            shortcut(",") to "Настройки", "Esc" to "Закрыть меню, настройки или поиск", "↑ ↓ ↵" to "Выбор в меню модели", "↑ ↓" to "Разделы настроек", "Tab" to "Навигация с клавиатуры (видимый фокус)").forEach { (keys, label) ->
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 2.dp)) {
                 Text(label, color = c.text, fontSize = 13.sp, modifier = Modifier.weight(1f))
                 Text(keys, color = c.muted, fontSize = 12.sp, fontFamily = FontFamily.Monospace, modifier = Modifier.clip(RoundedCornerShape(6.dp)).border(1.dp, c.border, RoundedCornerShape(6.dp)).padding(horizontal = 8.dp, vertical = 3.dp))

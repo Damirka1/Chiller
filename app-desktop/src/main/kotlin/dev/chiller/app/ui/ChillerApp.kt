@@ -354,7 +354,7 @@ fun ChillerApp(
                         }
                     }, onExport = onExportSession, connection = connection, width = 248f * density.fontScale.coerceIn(1f, 1.2f),
                     running = active, searchFocus = sidebarSearch, titleBar = titleBar, onClose = { if (!active) onCloseWorkspace() },
-                    settingsOpen = settings && !active, settingsSection = settingsSection, onSettingsSection = { settingsSection = it }, onCloseSettings = { settings = false })
+                    settingsOpen = settings && !active, settingsSection = settingsSection, onSettingsSection = { settingsSection = it }, onCloseSettings = { settings = false }, version = settingsData?.version)
                 Box(Modifier.width(1.dp).fillMaxHeight().background(c.border.copy(alpha = .7f)))
                 BoxWithConstraints(Modifier.weight(1f).fillMaxHeight()) {
                     val compact = maxWidth < 860.dp || density.fontScale > 1.3f
@@ -367,7 +367,16 @@ fun ChillerApp(
                             onCompactChanges = { showCompactChanges = !showCompactChanges },
                         )
                         RunProgressBar(active)
-                        if (settings && !active) {
+                        // The page under the toolbar moves with the sidebar: settings come in from the right, the chat from the left.
+                        val page = when { settings && !active -> "settings"; comparing && comparison != null && !active -> "compare"; else -> "chat" }
+                        AnimatedContent(page, Modifier.weight(1f).fillMaxWidth(), label = "page", transitionSpec = {
+                            if (reducedMotion) EnterTransition.None togetherWith ExitTransition.None
+                            else {
+                                val direction = if (targetState == "chat") -1 else 1
+                                (fadeIn(tween(200, 60)) + slideInHorizontally(tween(240, easing = FastOutSlowInEasing)) { direction * it / 24 }) togetherWith fadeOut(tween(100))
+                            }
+                        }) { current ->
+                        if (current == "settings") {
                             val data = (settingsData ?: SettingsData(providerBaseUrl, providerModel, thinkingEnabled, apiKeyConfigured, connection = connection, catalog = catalog, allowProcesses = allowProcesses))
                                 .copy(preferences = view)
                             val base = settingsActions ?: SettingsActions()
@@ -384,13 +393,13 @@ fun ChillerApp(
                                 openComparison = comparison?.let { { settings = false; comparing = true } },
                                 setVerifyCommand = base.setVerifyCommand,
                                 close = { settings = false },
-                            ), settingsSection, { settingsSection = it }, Modifier.weight(1f).fillMaxWidth(), showNav = !showSidebar)
-                        } else if (comparing && comparison != null && !active) {
+                            ), settingsSection, { settingsSection = it }, Modifier.fillMaxSize(), showNav = !showSidebar)
+                        } else if (current == "compare" && comparison != null) {
                             ComparisonPage(comparison.state, comparison.endpoint, comparison.models, comparison.tasks,
                                 ComparisonActions(comparison.actions.start, comparison.actions.cancel, comparison.actions.show, comparison.actions.reset, close = { comparing = false }),
-                                Modifier.weight(1f).fillMaxWidth())
+                                Modifier.fillMaxSize())
                         } else
-                        Row(Modifier.weight(1f).fillMaxWidth()) {
+                        Row(Modifier.fillMaxSize()) {
                             if (!(compact && layout == WorkspaceLayout.STUDIO && showCompactChanges)) {
                                 Column(Modifier.weight(1f).fillMaxHeight()) {
                                     if (empty) {
@@ -463,6 +472,7 @@ fun ChillerApp(
                                     StudioPanel(state, subagents, onUndo, !active, reducedMotion, onCancelSubagent, onOpenTrace, Modifier.weight(1f).fillMaxHeight())
                                 }
                             }
+                        }
                         }
                     }
                 }
@@ -558,7 +568,7 @@ private fun Sidebar(
     onNew: () -> Unit, onSelect: (String) -> Unit, onChoose: () -> Unit, onSettings: () -> Unit, onTheme: () -> Unit, onRename: (SessionInfo) -> Unit, onDelete: (SessionInfo) -> Unit, onExport: (String, String) -> Unit, connection: ConnectionState, width: Float,
     running: Boolean, searchFocus: FocusRequester, titleBar: TitleBarSpec?, onClose: () -> Unit,
     settingsOpen: Boolean = false, settingsSection: SettingsSection = SettingsSection.CONNECTION,
-    onSettingsSection: (SettingsSection) -> Unit = {}, onCloseSettings: () -> Unit = {},
+    onSettingsSection: (SettingsSection) -> Unit = {}, onCloseSettings: () -> Unit = {}, version: String? = null,
 ) {
     val c = LocalChillerPalette.current
     var query by remember { mutableStateOf("") }
@@ -588,7 +598,14 @@ private fun Sidebar(
                 }
             },
         ) { inSettings ->
-        if (inSettings) SettingsNav(settingsSection, onSettingsSection, onCloseSettings, Modifier.fillMaxSize().padding(top = 4.dp))
+        if (inSettings) Column(Modifier.fillMaxSize()) {
+            SettingsNav(settingsSection, onSettingsSection, onCloseSettings, Modifier.weight(1f).fillMaxWidth().padding(top = 4.dp), connectionDot = connectionSummary(connection, connected).second)
+            Box(Modifier.fillMaxWidth().height(1.dp).background(c.border.copy(alpha = .75f)))
+            Row(Modifier.fillMaxWidth().padding(vertical = 10.dp, horizontal = 3.dp).heightIn(min = 37.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(listOfNotNull("Chiller", version).joinToString(" "), color = c.faint, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f).padding(start = 10.dp))
+                ChillerIconButton(Icons.Outlined.Contrast, "Сменить тему", onTheme)
+            }
+        }
         else Column(Modifier.fillMaxSize()) {
         ChillerControl("Новый диалог", onNew, Modifier.fillMaxWidth(), icon = Icons.Outlined.Add, enabled = enabled, trailing = shortcut("N"))
         SidebarSearch(query, { query = it }, searchFocus)
@@ -1517,8 +1534,10 @@ internal fun connectionSummary(connection: ConnectionState, configured: Boolean)
     return when (connection.status) {
         "verified" -> "подключено" to c.positive
         "checking" -> "проверяю…" to c.muted
+        "reachable" -> "сервер отвечает" to c.positive
         "failed" -> "ошибка подключения" to c.negative
-        else -> if (configured) "не проверено" to c.faint else "нет ключа API" to c.negative
+        // Set up but not exercised yet: nothing is wrong, the first answer or an explicit check will confirm it.
+        else -> if (configured) "настроено" to c.faint else "нет ключа API" to c.negative
     }
 }
 
