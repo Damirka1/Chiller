@@ -98,7 +98,8 @@ class AgentCoordinator(
                 options = args?.get("options")?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull }.orEmpty(),
             )
         }
-        val lastEvent = history.lastOrNull()?.type
+        // Session metadata (workspace, demo, model switch) is written between runs and says nothing about interruption.
+        val lastEvent = history.lastOrNull { !it.type.startsWith("session.") }?.type
         val latestHistoryEdit = history.lastOrNull { it.type.startsWith("history.") }?.seq ?: -1
         val latestRunEvent = history.lastOrNull { it.type in setOf("run.started", "run.completed", "run.failed", "run.cancelled", "run.recovered") }
             ?.takeIf { it.seq > latestHistoryEdit }

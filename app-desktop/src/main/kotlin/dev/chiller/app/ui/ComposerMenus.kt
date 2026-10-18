@@ -214,7 +214,7 @@ internal fun ModelPickerContent(
         }
         MenuDivider()
         MenuRow("Настройки подключения", onSettings, icon = Icons.Outlined.Tune)
-        Text("Смена модели начинает новый диалог", color = c.faint, fontSize = 11.sp, lineHeight = 15.sp, modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 2.dp))
+        Text("Модель сменится со следующего сообщения", color = c.faint, fontSize = 11.sp, lineHeight = 15.sp, modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 2.dp))
     }
 }
 

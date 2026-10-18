@@ -309,7 +309,13 @@ class DesktopController(
         val selected = model.trim()
         if (busy() || selected.isEmpty() || selected.length > MAX_MODEL_LENGTH) return@withLock null
         if (selected == _state.value.settings.model) return@withLock _state.value.sessionId
-        configureLocked(_state.value.settings.baseUrl, selected, _state.value.settings.thinking, null)
+        // Same endpoint and key: the dialog continues with the new model from the next message. History never moves
+        // to another provider this way; changing the endpoint in settings still starts a new dialog.
+        val previous = _state.value.settings.model
+        val sessionId = _state.value.sessionId
+        val hasHistory = runCatching { events.read(sessionId).isNotEmpty() }.getOrDefault(false)
+        configureLocked(_state.value.settings.baseUrl, selected, _state.value.settings.thinking, null, keepSession = hasHistory)
+        if (hasHistory) runCatching { events.append(sessionId, "session.model", buildJsonObject { put("from", previous); put("to", selected) }) }
         _state.value.sessionId
     }
 
@@ -509,7 +515,7 @@ class DesktopController(
         return coordinator?.isRunning == true || listOf(_state.value.run.status, coordinator?.state?.value?.status).any { it in setOf("preparing", "streaming", "executing") }
     }
 
-    private suspend fun configureLocked(url: String, model: String, thinking: Boolean, key: String?) {
+    private suspend fun configureLocked(url: String, model: String, thinking: Boolean, key: String?, keepSession: Boolean = false) {
         if (busy()) return
         val uri = runCatching { java.net.URI(url) }.getOrNull()
         if (uri == null || uri.host == null || uri.userInfo != null || uri.query != null || uri.fragment != null || uri.scheme !in setOf("https", "http")) {
@@ -534,9 +540,11 @@ class DesktopController(
             invalidateCatalog()
             if (previousTargetCredential != nextCredential) next = next.copy(modelCatalogs = next.modelCatalogs.filterKeys { originOf(it) != originOf(next.baseUrl) })
         }
-        _state.update { it.copy(settings = next, sessionId = newId(), run = RunState(), verify = VerifyState()) }
+        if (keepSession) _state.update { it.copy(settings = next) }
+        else _state.update { it.copy(settings = next, sessionId = newId(), run = RunState(), verify = VerifyState()) }
         _state.update { it.copy(apiKeyConfigured = ready(), connection = if (profileChanged) connectionForUnverified() else it.connection) }
         saveSettings(next)
+        // The next message rebuilds the engine from the journal with the new model and its profile.
         resetEngine()
         if (catalogChanged) {
             restoreCachedCatalog()

@@ -289,6 +289,23 @@ class DesktopControllerTest {
         } finally { controller.close() }
     }
 
+    @Test fun `switching the model on the same endpoint continues the dialog`() = runBlocking {
+        val controller = DesktopController(directory, initialCredential = null, catalogClient = OfflineCatalog)
+        try {
+            controller.initialize()
+            val id = controller.state.value.sessionId
+            assertTrue(controller.send("Synthetic offline request", ExecutionMode.PLAN, "client-1").accepted)
+            val endpoint = controller.state.value.settings.baseUrl
+            assertEquals(id, controller.selectModel("custom-model-b"))
+            assertEquals("custom-model-b", controller.state.value.settings.model)
+            assertEquals(endpoint, controller.state.value.settings.baseUrl)
+            assertTrue(controller.state.value.run.messages.isNotEmpty(), "the visible dialog stays")
+            val switch = JsonlEventStore(directory.resolve("sessions")).read(id).last()
+            assertEquals("session.model", switch.type)
+            assertEquals("custom-model-b", switch.payload.getValue("to").toString().trim('"'))
+        } finally { controller.close() }
+    }
+
     @Test fun `preferences rename and explicit export target persist through controller`() = runBlocking {
         val controller = DesktopController(directory, initialCredential = null, catalogClient = OfflineCatalog)
         try {

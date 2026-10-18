@@ -272,14 +272,19 @@ class ChatCompletionsProviderTest {
         val first = invoke(server, listOf(AgentMessage("user", "hello")), thinking = true, stopServer = false)
         val firstMessage = (first.last() as ModelEvent.Completed).message
         assertEquals("r1", firstMessage.replay["reasoning_content"]?.jsonPrimitive?.content)
-        val second = invoke(server, listOf(AgentMessage("assistant", "answer", replay = firstMessage.replay,
-            origin = MessageOrigin(MessageOriginKind.MODEL, "private-local-model-id"))), thinking = true, stopServer = false)
+        // A turn from another model (before a mid-dialog switch) goes back without its protocol reasoning.
+        val second = invoke(server, listOf(
+            AgentMessage("assistant", "earlier", replay = buildJsonObject { put("reasoning_content", "r0-other-model") },
+                origin = MessageOrigin(MessageOriginKind.MODEL, "private-local-model-id")),
+            AgentMessage("assistant", "answer", replay = firstMessage.replay, origin = MessageOrigin(MessageOriginKind.MODEL, "test")),
+        ), thinking = true, stopServer = false)
         assertIs<ModelEvent.Completed>(second.last())
         server.stop(0)
         val secondRequest = Json.parseToJsonElement(seen.last()).jsonObject
         val sentMessage = secondRequest["messages"]!!.toString()
         assertTrue("reasoning_content" in sentMessage)
         assertTrue("r1" in sentMessage)
+        assertTrue("r0-other-model" !in sentMessage)
         assertTrue("origin" !in sentMessage)
         assertTrue("private-local-model-id" !in sentMessage)
     }

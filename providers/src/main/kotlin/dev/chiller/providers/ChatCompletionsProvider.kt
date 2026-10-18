@@ -270,6 +270,7 @@ class ChatCompletionsProvider private constructor(
         val userIndices = request.messages.indices.filter { request.messages[it].role == "user" }
         val visionIndices = if (profile.imageInput == null) emptySet() else userIndices.takeLast(VISION_RECENT_USER_MESSAGES).toSet()
         var imagesLeft = VISION_MAX_IMAGES
+        val requestModel = request.model.ifBlank { profile.model }
         val messages = JsonArray(request.messages.mapIndexed { index, message ->
             buildJsonObject {
                 put("role", message.role)
@@ -303,9 +304,12 @@ class ChatCompletionsProvider private constructor(
                     }
                 }))
                 message.toolCallId?.let { put("tool_call_id", it) }
+                // Protocol reasoning goes back only to the model that wrote it; after a mid-dialog model switch the
+                // earlier turns are sent as plain messages.
                 profile.reasoningField?.let { field ->
                     val replayReasoning = message.replay[field]
-                    if (message.role == "assistant" && replayReasoning != null) put(field, replayReasoning)
+                    val author = message.origin?.modelId
+                    if (message.role == "assistant" && replayReasoning != null && (author == null || author == requestModel)) put(field, replayReasoning)
                 }
             }
         })
