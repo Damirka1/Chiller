@@ -74,7 +74,8 @@ class ModelComparison(private val directory: Path, private val scope: CoroutineS
         // Two starts within one second must not share a record.
         val id = "$stamp-${java.util.UUID.randomUUID().toString().take(6)}"
         _state.update { it.copy(running = true, sides = sides, tasks = tasks.toList(), results = emptyMap(), current = null, error = null, shown = null) }
-        job = scope.launch {
+        // ATOMIC: a stop pressed before the coroutine starts still runs its finally, so `running` never sticks.
+        job = scope.launch(start = CoroutineStart.ATOMIC) {
             val reports = mutableListOf<EvalReport>()
             var complete = false
             // Every finished attempt is written at once: a stop, an error or a crash keeps what was paid for.
