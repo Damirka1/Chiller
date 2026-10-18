@@ -50,7 +50,8 @@ CHILLER_DATA_DIR="$PWD/.chiller/local" ./gradlew :app-desktop:run -PchillerPrevi
 - `.github/workflows/release.yml` — тег `v1.2.3` собирает установщики с этой версией и прикладывает их к GitHub Release.
 
 ```sh
-git tag v1.1.0 && git push origin v1.1.0
+git tag v1.2.0-rc.1 && git push origin v1.2.0-rc.1   # release candidate: pre-release
+git tag v1.2.0 && git push origin v1.2.0             # stable release
 ```
 
 Установщики пока не подписаны: на macOS первый запуск — правый клик → «Открыть», на Windows SmartScreen может попросить подтверждение.

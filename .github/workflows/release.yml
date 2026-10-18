@@ -1,4 +1,6 @@
-# Push a tag like v1.2.0 to build macOS and Windows installers with that version and attach them to a GitHub Release.
+# Push a tag like v1.2.0 (or v1.2.0-rc.1 for a release candidate) to build macOS and Windows installers and attach them
+# to a GitHub Release. Installers get the numeric version (1.2.0); a suffixed tag is published as a pre-release.
+# The release text is the tag's section of CHANGELOG.md.
 name: Release
 
 on:
@@ -29,12 +31,12 @@ jobs:
         id: version
         shell: bash
         run: |
-          version="${GITHUB_REF_NAME#v}"
-          if ! [[ "$version" =~ ^[1-9][0-9]*\.[0-9]+\.[0-9]+$ ]]; then
-            echo "Tag must look like v1.2.3 with major > 0 (installer rule), got $GITHUB_REF_NAME" >&2
+          tag="${GITHUB_REF_NAME#v}"
+          if ! [[ "$tag" =~ ^([1-9][0-9]*\.[0-9]+\.[0-9]+)(-rc\.[1-9][0-9]*)?$ ]]; then
+            echo "Tag must look like v1.2.3 or v1.2.3-rc.1 with major > 0 (installer rule), got $GITHUB_REF_NAME" >&2
             exit 1
           fi
-          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "version=${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -53,6 +55,17 @@ jobs:
     needs: installers
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+      - name: Release notes from CHANGELOG.md
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          # The section from "## [version]" up to the next "## [" heading, without the heading itself.
+          awk -v v="$version" 'index($0, "## [" v "]") == 1 { on = 1; next } on && /^## \[/ { exit } on { print }' CHANGELOG.md > notes.md
+          if ! grep -q '[^[:space:]]' notes.md; then
+            echo "CHANGELOG.md has no section for $version" >&2
+            exit 1
+          fi
       - uses: actions/download-artifact@v4
         with:
           path: dist
@@ -60,9 +73,6 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           files: dist/*
-          generate_release_notes: true
-          prerelease: ${{ github.ref_name == 'v1.1.0' }}
+          prerelease: ${{ contains(github.ref_name, '-rc.') }}
           name: Chiller ${{ github.ref_name }}
-          # Installers are not code-signed yet: macOS asks to confirm the first launch, Windows SmartScreen may warn.
-          body: |
-            Unsigned builds: on macOS open with right-click → Open the first time; on Windows SmartScreen may ask to confirm.
+          body_path: notes.md
