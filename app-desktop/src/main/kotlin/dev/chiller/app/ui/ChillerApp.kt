@@ -820,6 +820,12 @@ private fun Composer(
                             if (clipboard != null) importTransferable(clipboard)
                             return@onPreviewKeyEvent clipboard != null
                         }
+                        // Shift+Tab switches Plan / Edit. Plain Tab inserts the highlighted file in the @ menu and is ignored
+                        // otherwise: an invisible tab character in a chat message is never what was meant.
+                        if (event.type == KeyEventType.KeyDown && event.key == Key.Tab && !event.isCtrlPressed && !event.isMetaPressed && !event.isAltPressed) {
+                            if (event.isShiftPressed) { if (!running) onMode(toggledMode(mode)); return@onPreviewKeyEvent true }
+                            if (matches.isEmpty()) return@onPreviewKeyEvent true
+                        }
                         if (matches.isEmpty() || event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                         when (event.key) {
                             Key.DirectionDown -> { highlight = (highlight + 1) % matches.size; true }
@@ -980,6 +986,8 @@ private fun ComposerToolbar(
                                 ChillerToggle(allowProcesses, { onAllow(it) }, "Команды процессов", enabled = !running)
                             }
                         }
+                        MenuDivider()
+                        Text("Shift+Tab в поле ввода — переключить режим", color = c.faint, fontSize = 11.sp, lineHeight = 15.sp, modifier = Modifier.padding(start = 16.dp, end = 14.dp, top = 2.dp))
                         Spacer(Modifier.height(6.dp))
                     }
                 }
@@ -1465,3 +1473,6 @@ internal fun toolLabel(name: String) = when (name) {
     "move_file" -> "Перемещение"; "delete_file" -> "Удаление"; "run_process" -> "Команда"; "read_process" -> "Вывод"; "stop_process" -> "Остановка"
     "read_artifact" -> "Результат"; "ask_user" -> "Вопрос"; "undo" -> "Откат"; else -> name
 }
+
+/** Plan and Edit alternate; Shift+Tab in the composer calls this. */
+internal fun toggledMode(mode: ExecutionMode): ExecutionMode = if (mode == ExecutionMode.PLAN) ExecutionMode.WORKSPACE_EDIT else ExecutionMode.PLAN
