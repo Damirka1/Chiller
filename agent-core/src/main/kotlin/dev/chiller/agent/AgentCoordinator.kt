@@ -68,7 +68,9 @@ class AgentCoordinator(
 
     init {
         require(maxRounds in 1..200) { "maxRounds must be between 1 and 200" }
-        require(maxOutputTokens in 1..65_536) { "maxOutputTokens must be between 1 and 65536" }
+        // "Model maximum" arrives as Int.MAX_VALUE: each round asks for at most half the context window, and the
+        // provider clamps that to the model's real ceiling.
+        require(maxOutputTokens >= 1) { "maxOutputTokens must be positive" }
     }
 
     suspend fun restore() = lock.withLock {

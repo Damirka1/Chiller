@@ -89,6 +89,18 @@ class AgentCoordinatorTest {
         assertEquals(3, provider.calls, "two recoveries, then the third truncation fails the run")
     }
 
+    @Test fun modelMaximumAsksForHalfTheContextWindow() = runTest {
+        for ((window, expected) in listOf(1_048_576 to 524_288, null to 16_384)) {
+            val requests = mutableListOf<ModelRequest>()
+            val provider = ScriptedProvider { request -> flow { requests += request; emit(ModelEvent.Completed(AgentMessage("assistant", "ok"), "stop")) } }
+            val fixture = fixture(provider, dispatcher = StandardTestDispatcher(testScheduler), contextWindow = window, maxOutputTokens = Int.MAX_VALUE)
+            fixture.coordinator.send("big", ExecutionMode.PLAN)
+            advanceUntilIdle()
+            assertEquals("completed", fixture.coordinator.state.value.status)
+            assertEquals(expected, requests.single().maxOutputTokens)
+        }
+    }
+
     @Test fun planModeSendsOnlyReadAndInteractionToolSpecs() = runTest {
         val requests = mutableListOf<ModelRequest>()
         val provider = ScriptedProvider { request -> flow {
@@ -638,10 +650,11 @@ class AgentCoordinatorTest {
         instructions: String? = null,
         traces: RunTraceSink? = null,
         contextWindow: Int? = null,
+        maxOutputTokens: Int = 4096,
     ): Fixture {
         val scope = CoroutineScope(SupervisorJob() + dispatcher)
         val processes = RecordingProcesses()
-        return Fixture(AgentCoordinator(provider, tools, eventStore, processes, "session", model, projectInstructions = instructions, traces = traces, scope = scope, contextWindowTokens = contextWindow), processes)
+        return Fixture(AgentCoordinator(provider, tools, eventStore, processes, "session", model, projectInstructions = instructions, traces = traces, scope = scope, contextWindowTokens = contextWindow, maxOutputTokens = maxOutputTokens), processes)
     }
 
     private data class Fixture(val coordinator: AgentCoordinator, val processes: RecordingProcesses)
