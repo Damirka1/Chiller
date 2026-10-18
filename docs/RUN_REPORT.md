@@ -249,3 +249,21 @@ User explicitly resumed after limits reset. Read-only audit began at14:43 Asia/A
 - Found and fixed: four tests (ReadOnlyCodeService ×3, RunBudgetProvider ×1) plus two attachment tests were never executed because runBlocking returned a value and JUnit 5 skips non-void tests. All now run and pass; declared and executed counts match (277).
 - Demo scenario marks its last plan step done. README rewritten with screenshots rendered from the real app; details moved to docs/USAGE.md.
 - Not verified: vision with a real vision model, Gemma/vLLM, the new settings toggle by hand in the running app (rendered offscreen only).
+
+## 18 октября 2026 — однократный ночной аудит
+
+Полный анализ, планы и критерии приёмки: [NIGHT_AUDIT_2026_10_18](NIGHT_AUDIT_2026_10_18.md).
+Аудирован master c529eb7; отдельная ветка paste-vision-context 798bbea только просмотрена, без merge/изменений.
+
+- Full live DeepSeek: 14/14; compact на пяти одинаковых задачах: 5/5. Отдельно прошли text-artifact >5 KiB → nested file → show_file, web search/fetch, отмена/restore/recover без повтора процесса; GET /models вернул два ID. Text-only, thinking disabled; Gemma и vision не проверены.
+- Единый budget proxy: 112 HTTP-запросов, 112 ответов; консервативный резерв $1.357653 из разрешённых $2.50. Оценка расхода по usage и опубликованным off-peak ценам $0.016121376, не банковское списание. Сохранён ledger без секретов; proxy остановлен.
+- Исправлен P1 auto-verify: поздний failed-result после смены проекта больше не отправляет repair в новый чат. Коммит d01041f; controller-регрессия и targeted AutoVerifyTest прошли.
+- Финальный `./gradlew check :evals:offlineSmoke :app-desktop:createDistributable --rerun-tasks`: BUILD SUCCESSFUL, 49 executed, 264 теста / 0 failures/errors/skipped. Новые функции не реализовывались.
+- Метод master для PNG-вставки блокирует EDT: 4K flat 114–198 мс, 4K noise 617–705 мс с последующим отказом по размеру. Это три измерения каждого fixture, не p95 и не end-to-end Cmd+V. В отдельной ветке есть фоновая подготовка, ещё не интегрированная.
+- Заново отрисованы light/dark wide/narrow rich-results; просмотрены light-wide/dark-narrow. Нативная UI-приёмка и clipboard first-paint не выполнены.
+- В планах: обязательные read_artifact/show_file для compact, кеш/лимиты vision preparation, durable rewind, частичная история comparisons, продуктовый денежный ledger, lifecycle/нативные regression-сценарии.
+- Пользоваться можно как рабочим preview с review diff и тестами. Автономная надёжность на произвольных проектах не подтверждена. Push/release не выполнялись.
+
+Сырые результаты: `reports/local/night-audit-2026-10-18/` и два eval report от 20261018-043226 / 20261018-043727. Это ignored локальные артефакты. Команда обычного запуска: `./gradlew :app-desktop:run`.
+
+Завершение: одноразовая автоматизация `chiller` удалена; остановлен только проверенный собственный `caffeinate` PID 54050, pid-файл удалён. Повторных ночных запусков не назначено.

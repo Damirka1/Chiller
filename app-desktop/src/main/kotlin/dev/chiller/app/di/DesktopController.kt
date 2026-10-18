@@ -61,6 +61,20 @@ data class AgentOptions(
         vision = vision.takeIf { it in setOf("auto", "on", "off") } ?: "auto")
 }
 data class SendReceipt(val accepted: Boolean, val sessionId: String, val clientRequestId: String, val reason: String? = null)
+
+internal data class AutoVerifyContext(
+    val sessionId: String,
+    val settings: DesktopSettings,
+    val allowProcesses: Boolean,
+    val processService: ProcessService,
+    val command: String,
+    val options: AgentOptions,
+    val epoch: Long,
+) {
+    fun isCurrent(state: DesktopState, currentProcessService: ProcessService?, currentEpoch: Long): Boolean =
+        state.sessionId == sessionId && state.settings == settings && state.allowProcesses == allowProcesses &&
+            currentProcessService === processService && currentEpoch == epoch
+}
 data class ConnectionState(val status: String = "unverified", val message: String = "", val checkedAt: String? = null)
 data class ModelCatalogState(
     val status: String = "idle",
@@ -76,6 +90,7 @@ class DesktopController(
     /** Keys found in the environment or .env by variable name (OPENAI_API_KEY, …); mapped to their presets' origins. */
     namedKeys: Map<String, String> = emptyMap(),
     private val credentialStore: CredentialStore = CredentialStore.None,
+    private val processServiceFactory: (Path) -> ProcessService = { LocalProcessService(it) },
 ) {
     private val commands = Mutex()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -115,7 +130,7 @@ class DesktopController(
     val screenshotSupported: Boolean get() = captureController.supported
 
     private var coordinator: AgentCoordinator? = null
-    private var processService: LocalProcessService? = null
+    private var processService: ProcessService? = null
     private var workspaceService: LocalWorkspace? = null
     private var observer: Job? = null
     private var questions = PendingQuestions()
@@ -458,7 +473,7 @@ class DesktopController(
         val profileChanged = oldSettings.baseUrl != next.baseUrl || oldSettings.model != next.model || oldSettings.thinking != next.thinking || oldCredential != nextCredential
         if (profileChanged) invalidateConnectionCheck()
         if (oldSettings.baseUrl != next.baseUrl || oldCredential != nextCredential) invalidateCatalog()
-        _state.update { it.copy(settings = next, sessionId = newId(), run = RunState()) }
+        _state.update { it.copy(settings = next, sessionId = newId(), run = RunState(), verify = VerifyState()) }
         _state.update { it.copy(apiKeyConfigured = ready(), connection = if (profileChanged) connectionForUnverified() else it.connection) }
         saveSettings(next)
         resetEngine()
@@ -474,7 +489,7 @@ class DesktopController(
             val settings = current.copy(workspace = canonical.toString(), recentWorkspaces = recent)
             savedWorkspace = canonical.toString()
             resetEngine()
-            _state.update { it.copy(settings = settings, sessionId = newId(), run = RunState()) }
+            _state.update { it.copy(settings = settings, sessionId = newId(), run = RunState(), verify = VerifyState()) }
             saveSettings(settings)
         } catch (_: Exception) { showError("Не удалось открыть рабочую папку.") }
     }
@@ -486,7 +501,7 @@ class DesktopController(
         // Leaving the demo returns to the project the user had open, not the throwaway demo folder.
         val current = _state.value.settings.workspace
         val workspace = if (current != null && isDemoFolder(current)) savedWorkspace?.takeIf { Files.isDirectory(Path.of(it)) } else current
-        _state.update { it.copy(sessionId = newId(), run = RunState(), settings = it.settings.copy(workspace = workspace)) }
+        _state.update { it.copy(sessionId = newId(), run = RunState(), verify = VerifyState(), settings = it.settings.copy(workspace = workspace)) }
     }
 
     /** Leaves the current project: a new dialog on the start screen without a folder. */
@@ -495,7 +510,7 @@ class DesktopController(
         resetEngine()
         val settings = _state.value.settings.copy(workspace = null)
         savedWorkspace = null
-        _state.update { it.copy(settings = settings, sessionId = newId(), run = RunState()) }
+        _state.update { it.copy(settings = settings, sessionId = newId(), run = RunState(), verify = VerifyState()) }
         saveSettings(settings)
     }
 
@@ -513,7 +528,7 @@ class DesktopController(
             resetEngine()
             val history = events.read(id)
             val savedRoot = history.firstOrNull { it.type == "session.workspace" }?.payload?.get("root")?.jsonPrimitive?.contentOrNull
-            _state.update { it.copy(sessionId = id, settings = it.settings.copy(workspace = savedRoot), run = RunState()) }
+            _state.update { it.copy(sessionId = id, settings = it.settings.copy(workspace = savedRoot), run = RunState(), verify = VerifyState()) }
             if (savedRoot == null) {
                 val messages = projectConversation(history)
                 _state.update { it.copy(run = RunState(messages = messages)) }
@@ -521,7 +536,7 @@ class DesktopController(
         } catch (_: Exception) { showError("Сессию не удалось восстановить. Её данные сохранены для проверки.") }
     }
 
-    private suspend fun sendLocked(text: String, mode: ExecutionMode, requestId: String, attachments: List<ComposerAttachment> = emptyList()): SendReceipt {
+    private suspend fun sendLocked(text: String, mode: ExecutionMode, requestId: String, attachments: List<ComposerAttachment> = emptyList(), preserveAutoVerifyAttempt: Boolean = false): SendReceipt {
         val session = _state.value.sessionId
         fun rejected(reason: String) = SendReceipt(false, session, requestId, reason)
         if (requestId.isBlank() || requestId.length > 100) return rejected("Недопустимый ID отправки")
@@ -550,15 +565,22 @@ class DesktopController(
         if (_state.value.settings.workspace == null) return rejected("Перед отправкой выберите рабочую папку")
         return try {
             val engine = coordinator ?: buildEngine().also { it.restore() }
+            val changesBefore = engine.state.value.activities.count { it.diff != null && it.status == "completed" }
+            if (!preserveAutoVerifyAttempt) autoVerifyEpoch++
+            val runEpoch = autoVerifyEpoch
             val accepted = CompletableDeferred<Boolean>()
             val acceptedReceipt = SendReceipt(true, session, requestId)
             val job = engine.send(text, mode, _state.value.allowProcesses, allowNetwork = _state.value.settings.agent.allowNetwork, allowScreenshots = _state.value.settings.agent.allowScreenshots, attachments = attachments) {
                 rememberReceipt(acceptedReceipt)
                 accepted.complete(true)
             }
-            val changesBefore = _state.value.run.activities.count { it.diff != null && it.status == "completed" }
-            if (!autoVerifySending) autoVerifyAttempt = 0
-            job.invokeOnCompletion { if (!accepted.isCompleted) accepted.complete(false); scope.launch { refreshSessions() }; scope.launch { afterRun(session, mode, changesBefore) } }
+            if (!preserveAutoVerifyAttempt) autoVerifyAttempt = 0
+            job.invokeOnCompletion {
+                val completedRun = engine.state.value
+                if (!accepted.isCompleted) accepted.complete(false)
+                scope.launch { refreshSessions() }
+                scope.launch { afterRun(session, mode, changesBefore, completedRun, runEpoch, engine) }
+            }
             val wasAccepted = accepted.await()
             if (wasAccepted) SendReceipt(true, session, requestId) else rejected("Задача не приняла сообщение")
         } catch (cancelled: CancellationException) { throw cancelled }
@@ -582,7 +604,13 @@ class DesktopController(
         } catch (_: Exception) { showError("Не удалось сохранить экспорт. Выберите доступную папку.") }
     }
     fun answer(text: String) { questions.answer(text) }
-    fun allowProcesses(value: Boolean) { if (!busy()) _state.update { it.copy(allowProcesses = value) } }
+    fun allowProcesses(value: Boolean) {
+        scope.launch {
+            commands.withLock {
+                if (!busy()) _state.update { it.copy(allowProcesses = value, verify = VerifyState()) }
+            }
+        }
+    }
     private suspend fun undoLocked(id: String) {
         if (busy()) return
         try {
@@ -594,14 +622,14 @@ class DesktopController(
     }
 
     private var autoVerifyAttempt = 0
-    @Volatile private var autoVerifySending = false
+    private var autoVerifyEpoch = 0L
 
     fun setVerifyCommand(root: String, command: String) {
         scope.launch {
             commands.withLock {
                 val trimmed = command.trim().take(500)
                 val settings = _state.value.settings.let { it.copy(verifyCommands = if (trimmed.isEmpty()) it.verifyCommands - root else it.verifyCommands + (root to trimmed)) }
-                _state.update { it.copy(settings = settings) }
+                _state.update { it.copy(settings = settings, verify = VerifyState()) }
                 saveSettings(settings)
             }
         }
@@ -612,44 +640,67 @@ class DesktopController(
      * check command (argv, no shell, project root, only with process permission). On failure the agent gets the
      * output and one more try, up to the configured attempts. Nothing runs when any of these is missing.
      */
-    private suspend fun afterRun(session: String, mode: ExecutionMode, changesBefore: Int) {
-        val s = _state.value
-        val options = s.settings.agent.sanitized()
-        val root = s.settings.workspace ?: return
-        val command = s.settings.verifyCommands[root]?.takeIf { it.isNotBlank() } ?: return
-        if (!options.autoVerify || mode != ExecutionMode.WORKSPACE_EDIT || !s.allowProcesses || s.sessionId != session) return
-        if (s.run.status != "completed" || s.run.activities.count { it.diff != null && it.status == "completed" } <= changesBefore) return
-        val argv = runCatching { splitCommand(command) }.getOrNull()?.takeIf { it.isNotEmpty() }
-            ?: run { _state.update { it.copy(verify = VerifyState("error", command, message = "Команда проверки не разобрана: проверьте кавычки")) }; return }
-        val attempt = autoVerifyAttempt + 1
-        _state.update { it.copy(verify = VerifyState("running", command, attempt = attempt, maxAttempts = options.autoVerifyAttempts)) }
-        val processes = processService ?: return
+    private suspend fun afterRun(session: String, mode: ExecutionMode, changesBefore: Int, completedRun: RunState, runEpoch: Long, engine: AgentCoordinator) {
+        val context = commands.withLock {
+            val state = _state.value
+            val options = state.settings.agent.sanitized()
+            val root = state.settings.workspace ?: return@withLock null
+            val command = state.settings.verifyCommands[root]?.takeIf { it.isNotBlank() } ?: return@withLock null
+            if (state.sessionId != session || coordinator !== engine || engine.state.value != completedRun || autoVerifyEpoch != runEpoch || !options.autoVerify ||
+                mode != ExecutionMode.WORKSPACE_EDIT || !state.allowProcesses ||
+                completedRun.status != "completed" || completedRun.activities.count { it.diff != null && it.status == "completed" } <= changesBefore) return@withLock null
+            val processes = processService ?: return@withLock null
+            val argv = runCatching { splitCommand(command) }.getOrNull()?.takeIf { it.isNotEmpty() }
+                ?: run {
+                    _state.update { it.copy(verify = VerifyState("error", command, message = "Команда проверки не разобрана: проверьте кавычки")) }
+                    return@withLock null
+                }
+            val captured = AutoVerifyContext(state.sessionId, state.settings, state.allowProcesses, processes, command, options, runEpoch)
+            val attempt = autoVerifyAttempt + 1
+            _state.update { it.copy(verify = VerifyState("running", command, attempt = attempt, maxAttempts = options.autoVerifyAttempts)) }
+            captured to (argv to attempt)
+        } ?: return
+        val (captured, args) = context
+        val (argv, attempt) = args
         val started = System.nanoTime()
         val output = try {
-            processes.start(StartProcessRequest(argv, ".", timeoutMs = 600_000, background = false), "verify-${newId()}")
+            captured.processService.start(StartProcessRequest(argv, ".", timeoutMs = 600_000, background = false), "verify-${newId()}")
         } catch (e: ToolException) {
-            _state.update { it.copy(verify = VerifyState("error", command, attempt = attempt, maxAttempts = options.autoVerifyAttempts, message = "${e.code}: ${e.message}")) }; return
+            publishVerifyErrorIfCurrent(captured, attempt, "${e.code}: ${e.message}")
+            return
         } catch (e: Exception) {
-            _state.update { it.copy(verify = VerifyState("error", command, attempt = attempt, maxAttempts = options.autoVerifyAttempts, message = "Не удалось запустить: ${e.message?.take(200)}")) }; return
+            publishVerifyErrorIfCurrent(captured, attempt, "Не удалось запустить: ${e.message?.take(200)}")
+            return
         }
         val duration = (System.nanoTime() - started) / 1_000_000
+        completeAutoVerify(captured, output, duration)
+    }
+
+    internal suspend fun completeAutoVerify(context: AutoVerifyContext, output: ProcessOutput, duration: Long): Boolean = commands.withLock {
+        if (!context.isCurrent(_state.value, processService, autoVerifyEpoch)) return@withLock false
         val tail = output.output.takeLast(6000)
-        runCatching { events.append(session, "verify.result", buildJsonObject { put("command", command); put("exitCode", output.exitCode); put("state", output.state); put("durationMs", duration); put("attempt", attempt) }) }
+        runCatching { events.append(context.sessionId, "verify.result", buildJsonObject { put("command", context.command); put("exitCode", output.exitCode); put("state", output.state); put("durationMs", duration); put("attempt", autoVerifyAttempt + 1) }) }
+        val attempt = autoVerifyAttempt + 1
         if (output.exitCode == 0) {
             autoVerifyAttempt = 0
-            _state.update { it.copy(verify = VerifyState("passed", command, 0, duration, attempt, options.autoVerifyAttempts, tail)) }
-            return
+            _state.update { it.copy(verify = VerifyState("passed", context.command, 0, duration, attempt, context.options.autoVerifyAttempts, tail)) }
+            return@withLock true
         }
-        if (attempt >= options.autoVerifyAttempts) {
+        if (attempt >= context.options.autoVerifyAttempts) {
             autoVerifyAttempt = 0
-            _state.update { it.copy(verify = VerifyState("gave_up", command, output.exitCode, duration, attempt, options.autoVerifyAttempts, tail, "Попытки исчерпаны — посмотрите вывод")) }
-            return
+            _state.update { it.copy(verify = VerifyState("gave_up", context.command, output.exitCode, duration, attempt, context.options.autoVerifyAttempts, tail, "Попытки исчерпаны — посмотрите вывод")) }
+            return@withLock true
         }
         autoVerifyAttempt = attempt
-        _state.update { it.copy(verify = VerifyState("failed", command, output.exitCode, duration, attempt, options.autoVerifyAttempts, tail, "Отправил агенту вывод ошибки")) }
-        autoVerifySending = true
-        try { send(verificationFollowUp(command, output.exitCode, output.state, tail, attempt, options.autoVerifyAttempts), ExecutionMode.WORKSPACE_EDIT) }
-        finally { autoVerifySending = false }
+        _state.update { it.copy(verify = VerifyState("failed", context.command, output.exitCode, duration, attempt, context.options.autoVerifyAttempts, tail, "Отправил агенту вывод ошибки")) }
+        // Validation and enqueue are atomic with respect to session/workspace/config changes.
+        sendLocked(verificationFollowUp(context.command, output.exitCode, output.state, tail, attempt, context.options.autoVerifyAttempts), ExecutionMode.WORKSPACE_EDIT, newId(), preserveAutoVerifyAttempt = true)
+        true
+    }
+
+    private suspend fun publishVerifyErrorIfCurrent(context: AutoVerifyContext, attempt: Int, message: String) = commands.withLock {
+        if (!context.isCurrent(_state.value, processService, autoVerifyEpoch)) return@withLock
+        _state.update { it.copy(verify = VerifyState("error", context.command, attempt = attempt, maxAttempts = context.options.autoVerifyAttempts, message = message)) }
     }
 
     fun dismissVerify() { _state.update { it.copy(verify = VerifyState()) } }
@@ -711,7 +762,7 @@ class DesktopController(
         val workspace = LocalWorkspace(root, events, artifacts, s.sessionId)
         workspace.recoverPending()
         workspaceService = workspace
-        val processes = LocalProcessService(root); processService = processes
+        val processes = processServiceFactory(root); processService = processes
         questions = PendingQuestions()
         val code = LocalReadOnlyCodeService(workspace.root)
         val builtin = BuiltinTools(workspace, processes, artifacts, questions, code = code, web = BoundedWebService(), screens = captureController)
@@ -753,6 +804,7 @@ class DesktopController(
     }
 
     private suspend fun resetEngine() {
+        autoVerifyEpoch++
         observer?.cancelAndJoin(); observer = null
         subagentObserver?.cancelAndJoin(); subagentObserver = null; subagentService = null
         _state.update { it.copy(subagents = emptyList()) }
@@ -810,7 +862,7 @@ class DesktopController(
 
     suspend fun updateAgentOptions(options: AgentOptions) = commands.withLock {
         val settings = _state.value.settings.copy(agent = options.sanitized())
-        _state.update { it.copy(settings = settings) }
+        _state.update { it.copy(settings = settings, verify = VerifyState()) }
         saveSettings(settings)
     }
 
