@@ -147,7 +147,7 @@ class LocalWorkspace(
         if (cursor != null) return@withContext continuePage(pageQuery, limit, cursor, "entries")
         val dir = resolve(path, true)
         if (!Files.isDirectory(dir, LinkOption.NOFOLLOW_LINKS)) return@withContext ToolResult.failure("NOT_DIRECTORY", "Path is not a directory")
-        val args = mutableListOf("rg", "--no-config", "--files", "--null", "--color", "never", "--hidden", "--no-require-git", "--glob", "!.git/**", "--glob", "!**/.git/**")
+        val args = mutableListOf(Ripgrep.executable(), "--no-config", "--files", "--null", "--color", "never", "--hidden", "--no-require-git", "--glob", "!.git/**", "--glob", "!**/.git/**")
         val ignore = base.resolve(".chillerignore")
         if (Files.isRegularFile(ignore, LinkOption.NOFOLLOW_LINKS)) { args += "--ignore-file"; args += ignore.toString() }
         // A user glob is applied in Kotlin: ripgrep globs override ignore rules, which would surface node_modules and similar.
@@ -180,7 +180,7 @@ class LocalWorkspace(
         if (query.isEmpty()) return@withContext ToolResult.failure("INVALID_QUERY", "Search query must not be empty")
         val dir = resolve(path, true)
         val contextLines = context.coerceIn(0, 5)
-        val args = mutableListOf("rg", "--no-config", "--json", "--line-number", "--color", "never", "--no-require-git", "--sort", "path", "--max-filesize", "2M", "--max-columns", "2000", "--max-columns-preview")
+        val args = mutableListOf(Ripgrep.executable(), "--no-config", "--json", "--line-number", "--color", "never", "--no-require-git", "--sort", "path", "--max-filesize", "2M", "--max-columns", "2000", "--max-columns-preview")
         if (contextLines > 0) { args += "-C"; args += contextLines.toString() }
         val ignore = base.resolve(".chillerignore")
         if (Files.isRegularFile(ignore, LinkOption.NOFOLLOW_LINKS)) { args += "--ignore-file"; args += ignore.toString() }

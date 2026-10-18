@@ -72,9 +72,9 @@ Chiller позволяет выбирать полный или компактн
 
 ## Быстрый старт
 
-Готовые DMG и MSI — на странице [релизов](https://github.com/Damirka1/Chiller/releases); для них отдельный JDK не требуется. Для поиска нужен `rg` (ripgrep) в PATH.
+Готовые DMG и MSI — на странице [релизов](https://github.com/Damirka1/Chiller/releases); для них отдельный JDK не требуется. Ripgrep включён в установщик; отдельно устанавливать его не нужно.
 
-Для запуска из исходников нужны JDK 21+ и Git:
+Для запуска из исходников нужны JDK 21+ и Git; Gradle подготовит проверенный ripgrep для текущей платформы:
 
 ```bash
 git clone https://github.com/Damirka1/Chiller.git

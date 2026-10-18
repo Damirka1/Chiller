@@ -1,4 +1,6 @@
 plugins { id("org.jetbrains.compose"); id("org.jetbrains.kotlin.plugin.compose") }
+apply(from = rootProject.file("build-support/ripgrep.gradle.kts"))
+
 dependencies {
     // JNA 5.18.1 (Apache-2.0/LGPL-2.1 dual license): macOS Security.framework credential storage.
     implementation("net.java.dev.jna:jna:5.18.1")
@@ -26,6 +28,7 @@ compose.desktop {
         jvmArgs += listOf("--enable-native-access=ALL-UNNAMED", "-Dapple.awt.application.name=Chiller")
         if (providers.gradleProperty("chillerPreview").isPresent) jvmArgs += "-Dchiller.offlinePreview=true"
         nativeDistributions {
+            appResourcesRootDir.set(layout.buildDirectory.dir("bundled-resources"))
             val preview = providers.gradleProperty("chillerPreview").isPresent
             packageName = if (preview) "ChillerPreview" else "Chiller"
             macOS.bundleID = if (preview) "dev.chiller.preview" else "dev.chiller.app"
@@ -125,4 +128,17 @@ tasks.register<JavaExec>("readmeShots") {
     mainClass.set("dev.chiller.app.ui.ReadmeShotsKt")
     jvmArgs("--enable-native-access=ALL-UNNAMED")
     workingDir = rootProject.projectDir
+}
+
+// Only app execution/packaging downloads the pinned native tool; offline unit checks do not.
+tasks.matching { it.name in setOf("prepareAppResources", "run") }.configureEach { dependsOn("prepareRipgrep") }
+// jpackage copies resource files without their executable bit. Restore it in the app image before installers run.
+tasks.matching { it.name == "createDistributable" }.configureEach {
+    doLast {
+        if (!System.getProperty("os.name").startsWith("Windows")) {
+            val binaries = fileTree(layout.buildDirectory.dir("compose/binaries/main/app")) { include("**/resources/tools/rg") }.files
+            check(binaries.size == 1) { "Expected one bundled ripgrep in the application image" }
+            binaries.forEach { check(it.setExecutable(true, false)) { "Cannot make packaged ripgrep executable" } }
+        }
+    }
 }
