@@ -44,7 +44,8 @@ class BuiltinTools(
         spec("read_process", "Read new process output using cursor; inspect exit code before claiming checks passed.", ToolEffect.READ, mapOf("process_id" to string(), "cursor" to integer()), "process_id"),
         spec("read_diagnostics", "Parse a bounded set of Kotlin, Java, and Python file/line diagnostics from new process output. Partial parser; inspect process state and exit_code separately.", ToolEffect.READ, mapOf("process_id" to string(), "cursor" to integer()), "process_id"),
         spec("stop_process", "Stop a process by its opaque id.", ToolEffect.PROCESS, mapOf("process_id" to string()), "process_id"),
-        spec("read_artifact", "Read part of a large saved result from this session.", ToolEffect.READ, mapOf("artifact_id" to string(), "offset" to integer(), "limit" to integer()), "artifact_id"),
+        spec("read_artifact", "Read a large saved result or attachment: offset/limit for a part (limit up to 65536; next_offset says there is more). With query, find matching lines instead (literal, case-insensitive) with their offsets, then read around a match.",
+            ToolEffect.READ, mapOf("artifact_id" to string(), "offset" to integer(), "limit" to integer(), "query" to string()), "artifact_id"),
         spec("update_plan", "Keep a short checklist for a multi-step task. Send the whole list each time; at most one step in_progress. Does not change the project.", ToolEffect.READ,
             mapOf("steps" to buildJsonObject { put("type", "array"); put("maxItems", 20); put("items", buildJsonObject {
                 put("type", "object"); put("additionalProperties", false)
@@ -147,7 +148,18 @@ class BuiltinTools(
                     }, truncated = page.truncated || page.output.length > raw.length || diagnosticsLimited, nextCursor = page.cursor.toString())
                 }
                 "stop_process" -> success(processes.stop(args.str("process_id")))
-                "read_artifact" -> ToolResult(true, buildJsonObject { put("content", artifacts.read(context.sessionId, args.str("artifact_id"), args.int("offset", 0), args.int("limit", 16_384))) })
+                "read_artifact" -> {
+                    val query = args.optionalString("query")?.takeIf { it.isNotBlank() }
+                    if (query != null) searchArtifact(context.sessionId, args.str("artifact_id"), query)
+                    else {
+                        val offset = args.int("offset", 0); val limit = args.int("limit", 16_384)
+                        val content = artifacts.read(context.sessionId, args.str("artifact_id"), offset, limit)
+                        ToolResult(true, buildJsonObject {
+                            put("content", content); put("offset", offset)
+                            if (content.length == limit) put("next_offset", offset + content.length) else put("end", true)
+                        })
+                    }
+                }
                 "ask_user" -> ToolResult(true, buildJsonObject { put("answer", questions.ask(UserQuestion(question = args.str("question"), options = args["options"]?.jsonArray?.map { it.jsonPrimitive.content }.orEmpty()))) })
                 else -> error("Unregistered tool")
             }
@@ -164,6 +176,39 @@ class BuiltinTools(
     }
 
     private inline fun <reified T> success(value: T) = ToolResult(true, json.encodeToJsonElement(value))
+    /**
+     * Literal, case-insensitive line search through an artifact, read in 64 KiB chunks so a line split across chunks is
+     * still found. Returns at most [MAX_ARTIFACT_MATCHES] lines with their 1-based number and character offset.
+     */
+    private suspend fun searchArtifact(sessionId: String, artifactId: String, query: String): ToolResult {
+        if (query.length > 200) throw ToolException("INVALID_ARGUMENTS", "query must be 1-200 characters")
+        val matches = buildJsonArray {
+            var offset = 0; var carry = ""; var carryStart = 0; var line = 1; var found = 0
+            while (found < MAX_ARTIFACT_MATCHES) {
+                val chunk = artifacts.read(sessionId, artifactId, offset, ARTIFACT_CHUNK)
+                val last = chunk.length < ARTIFACT_CHUNK
+                val text = carry + chunk
+                val complete = if (last) text.length else text.lastIndexOf('\n') + 1
+                var start = 0
+                while (start < complete && found < MAX_ARTIFACT_MATCHES) {
+                    val end = text.indexOf('\n', start).let { if (it < 0 || it >= complete) complete else it }
+                    val value = text.substring(start, end)
+                    if (value.contains(query, ignoreCase = true)) {
+                        add(buildJsonObject { put("line", line); put("offset", carryStart + start); put("text", value.take(400)) }); found++
+                    }
+                    line++; start = end + 1
+                }
+                carry = text.substring(complete.coerceAtMost(text.length)); carryStart += complete
+                offset += chunk.length
+                if (last) break
+            }
+        }
+        return ToolResult(true, buildJsonObject {
+            put("query", query); put("matches", matches)
+            if (matches.size >= MAX_ARTIFACT_MATCHES) put("more_matches_possible", true)
+        }, truncated = matches.size >= MAX_ARTIFACT_MATCHES)
+    }
+
     private fun validateObject(value: JsonObject, schema: JsonObject) {
         val properties = schema.getValue("properties").jsonObject
         require(value.keys.all { it in properties })
@@ -203,3 +248,6 @@ class BuiltinTools(
         }, effect)
     }
 }
+
+private const val ARTIFACT_CHUNK = 65_536
+private const val MAX_ARTIFACT_MATCHES = 40

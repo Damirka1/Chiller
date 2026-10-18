@@ -110,4 +110,34 @@ class BuiltinToolsTest {
             assertEquals("INVALID_ARGUMENTS", twoActive.error?.code)
         } finally { processes.close(); root.toFile().deleteRecursively() }
     }
+
+    @Test fun readArtifactFindsLinesAcrossChunksAndReportsMore() = runBlocking<Unit> {
+        // ~200 KiB log; the needle line straddles the 64 KiB chunk boundary to exercise the carried partial line.
+        val prefix = "x".repeat(65_530) + "\n"
+        val content = prefix + "lead ORDER-ID: ORD-424242 tail\n" + (1..3000).joinToString("") { "line $it ok\n" } + "late order-id: second\n"
+        val artifacts = object : ArtifactStore {
+            override suspend fun put(sessionId: String, content: String) = ArtifactRef("a", sessionId, content.length.toLong())
+            override suspend fun read(sessionId: String, artifactId: String, offset: Int, limit: Int): String {
+                require(limit in 1..65_536)
+                return content.substring(offset.coerceAtMost(content.length), (offset + limit).coerceAtMost(content.length))
+            }
+        }
+        val root = Files.createTempDirectory("chiller-artifact-search")
+        val tools = BuiltinTools(LocalWorkspace(root), LocalProcessService(root), artifacts, object : InteractionBroker { override suspend fun ask(question: UserQuestion) = "" })
+        val context = ToolContext("s", "r", ExecutionMode.PLAN)
+        val found = tools.execute(ToolCall("1", "read_artifact", """{"artifact_id":"a","query":"order-id"}"""), context)
+        assertTrue(found.ok, found.error?.message)
+        val matches = found.data!!.jsonObject.getValue("matches").jsonArray.map { it.jsonObject }
+        assertEquals(2, matches.size)
+        assertEquals(2, matches[0].getValue("line").jsonPrimitive.int)
+        assertEquals(prefix.length, matches[0].getValue("offset").jsonPrimitive.int)
+        assertTrue(matches[0].getValue("text").jsonPrimitive.content.contains("ORD-424242"))
+        assertEquals(content.lines().indexOfFirst { it.startsWith("late") } + 1, matches[1].getValue("line").jsonPrimitive.int)
+        val part = tools.execute(ToolCall("2", "read_artifact", """{"artifact_id":"a","offset":${prefix.length},"limit":40}"""), context).data!!.jsonObject
+        assertTrue(part.getValue("content").jsonPrimitive.content.startsWith("lead ORDER-ID"))
+        assertEquals(prefix.length + 40, part.getValue("next_offset").jsonPrimitive.int)
+        val tail = tools.execute(ToolCall("3", "read_artifact", """{"artifact_id":"a","offset":${content.length - 10},"limit":100}"""), context).data!!.jsonObject
+        assertEquals(true, tail.getValue("end").jsonPrimitive.boolean)
+        root.toFile().deleteRecursively()
+    }
 }
