@@ -300,3 +300,5 @@ Not done, deliberately:
 - Wrapped card header: title on the first line, counts below, no one-line ellipsis hiding issues. Problems use “Завершено с замечаниями”. Added wide/narrow offscreen fixtures in both themes.
 - Regression tests cover successful/failed file calls followed by command writes, restart persistence, moves, same-size/same-time ignored-file changes, and misleading check text. Initial targeted compile exposed a missing `Activity.target` in a new test fixture; fixed, then targeted tests passed.
 - Full verification: `./gradlew check :evals:offlineSmoke :app-desktop:turnResultPreview :app-desktop:richResultsPreview :app-desktop:createDistributable` passed; 294 tests, 0 failures/errors/skipped. No paid model calls. Native interaction was not re-tested. Product-wide monetary reservations remain a separately scoped feature, not implemented by these correctness fixes.
+
+Integrated locally into clean `master` by fast-forward after verification. Rebuilt `:app-desktop:createDistributable` at the normal checkout path successfully; own temporary worktree archived, parallel agent worktree preserved. No push or release in this follow-up.
