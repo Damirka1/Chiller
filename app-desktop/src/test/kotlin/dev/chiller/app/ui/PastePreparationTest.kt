@@ -34,4 +34,13 @@ class PastePreparationTest {
         val encoded = encodePastedImage(image, maxPixels = 4_000_000)!!
         assertTrue(encoded.scaled && encoded.width.toLong() * encoded.height <= 4_000_000)
     }
+
+    @Test fun `other buffer types convert straight to the limited size`() {
+        val image = BufferedImage(5000, 4000, BufferedImage.TYPE_3BYTE_BGR)
+        val encoded = encodePastedImage(image, maxPixels = 16_000_000)!!
+        assertTrue(encoded.scaled && encoded.width.toLong() * encoded.height <= 16_000_000, "${encoded.width}x${encoded.height}")
+        assertTrue(encoded.width in 4400..4480, "aspect kept: ${encoded.width}x${encoded.height}")
+        val small = encodePastedImage(BufferedImage(40, 30, BufferedImage.TYPE_3BYTE_BGR))!!
+        assertTrue(!small.scaled && small.width == 40 && small.height == 30)
+    }
 }

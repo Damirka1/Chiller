@@ -42,15 +42,13 @@ data class EncodedPaste(val png: ByteArray, val width: Int, val height: Int, val
  * instead of being rejected; the result says so, so the UI can label it honestly.
  */
 fun encodePastedImage(image: Image, maxBytes: Int = MAX_PASTED_IMAGE_BYTES, maxPixels: Long = 16_000_000L): EncodedPaste? {
-    var width = image.getWidth(null); var height = image.getHeight(null)
-    if (width <= 0 || height <= 0) return null
+    val sourceWidth = image.getWidth(null); val sourceHeight = image.getHeight(null)
+    if (sourceWidth <= 0 || sourceHeight <= 0) return null
+    // Huge sources go straight to the pixel limit while being converted: no full-size intermediate buffer.
+    val factor = if (sourceWidth.toLong() * sourceHeight > maxPixels) kotlin.math.sqrt(maxPixels.toDouble() / (sourceWidth.toLong() * sourceHeight)) else 1.0
+    var width = (sourceWidth * factor).toInt().coerceAtLeast(1); var height = (sourceHeight * factor).toInt().coerceAtLeast(1)
     var buffered = asRgbBuffer(image, width, height)
-    var scaled = false
-    // Huge sources are reduced to the pixel limit first; encoding them whole would only be thrown away.
-    if (width.toLong() * height > maxPixels) {
-        val factor = kotlin.math.sqrt(maxPixels.toDouble() / (width.toLong() * height))
-        buffered = scale(buffered, (width * factor).toInt(), (height * factor).toInt()); width = buffered.width; height = buffered.height; scaled = true
-    }
+    var scaled = factor < 1.0
     repeat(6) {
         val png = ByteArrayOutputStream(width * height / 2).use { out -> if (!ImageIO.write(buffered, "png", out)) return null; out.toByteArray() }
         if (png.size <= maxBytes) return EncodedPaste(png, width, height, scaled)
@@ -59,13 +57,21 @@ fun encodePastedImage(image: Image, maxBytes: Int = MAX_PASTED_IMAGE_BYTES, maxP
     return null
 }
 
+/** An RGB/ARGB buffer of exactly [width]×[height]; the source is used as is when it already matches. */
 private fun asRgbBuffer(image: Image, width: Int, height: Int): BufferedImage {
-    if (image is BufferedImage && (image.type == BufferedImage.TYPE_INT_RGB || image.type == BufferedImage.TYPE_INT_ARGB)) return image
+    if (image is BufferedImage && image.width == width && image.height == height &&
+        (image.type == BufferedImage.TYPE_INT_RGB || image.type == BufferedImage.TYPE_INT_ARGB)) return image
     val buffered = BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB)
     val g = buffered.createGraphics()
-    try { g.drawImage(image, 0, 0, null) } finally { g.dispose() }
+    try {
+        g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR)
+        g.drawImage(image, 0, 0, width, height, null)
+    } finally { g.dispose() }
     return buffered
 }
+
+/** At most two pastes are prepared at once; more wait with their cards visible instead of competing for memory. */
+internal val pastePreparation = kotlinx.coroutines.sync.Semaphore(2)
 
 private fun scale(source: BufferedImage, width: Int, height: Int): BufferedImage {
     val target = BufferedImage(width.coerceAtLeast(1), height.coerceAtLeast(1), if (source.colorModel.hasAlpha()) BufferedImage.TYPE_INT_ARGB else BufferedImage.TYPE_INT_RGB)

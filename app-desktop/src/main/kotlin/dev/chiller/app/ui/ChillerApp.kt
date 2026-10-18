@@ -83,6 +83,7 @@ import dev.chiller.design.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.serialization.json.*
@@ -768,11 +769,11 @@ private fun Composer(
                             is ComposerTransferPayload.Files -> appendImported(onImportFiles(attachmentOwnerKey, payload.paths))
                             is ComposerTransferPayload.Image -> {
                                 // PNG encoding (and scaling an oversized image) never runs on the UI thread.
-                                val encoded = withContext(Dispatchers.Default) { encodePastedImage(payload.value) } ?: error("Clipboard image cannot be encoded within the size limit")
+                                val encoded = pastePreparation.withPermit { withContext(Dispatchers.Default) { encodePastedImage(payload.value) } } ?: error("Clipboard image cannot be encoded within the size limit")
                                 appendImported(listOf(onImportImageAttachment(attachmentOwnerKey, encoded.png) ?: error("Image import failed")))
                                 if (encoded.scaled) importError = "Изображение уменьшено до ${encoded.width}×${encoded.height}, чтобы уложиться в 4 МБ."
                             }
-                            is ComposerTransferPayload.Text -> appendImported(listOf(onImportTextAttachment(attachmentOwnerKey, payload.value) ?: error("Text import failed")))
+                            is ComposerTransferPayload.Text -> appendImported(listOf(pastePreparation.withPermit { onImportTextAttachment(attachmentOwnerKey, payload.value) } ?: error("Text import failed")))
                         }
                     } finally { preparing = preparing - card }
                 }
