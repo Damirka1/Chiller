@@ -57,7 +57,7 @@ class ModelComparisonTest {
             comparison.cancel()
             release.countDown()
             withTimeout(60_000) { while (comparison.state.value.running) delay(20) }
-            val record = comparison.state.value.history.single()
+            val record = comparison.state.value.history.singleOrNull() ?: error("no saved record; state error: ${comparison.state.value.error}")
             assertFalse(record.complete)
             assertEquals(1, record.reports.flatMap { it.results }.size, "the finished attempt of the stopped side is kept")
 
