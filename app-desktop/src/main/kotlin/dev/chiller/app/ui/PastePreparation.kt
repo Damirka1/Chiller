@@ -49,12 +49,31 @@ fun encodePastedImage(image: Image, maxBytes: Int = MAX_PASTED_IMAGE_BYTES, maxP
     var width = (sourceWidth * factor).toInt().coerceAtLeast(1); var height = (sourceHeight * factor).toInt().coerceAtLeast(1)
     var buffered = asRgbBuffer(image, width, height)
     var scaled = factor < 1.0
+    // Large images: estimate the PNG size from a centre crop and shrink before the first full encode, instead of
+    // encoding a too-big PNG and retrying (measured: 8K noise 5.4 s → see docs/RUN_REPORT.md).
+    if (width.toLong() * height > 2_000_000) {
+        val predicted = predictPngBytes(buffered)
+        if (predicted > maxBytes * 0.9) {
+            val shrink = kotlin.math.sqrt(maxBytes * 0.8 / predicted)
+            buffered = scale(buffered, (width * shrink).toInt().coerceAtLeast(1), (height * shrink).toInt().coerceAtLeast(1)); width = buffered.width; height = buffered.height; scaled = true
+        }
+    }
     repeat(6) {
         val png = ByteArrayOutputStream(width * height / 2).use { out -> if (!ImageIO.write(buffered, "png", out)) return null; out.toByteArray() }
         if (png.size <= maxBytes) return EncodedPaste(png, width, height, scaled)
-        buffered = scale(buffered, (width * 0.75).toInt().coerceAtLeast(1), (height * 0.75).toInt().coerceAtLeast(1)); width = buffered.width; height = buffered.height; scaled = true
+        // Size grows roughly with the pixel count: shrink in proportion to the overshoot, with a margin.
+        val shrink = kotlin.math.sqrt(maxBytes * 0.85 / png.size).coerceIn(0.3, 0.9)
+        buffered = scale(buffered, (width * shrink).toInt().coerceAtLeast(1), (height * shrink).toInt().coerceAtLeast(1)); width = buffered.width; height = buffered.height; scaled = true
     }
     return null
+}
+
+/** PNG size estimate for the whole image from a 512×512 centre crop at full resolution. */
+private fun predictPngBytes(image: BufferedImage): Double {
+    val w = minOf(512, image.width); val h = minOf(512, image.height)
+    val crop = image.getSubimage((image.width - w) / 2, (image.height - h) / 2, w, h)
+    val bytes = ByteArrayOutputStream().use { out -> ImageIO.write(crop, "png", out); out.size() }
+    return bytes.toDouble() / (w * h) * image.width * image.height
 }
 
 /** An RGB/ARGB buffer of exactly [width]×[height]; the source is used as is when it already matches. */

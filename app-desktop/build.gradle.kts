@@ -86,6 +86,14 @@ tasks.register<JavaExec>("richResultsPreview") {
     if (providers.gradleProperty("richResultsInteractive").isPresent) args("--interactive")
 }
 
+tasks.register<JavaExec>("pasteBenchmark") {
+    group = "verification"
+    description = "Paste preparation benchmark: image encoding, text storage and vision reuse, p50/p95 and heap, into build/reports/paste-benchmark.md."
+    dependsOn(tasks.named("testClasses"))
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass.set("dev.chiller.app.ui.PasteBenchmarkKt")
+    jvmArgs("-Xmx2g", "-Djava.awt.headless=true")
+}
 tasks.register<JavaExec>("turnResultPreview") {
     group = "verification"
     description = "Render the turn result card (clean and with issues, both themes) into build/reports/turn-result. Synthetic data."
