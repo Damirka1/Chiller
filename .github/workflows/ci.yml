@@ -63,9 +63,12 @@ jobs:
         include:
           - os: macos-latest
             task: packageDmg
+            jdk: temurin
             output: app-desktop/build/compose/binaries/main/dmg/*.dmg
           - os: windows-latest
             task: packageMsi
+            # The JetBrains Runtime draws the custom title bar; the installer bundles the JDK it is built with.
+            jdk: jetbrains
             output: app-desktop/build/compose/binaries/main/msi/*.msi
     runs-on: ${{ matrix.os }}
     timeout-minutes: 40
@@ -73,8 +76,12 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
         with:
-          distribution: temurin
+          distribution: ${{ matrix.jdk }}
           java-version: "21"
+      - name: Installer JDK is the JetBrains Runtime
+        if: matrix.jdk == 'jetbrains'
+        shell: bash
+        run: java -XshowSettings:properties -version 2>&1 | grep -q 'java.vendor = JetBrains' || { echo "Expected the JetBrains Runtime for the Windows title bar" >&2; exit 1; }
       - uses: gradle/actions/setup-gradle@v4
       - name: Build installer
         shell: bash

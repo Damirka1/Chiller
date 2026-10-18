@@ -15,6 +15,8 @@ import dev.chiller.app.ui.TitleBarSpec
 import androidx.compose.foundation.window.WindowDraggableArea
 import androidx.compose.foundation.layout.fillMaxSize
 import dev.chiller.app.ui.DesktopAction
+import dev.chiller.app.ui.AppMenuItem
+import dev.chiller.app.ui.AppMenuSection
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableSharedFlow
 import java.nio.file.Path
@@ -50,7 +52,7 @@ fun main() = application {
             window.rootPane.putClientProperty("apple.awt.transparentTitleBar", true)
             window.rootPane.putClientProperty("apple.awt.windowTitleVisible", false)
         }
-        val titleBar = remember(mac) { if (!mac) null else TitleBarSpec(dragArea = { modifier -> WindowDraggableArea(modifier) { androidx.compose.foundation.layout.Box(androidx.compose.ui.Modifier.fillMaxSize()) } }) }
+        val macTitleBar = remember(mac) { if (!mac) null else TitleBarSpec(dragArea = { modifier -> WindowDraggableArea(modifier) { androidx.compose.foundation.layout.Box(androidx.compose.ui.Modifier.fillMaxSize()) } }) }
         // A finished task while the window is in the background asks for attention once (Dock bounce / taskbar flash).
         var wasActive by remember { mutableStateOf(false) }
         LaunchedEffect(active, state.run.status) {
@@ -66,31 +68,45 @@ fun main() = application {
             chooseDirectory(window, state.settings.workspace, mac)?.let { path -> scope.launch { controller.chooseWorkspace(path) } }
             Unit
         }
-        MenuBar {
-            Menu("Файл") {
-                Item("Новый диалог", enabled = !active, shortcut = KeyShortcut(Key.N, meta = mac, ctrl = !mac), onClick = { actions.tryEmit(DesktopAction.NEW_CHAT) })
-                Item("Открыть проект…", enabled = !active, shortcut = KeyShortcut(Key.O, meta = mac, ctrl = !mac), onClick = chooseWorkspace)
-                Item("Закрыть проект", enabled = !active && state.settings.workspace != null, onClick = { scope.launch { controller.closeWorkspace() } })
-                Separator()
-                Item("Экспорт Markdown…", enabled = !active && state.run.messages.isNotEmpty(), onClick = { scope.launch { controller.prepareExport("markdown") } })
-                Item("Экспорт JSON…", enabled = !active && state.run.messages.isNotEmpty(), onClick = { scope.launch { controller.prepareExport("json") } })
-                Separator()
-                Item("Настройки…", enabled = !active, shortcut = KeyShortcut(Key.Comma, meta = mac, ctrl = !mac), onClick = { actions.tryEmit(DesktopAction.SETTINGS) })
-            }
-            Menu("Инструменты") {
-                Item("Сравнение моделей", enabled = !active, onClick = { actions.tryEmit(DesktopAction.COMPARE) })
-            }
-            Menu("Справка") {
-                Item("Демо: все инструменты", enabled = !active, onClick = { scope.launch { controller.startDemo() } })
-            }
-            Menu("Диалог") {
-                Item("Отправить", enabled = !active, shortcut = KeyShortcut(Key.Enter, meta = mac, ctrl = !mac), onClick = { actions.tryEmit(DesktopAction.SEND) })
-                Item("Остановить", enabled = active, shortcut = KeyShortcut(Key.Period, meta = mac, ctrl = !mac), onClick = { actions.tryEmit(DesktopAction.STOP) })
-            }
-            Menu("Вид") {
-                Item("Focus", onClick = { actions.tryEmit(DesktopAction.FOCUS) })
-                Item("Studio", onClick = { actions.tryEmit(DesktopAction.STUDIO) })
-                Item("Боковая панель", onClick = { actions.tryEmit(DesktopAction.SIDEBAR) })
+        val menu = listOf(
+            AppMenuSection("Файл", listOf(
+                listOf(
+                    AppMenuItem("Новый диалог", Key.N, "N", enabled = !active) { actions.tryEmit(DesktopAction.NEW_CHAT) },
+                    AppMenuItem("Открыть проект…", Key.O, "O", enabled = !active, onClick = chooseWorkspace),
+                    AppMenuItem("Закрыть проект", enabled = !active && state.settings.workspace != null) { scope.launch { controller.closeWorkspace() } },
+                ),
+                listOf(
+                    AppMenuItem("Экспорт Markdown…", enabled = !active && state.run.messages.isNotEmpty()) { scope.launch { controller.prepareExport("markdown") } },
+                    AppMenuItem("Экспорт JSON…", enabled = !active && state.run.messages.isNotEmpty()) { scope.launch { controller.prepareExport("json") } },
+                ),
+                listOf(AppMenuItem("Настройки…", Key.Comma, ",", enabled = !active) { actions.tryEmit(DesktopAction.SETTINGS) }),
+            )),
+            AppMenuSection("Диалог", listOf(listOf(
+                AppMenuItem("Отправить", Key.Enter, "↵", enabled = !active) { actions.tryEmit(DesktopAction.SEND) },
+                AppMenuItem("Остановить", Key.Period, ".", enabled = active) { actions.tryEmit(DesktopAction.STOP) },
+            ))),
+            AppMenuSection("Вид", listOf(listOf(
+                AppMenuItem("Focus") { actions.tryEmit(DesktopAction.FOCUS) },
+                AppMenuItem("Studio") { actions.tryEmit(DesktopAction.STUDIO) },
+                AppMenuItem("Боковая панель") { actions.tryEmit(DesktopAction.SIDEBAR) },
+            ))),
+            AppMenuSection("Инструменты", listOf(listOf(AppMenuItem("Сравнение моделей", enabled = !active) { actions.tryEmit(DesktopAction.COMPARE) }))),
+            AppMenuSection("Справка", listOf(listOf(AppMenuItem("Демо: все инструменты", enabled = !active) { scope.launch { controller.startDemo() } }))),
+        )
+        // Windows on the JetBrains Runtime: the app draws its own title bar under the native caption buttons, and the menu
+        // moves into the toolbar. Anywhere else the system frame and menu bar stay.
+        val nativeTitleBar = remember(mac) { if (mac) null else WindowsTitleBar.install(window) }
+        val titleBar = if (mac) macTitleBar else nativeTitleBar?.spec(menu)
+        if (nativeTitleBar == null) MenuBar {
+            menu.forEach { section ->
+                Menu(section.title) {
+                    section.groups.forEachIndexed { index, group ->
+                        if (index > 0) Separator()
+                        group.forEach { item ->
+                            Item(item.title, enabled = item.enabled, shortcut = item.key?.let { KeyShortcut(it, meta = mac, ctrl = !mac) }, onClick = item.onClick)
+                        }
+                    }
+                }
             }
         }
         val platformDensity = LocalDensity.current

@@ -100,12 +100,24 @@ import javax.imageio.ImageReader
 enum class WorkspaceLayout { FOCUS, STUDIO }
 private data class MessageActionTarget(val index: Int, val content: String, val role: String, val sessionId: String?, val historySize: Int)
 
-/** Geometry and drag behaviour of a transparent native title bar (macOS full-window content). */
+/**
+ * Geometry and behaviour of a title bar the app draws itself: macOS full-window content with floating traffic lights,
+ * or a Windows custom title bar under the native caption buttons.
+ */
 class TitleBarSpec(
     val height: androidx.compose.ui.unit.Dp = 30.dp,
+    /** Room for the native buttons at the leading edge (macOS traffic lights); 0 when they are elsewhere. */
     val trafficLightsWidth: androidx.compose.ui.unit.Dp = 78.dp,
+    /** Room for the native caption buttons at the trailing edge (Windows minimize, maximize, close). */
+    val captionButtonsWidth: androidx.compose.ui.unit.Dp = 0.dp,
     /** Renders an area that moves the window when dragged, e.g. Compose's WindowDraggableArea. */
     val dragArea: @Composable (Modifier) -> Unit,
+    /** Applied to the whole window content; tells a native title bar which pointer events belong to controls. */
+    val hitTest: Modifier = Modifier,
+    /** The application menu, drawn in the toolbar with its accelerators when the window has no system menu bar. */
+    val menu: List<AppMenuSection>? = null,
+    /** Called with the effective app theme so native window buttons can match it. */
+    val onDark: (Boolean) -> Unit = {},
 )
 /** Everything the comparison page needs from the app. */
 class ComparisonModel(
@@ -296,14 +308,17 @@ fun ChillerApp(
     val rootFocus = remember { FocusRequester() }
     val sidebarSearch = remember { FocusRequester() }
     LaunchedEffect(Unit) { rootFocus.requestFocus() }
+    LaunchedEffect(dark, titleBar) { titleBar?.onDark?.invoke(dark) }
     ChillerTheme(darkTheme = dark, reducedMotion = reducedMotion, compact = compactDensity) {
         val c = LocalChillerPalette.current
-        BoxWithConstraints(Modifier.fillMaxSize().background(c.canvas).focusRequester(rootFocus).chillerKeyboardFocusTracking().onPreviewKeyEvent {
+        val menu = titleBar?.menu
+        BoxWithConstraints(Modifier.fillMaxSize().then(titleBar?.hitTest ?: Modifier).background(c.canvas).focusRequester(rootFocus).chillerKeyboardFocusTracking().onPreviewKeyEvent {
             if (it.type == KeyEventType.KeyDown && (it.isMetaPressed || it.isCtrlPressed)) {
                 when (it.key) {
                     Key.Enter -> { handleAction(DesktopAction.SEND); true }
                     Key.K -> { sidebar = true; runCatching { sidebarSearch.requestFocus() }; true }
-                    else -> false
+                    // Without a system menu bar its accelerators live here.
+                    else -> menu?.commandFor(it.key)?.let { command -> command.onClick(); true } ?: false
                 }
             } else false
         }.focusable()) {
@@ -339,7 +354,7 @@ fun ChillerApp(
                     val compact = maxWidth < 860.dp || density.fontScale > 1.3f
                     Column(Modifier.fillMaxSize()) {
                         Toolbar(
-                            titleBar, leadingInset = titleBar != null && !showSidebar,
+                            titleBar, leadingInset = titleBar != null && titleBar.trafficLightsWidth > 0.dp && !showSidebar,
                             sessions.firstOrNull { it.id == selectedSessionId }?.title, workspacePath, layout, active, state.status, state.question != null,
                             onLayout = { updateView(view.copy(layout = it.name.lowercase())) }, onSidebar = { sidebar = !sidebar }, onSettings = { settings = true },
                             canConfigure = !active, compact = compact, compactChanges = showCompactChanges,
@@ -542,8 +557,9 @@ private fun Sidebar(
     val shown = filterSessions(sessions, query)
     Column(Modifier.width(width.dp).fillMaxHeight().background(c.sidebar).padding(horizontal = 12.dp)) {
         // Room for the floating traffic lights; the strip moves the window like a title bar.
-        if (titleBar != null) titleBar.dragArea(Modifier.fillMaxWidth().height(titleBar.height))
-        Row(Modifier.fillMaxWidth().height(if (titleBar != null) 44.dp else 56.dp).padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        val trafficLights = titleBar != null && titleBar.trafficLightsWidth > 0.dp
+        if (trafficLights) titleBar!!.dragArea(Modifier.fillMaxWidth().height(titleBar.height))
+        Row(Modifier.fillMaxWidth().height(if (trafficLights) 44.dp else if (titleBar != null) titleBar.height else 56.dp).padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             ChillerMark(Modifier.size(23.dp), c.accent); Spacer(Modifier.width(9.dp))
             Text("Chiller", color = c.text, fontSize = 15.sp, fontWeight = FontWeight.Medium, letterSpacing = (-.4f).sp)
             Spacer(Modifier.weight(1f))
@@ -675,7 +691,10 @@ private fun Toolbar(titleBar: TitleBarSpec?, leadingInset: Boolean, title: Strin
     // Empty toolbar space drags the window; controls on top keep their clicks.
     Box(Modifier.fillMaxWidth()) {
     titleBar?.dragArea?.invoke(Modifier.matchParentSize())
-    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(start = if (leadingInset) titleBar!!.trafficLightsWidth else 15.dp, end = 15.dp, top = 4.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+    // Windows caption buttons sit flush with the window's top-right corner; the toolbar ends a little before them.
+    val end = titleBar?.captionButtonsWidth?.takeIf { it > 0.dp }?.plus(6.dp) ?: 15.dp
+    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(start = if (leadingInset) titleBar!!.trafficLightsWidth else 15.dp, end = end, top = 4.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        titleBar?.menu?.let { AppMenuButton(it); Spacer(Modifier.width(2.dp)) }
         ChillerIconButton(Icons.Outlined.VerticalSplit, "Боковая панель", onSidebar)
         Spacer(Modifier.width(10.dp))
         Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {

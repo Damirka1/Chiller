@@ -8,6 +8,9 @@ apply(from = rootProject.file("build-support/notices.gradle.kts"))
 dependencies {
     // JNA 5.18.1 (Apache-2.0/LGPL-2.1 dual license): macOS Security.framework credential storage.
     implementation("net.java.dev.jna:jna:5.18.1")
+    // JetBrains Runtime API 1.10.1 (Apache-2.0): native custom title bar on Windows when running on the JetBrains Runtime;
+    // on any other JDK it reports itself unavailable and the standard window frame is used.
+    implementation("org.jetbrains.runtime:jbr-api:1.10.1")
     implementation("io.ktor:ktor-client-core:3.4.1")
     implementation("io.ktor:ktor-client-cio:3.4.1")
     implementation(project(":contracts"))

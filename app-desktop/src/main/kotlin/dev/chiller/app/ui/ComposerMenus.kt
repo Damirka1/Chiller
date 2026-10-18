@@ -106,7 +106,7 @@ internal class AnchoredAbovePositionProvider(
 @Composable
 internal fun MenuRow(
     title: String, onClick: () -> Unit, subtitle: String? = null, icon: ImageVector? = null,
-    selected: Boolean = false, highlighted: Boolean = false, tag: String? = null, enabled: Boolean = true,
+    selected: Boolean = false, highlighted: Boolean = false, tag: String? = null, enabled: Boolean = true, shortcut: String? = null,
 ) {
     val c = LocalChillerPalette.current
     val interaction = remember { MutableInteractionSource() }
@@ -127,7 +127,8 @@ internal fun MenuRow(
         tag?.let {
             Text(it, color = c.muted, fontSize = 10.sp, lineHeight = 14.sp, modifier = Modifier.padding(start = 8.dp).clip(RoundedCornerShape(5.dp)).background(c.selected.copy(alpha = .6f)).padding(horizontal = 6.dp, vertical = 1.dp))
         }
-        Box(Modifier.padding(start = 8.dp).size(16.dp), contentAlignment = Alignment.Center) {
+        shortcut?.let { Text(it, color = c.faint, fontSize = 11.sp, lineHeight = 15.sp, maxLines = 1, modifier = Modifier.padding(start = 12.dp)) }
+        if (shortcut == null || selected) Box(Modifier.padding(start = 8.dp).size(16.dp), contentAlignment = Alignment.Center) {
             if (selected) Icon(Icons.Outlined.Check, null, Modifier.size(16.dp), tint = c.accent)
         }
     }
