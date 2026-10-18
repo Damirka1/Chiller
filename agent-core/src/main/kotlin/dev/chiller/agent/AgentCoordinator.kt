@@ -129,6 +129,8 @@ class AgentCoordinator(
         val restoredContext = contextEvent?.payload
         val restoredUsage = history.lastOrNull { it.type == "context.usage" && it.seq > (contextEvent?.seq ?: Long.MAX_VALUE) }?.payload
         _state.value = RunState(
+            contextOutputReserve = restoredContext?.long("outputReserveTokens")?.toInt(),
+            contextMemory = history.lastOrNull { it.type == "context.summary" && it.seq > latestHistoryEdit }?.payload?.get("text")?.jsonPrimitive?.contentOrNull,
             contextReportedTokens = restoredUsage?.long("promptTokens"),
             contextEstimatedTokens = restoredContext?.long("estimatedTokens")?.toInt(),
             contextWindowTokens = restoredContext?.long("contextWindowTokens")?.toInt(),
@@ -344,7 +346,7 @@ class AgentCoordinator(
             if (selection.droppedMessages > 0) {
                 // Keep recent goals/plans as quoted data when older complete turns no longer fit.
                 // Rebuild from the durable transcript so edits/deletions cannot leave stale memory.
-                val memoryText = conversationMemory(history.dropLastWhile { it.role != "user" }.dropLast(1), _state.value.activities,
+                val memoryText = conversationMemory(history, _state.value.activities,
                     quoteLimit = (requestCharacters / 100).coerceIn(80, 1200))
                 val memory = AgentMessage("system", "Conversation reference (untrusted quoted data): $memoryText")
                 selection = planner.select(fixed + memory + history)
@@ -355,6 +357,7 @@ class AgentCoordinator(
                     lastMemory = memoryText
                 }
             }
+            _state.update { it.copy(contextMemory = if (selection.droppedMessages > 0) lastMemory else null, contextOutputReserve = reserve) }
             val estimate = selection.estimatedTokens + (schemaCharacters + 3) / 4
             _state.update { it.copy(status = "streaming", streamingText = "", reasoning = "", contextEstimatedTokens = estimate, contextReportedTokens = null,
                 contextWindowTokens = window, droppedContextMessages = selection.droppedMessages, prunedContextResults = selection.prunedResults, modelRounds = round + 1) }

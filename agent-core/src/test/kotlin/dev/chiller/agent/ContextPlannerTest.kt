@@ -101,6 +101,20 @@ class ContextPlannerTest {
         assertEquals(0, selected.droppedMessages)
     }
 
+    @Test fun longActiveTurnDropsWholeExchangesButKeepsGoalAndUnknownOutcome() {
+        val messages = mutableListOf(AgentMessage("user", "Build landing with pricing"))
+        repeat(10) { i ->
+            messages += AgentMessage("assistant", toolCalls = listOf(ToolCall("c$i", "create_file", "{\"content\":\"${"x".repeat(900)}\"}")))
+            messages += AgentMessage("tool", if (i == 0) "OUTCOME_UNKNOWN" else "ok", toolCallId = "c$i")
+        }
+        val selected = ContextPlanner(maxCharacters = 3500, outputReserveCharacters = 500).select(messages)
+        assertTrue(selected.droppedMessages > 0)
+        assertEquals(messages.first(), selected.messages.first())
+        assertTrue(selected.messages.any { it.content == "OUTCOME_UNKNOWN" })
+        assertTrue(selected.messages.any { it.toolCallId == "c9" })
+        assertEquals(selected.messages.flatMap { it.toolCalls }.map { it.id }.toSet(), selected.messages.mapNotNull { it.toolCallId }.toSet())
+    }
+
     @Test fun shortSessionKeepsToolResultsVerbatim() {
         val messages = mutableListOf(AgentMessage("system", "system"), AgentMessage("user", "inspect"))
         repeat(3) { index ->

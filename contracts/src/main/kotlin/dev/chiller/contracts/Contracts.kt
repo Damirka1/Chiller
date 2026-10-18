@@ -226,6 +226,8 @@ data class RunState(
     val prunedContextResults: Int = 0,
     val contextWindowTokens: Int? = null,
     val contextReportedTokens: Long? = null,
+    val contextMemory: String? = null,
+    val contextOutputReserve: Int? = null,
     val modelRounds: Int = 0,
     val activeModelId: String? = null,
     val usage: TokenUsage = TokenUsage(),

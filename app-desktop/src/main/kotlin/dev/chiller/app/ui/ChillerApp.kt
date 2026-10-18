@@ -405,9 +405,7 @@ fun ChillerApp(
                                         Column(Modifier.widthIn(max = 760.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                             sendError?.let { Text(it, color = c.negative, fontSize = 12.sp, lineHeight = 18.sp) }
                                             VerifyBanner(verify, onDismissVerify)
-                                            if (state.droppedContextMessages > 0 || state.prunedContextResults > 0) Text(
-                                                "Контекст сокращён: сообщений ${state.droppedContextMessages}, результатов ${state.prunedContextResults}. Сводка сохранена при исключении сообщений.",
-                                                color = c.muted, fontSize = 10.sp, lineHeight = 14.sp)
+                                            ContextStatus(state)
 
                                             if (demoCompleted) {
                                                 Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(c.sidebar).border(1.dp, c.border, RoundedCornerShape(12.dp)).padding(horizontal = 14.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {

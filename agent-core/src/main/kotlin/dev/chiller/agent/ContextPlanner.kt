@@ -51,7 +51,7 @@ class ContextPlanner(
             throw ContextLimitException("System messages exceed the available context character budget")
         }
 
-        val groups = splitIntoGroups(messages)
+        val groups = splitIntoGroups(messages).toMutableList()
         val keep = BooleanArray(groups.size)
         var used = fixedCost
         if (groups.isNotEmpty()) {
@@ -59,9 +59,25 @@ class ContextPlanner(
             if (!current.toolPairsComplete) {
                 throw ContextLimitException("The current turn contains an incomplete or orphaned tool call")
             }
-            val currentCost = current.indices.sumOf { messageCharacters(messages[it]) }
+            var currentCost = current.indices.sumOf { messageCharacters(messages[it]) }
             if (used + currentCost > budget) {
-                throw ContextLimitException("The current turn exceeds the available context character budget")
+                // Remove whole old exchanges, never half a call/result pair. Keep the original user request,
+                // the newest exchange, and any unknown outcome requiring human review.
+                val exchanges = mutableListOf<MutableList<Int>>()
+                current.indices.forEach { i ->
+                    if (messages[i].role == "assistant" || exchanges.isEmpty()) exchanges.add(mutableListOf())
+                    exchanges.last().add(i)
+                }
+                val retained = current.indices.toMutableSet()
+                for (exchange in exchanges.dropLast(1)) {
+                    if (used + currentCost <= budget) break
+                    if (exchange.any { messages[it].role == "user" || messages[it].content.orEmpty().contains("OUTCOME_UNKNOWN") }) continue
+                    if (!hasCompleteToolPairs(exchange.map(messages::get))) continue
+                    exchange.forEach { retained.remove(it) }
+                    currentCost -= exchange.sumOf { messageCharacters(messages[it]) }
+                }
+                if (used + currentCost > budget) throw ContextLimitException("The current request or newest exchange exceeds the available context budget; reduce the request or start a new task with its saved memory")
+                groups[groups.lastIndex] = current.copy(indices = current.indices.filter { it in retained })
             }
             keep[groups.lastIndex] = true
             used += currentCost
