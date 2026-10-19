@@ -31,7 +31,7 @@ data class TurnResult(
     val isEmpty: Boolean get() = files.isEmpty() && commands.isEmpty() && presented.isEmpty() && issues.isEmpty()
 }
 
-private val FILE_CHANGE_TOOLS = setOf("edit_file", "replace_text", "create_file", "move_file", "delete_file", "create_directory")
+private val FILE_CHANGE_TOOLS = setOf("edit_file", "replace_text", "create_file", "move_file", "delete_file", "create_directory", "generate_image")
 
 /** Recognize explicit check invocations by executable/subcommand, never words in arbitrary arguments.
  * Unknown scripts stay ordinary commands. This describes what was run, not test coverage or correctness.
@@ -83,7 +83,7 @@ fun turnResult(state: RunState, undone: Set<String> = emptySet()): TurnResult {
     for (activity in activities) {
         if (activity.name !in FILE_CHANGE_TOOLS || activity.status != "completed" || activity.name == "create_directory") continue
         val (added, removed) = activity.diff?.let(::diffStats) ?: (0 to 0)
-        val kind = when (activity.name) { "create_file" -> "created"; "delete_file" -> "deleted"; "move_file" -> "moved"; else -> "edited" }
+        val kind = when (activity.name) { "create_file", "generate_image" -> "created"; "delete_file" -> "deleted"; "move_file" -> "moved"; else -> "edited" }
         val isUndone = changeId(activity.output)?.let { it in undone } == true
         val previous = files[activity.target]
         files[activity.target] = if (previous == null) ChangedFile(activity.target, kind, added, removed, isUndone)
@@ -108,7 +108,7 @@ fun turnResult(state: RunState, undone: Set<String> = emptySet()): TurnResult {
     }
     val commands = commandsById.values.toList()
 
-    val presented = activities.filter { it.name in setOf("show_file", "capture_window") && it.status == "completed" }
+    val presented = activities.filter { it.name in setOf("show_file", "capture_window", "generate_image") && it.status == "completed" }
         .map { presentedFileFromOutput(it.output)?.path ?: it.target }.filter { it.isNotBlank() }.distinct()
 
     val issues = buildList {

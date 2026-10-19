@@ -389,6 +389,20 @@ private fun ProfileCard(data: SettingsData, actions: SettingsActions) {
                 ChillerControl(label, { actions.agent(a.copy(vision = id)) }, style = if (a.vision == id) ControlStyle.SELECTED else ControlStyle.QUIET)
             }
         }
+        val imageModel = imageModelFor(a, data.catalog)
+        val listedImageModels = data.catalog.models.filter { it.imageGeneration == true }
+        Column {
+            Text("Модель для картинок", color = c.text, fontSize = 13.sp)
+            Text(when {
+                imageModel == null -> "Инструмент generate_image выключен" + if (a.imageModel == "auto") ": провайдер не указал модель для картинок" else ""
+                else -> "generate_image рисует через ${imageModel.displayName ?: imageModel.id}" + if (imageModel.imageEditing == true) " и умеет редактировать картинки" else ""
+            }, color = c.faint, fontSize = 11.sp, lineHeight = 15.sp)
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            (listOf("auto" to "Авто", "off" to "Выкл") + listedImageModels.map { it.id to (it.displayName ?: it.id) }).forEach { (id, label) ->
+                ChillerControl(label, { actions.agent(a.copy(imageModel = id)) }, style = if (a.imageModel == id) ControlStyle.SELECTED else ControlStyle.QUIET)
+            }
+        }
         Text("Температура", color = c.text, fontSize = 13.sp)
         Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             val options = listOf<Double?>(null, 0.0, 0.2, 0.5, 0.8)

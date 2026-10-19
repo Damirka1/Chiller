@@ -18,6 +18,16 @@ fun visionEnabled(options: AgentOptions, modelId: String, listed: ProviderModel?
     else -> listed?.vision ?: VisionModels.likely(modelId)
 }
 
+/**
+ * The image model generate_image uses: off, an explicit id (listed or typed), or in auto the first model the catalog
+ * says can generate images. Null keeps the tool out of the toolbox.
+ */
+fun imageModelFor(options: AgentOptions, catalog: ModelCatalogState): ProviderModel? = when (val choice = options.imageModel) {
+    "off" -> null
+    "auto" -> catalog.models.firstOrNull { it.imageGeneration == true }
+    else -> catalog.entry(choice) ?: ProviderModel(choice)
+}
+
 /** The catalog entry for a model id, if the endpoint listed it. */
 fun ModelCatalogState.entry(modelId: String): ProviderModel? = models.firstOrNull { it.id == modelId }
 

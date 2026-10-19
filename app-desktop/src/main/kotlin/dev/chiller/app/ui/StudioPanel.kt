@@ -43,14 +43,14 @@ import dev.chiller.design.*
 data class FileChanges(val path: String, val changes: List<Activity>) {
     val kind: String get() = when {
         changes.any { it.name == "delete_file" && it.status == "completed" } -> "deleted"
-        changes.first().name == "create_file" -> "created"
+        changes.first().name in setOf("create_file", "generate_image") -> "created"
         changes.any { it.name == "move_file" } -> "moved"
         else -> "edited"
     }
     val stats: Pair<Int, Int> get() = changes.mapNotNull { it.diff }.map(::diffStats).fold(0 to 0) { a, b -> a.first + b.first to a.second + b.second }
 }
 
-private val FILE_TOOLS = setOf("edit_file", "replace_text", "create_file", "move_file", "delete_file")
+private val FILE_TOOLS = setOf("edit_file", "replace_text", "create_file", "move_file", "delete_file", "generate_image")
 
 /** Successful file changes grouped by path (a move is listed under its new name), in first-touched order. */
 fun groupFileChanges(activities: List<Activity>): List<FileChanges> =

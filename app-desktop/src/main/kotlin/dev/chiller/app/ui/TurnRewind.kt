@@ -6,7 +6,7 @@ import dev.chiller.contracts.StoredEvent
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
 
-private val FILE_CHANGES = setOf("edit_file", "replace_text", "create_file", "move_file", "delete_file", "create_directory")
+private val FILE_CHANGES = setOf("edit_file", "replace_text", "create_file", "move_file", "delete_file", "create_directory", "generate_image")
 
 /**
  * Change ids made in answer to the user message at [userIndex], oldest first: every successful file change

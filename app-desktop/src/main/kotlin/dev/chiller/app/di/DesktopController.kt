@@ -64,11 +64,13 @@ data class AgentOptions(
     val autoVerifyAttempts: Int = 2,
     /** "auto" (by model id), "on" or "off": whether attached images are sent as pixels. */
     val vision: String = "auto",
+    /** Image model for generate_image: "auto" (the first one the catalog lists), "off", or a model id. */
+    val imageModel: String = "auto",
 ) {
     fun sanitized() = copy(autoVerifyAttempts = autoVerifyAttempts.coerceIn(1, 3), maxRounds = unlimitedOr(maxRounds, 4, 200), maxOutputTokens = unlimitedOr(maxOutputTokens, 1024, 1_048_576),
         maxRequests = unlimitedOr(maxRequests, 1, 500), totalOutputTokens = unlimitedOr(totalOutputTokens, 1024, 4_194_304),
         profile = profile.takeIf { it in setOf("auto", "full", "compact") } ?: "auto", temperature = temperature?.coerceIn(0.0, 2.0), requestExtras = requestExtras.take(4000),
-        vision = vision.takeIf { it in setOf("auto", "on", "off") } ?: "auto")
+        vision = vision.takeIf { it in setOf("auto", "on", "off") } ?: "auto", imageModel = imageModel.trim().take(200).ifEmpty { "auto" })
 
     /** Model steps per task; "no limit" still stops at a backstop so a looping run cannot go on forever. */
     val effectiveMaxRounds: Int get() = if (maxRounds == UNLIMITED) UNLIMITED_ROUNDS_BACKSTOP else maxRounds
@@ -873,7 +875,15 @@ class DesktopController(
         val processes = processServiceFactory(root); processService = processes
         questions = PendingQuestions()
         val code = LocalReadOnlyCodeService(workspace.root); codeService = code
-        val builtin = BuiltinTools(workspace, processes, artifacts, questions, code = code, web = BoundedWebService(), screens = captureController)
+        // generate_image uses the image model on the same endpoint and the same origin-bound key as the chat model.
+        val imageOrigin = originOf(s.settings.baseUrl)
+        val images = imageModelFor(options, s.catalog)?.let { model ->
+            OpenAiImageService(http, s.settings.baseUrl, model.id, model.imageEditing != false) { imageOrigin?.let { credentials[it] } }
+        }
+        val imageSession = s.sessionId
+        val attachmentImages = AttachmentImages { session, id -> if (session == imageSession) inputAttachments.originalImage(session, id) else null }
+        val builtin = BuiltinTools(workspace, processes, artifacts, questions, code = code, web = BoundedWebService(), screens = captureController,
+            images = images, attachmentImages = attachmentImages)
         val baseProfile = if (java.net.URI(s.settings.baseUrl).host == "api.deepseek.com")
             ChatCompletionsProfile.deepSeekFlash(s.settings.baseUrl, s.settings.model)
         else ChatCompletionsProfile("generic", s.settings.baseUrl, s.settings.model, requiresApiKey = !keyless(s.settings.baseUrl))

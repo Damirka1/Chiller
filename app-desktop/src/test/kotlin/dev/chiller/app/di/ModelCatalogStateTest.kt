@@ -13,4 +13,12 @@ class ModelCatalogStateTest {
         ))
         assertEquals(listOf("quasar", "plain"), catalog.chatModels.map { it.id })
     }
+
+    @Test fun imageModelIsPickedFromTheCatalogUnlessTurnedOffOrNamed() {
+        val catalog = ModelCatalogState("ready", listOf(ProviderModel("quasar", chat = true), ProviderModel("flux-2-klein", chat = false, imageGeneration = true, imageEditing = true)))
+        assertEquals("flux-2-klein", imageModelFor(AgentOptions(), catalog)?.id)
+        assertEquals(null, imageModelFor(AgentOptions(imageModel = "off"), catalog))
+        assertEquals(null, imageModelFor(AgentOptions(), ModelCatalogState("ready", listOf(ProviderModel("quasar")))))
+        assertEquals("dall-e-3", imageModelFor(AgentOptions(imageModel = "dall-e-3"), catalog)?.id, "a typed id works without a listing")
+    }
 }

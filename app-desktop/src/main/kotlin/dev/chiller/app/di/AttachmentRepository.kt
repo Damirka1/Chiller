@@ -3,6 +3,8 @@ package dev.chiller.app.di
 import dev.chiller.contracts.ArtifactStore
 import dev.chiller.contracts.ComposerAttachment
 import dev.chiller.contracts.FilePresentation
+import dev.chiller.contracts.ImageData
+import dev.chiller.contracts.imageMimeType
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayInputStream
@@ -89,6 +91,13 @@ class AttachmentRepository(directory: Path, private val artifacts: ArtifactStore
         val folder = try { sessionDirectory(sessionId) } catch (_: IllegalArgumentException) { return null } ?: return null
         val file = folder.resolve(safeArtifact)
         return if (Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS) && !Files.isSymbolicLink(file) && Files.size(file) <= MAX_BYTES) file else null
+    }
+
+    /** The stored original of an image attachment, for editing by the image model; null for other files. */
+    suspend fun originalImage(sessionId: String, artifactId: String): ImageData? = withContext(Dispatchers.IO) {
+        val file = rawPath(sessionId, artifactId) ?: return@withContext null
+        val bytes = readBoundedNoFollow(file, MAX_BYTES)
+        imageMimeType(bytes)?.let { ImageData(bytes, it) }
     }
 
     fun presentation(sessionId: String, attachment: ComposerAttachment): FilePresentation =

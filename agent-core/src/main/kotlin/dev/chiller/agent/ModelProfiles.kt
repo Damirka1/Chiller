@@ -30,6 +30,8 @@ object ModelProfiles {
         "run_process", "read_process", "update_plan", "ask_user", "git_diff",
         // Capabilities every profile keeps: reading pasted/large results and handing a produced file to the user.
         "read_artifact", "show_file",
+        // Present only when the endpoint has an image model.
+        "generate_image",
     )
 
     val FULL = ModelProfile(

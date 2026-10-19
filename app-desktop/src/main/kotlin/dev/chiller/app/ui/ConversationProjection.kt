@@ -25,7 +25,7 @@ fun activityGroupLabel(activities: List<Activity>): String {
     val count = paths.size
     return when {
         complete && paths.size == activities.map { it.target }.distinct().size && count > 0 && activities.all { it.name == "read_file" } -> "Прочитано файлов: $count"
-        complete && activities.all { it.target.isNotBlank() && it.name in setOf("edit_file", "replace_text", "create_file", "move_file", "delete_file") } -> "Изменено файлов: $count"
+        complete && activities.all { it.target.isNotBlank() && it.name in setOf("edit_file", "replace_text", "create_file", "move_file", "delete_file", "generate_image") } -> "Изменено файлов: $count"
         else -> "Действий: ${activities.size}"
     }
 }

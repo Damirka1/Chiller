@@ -60,7 +60,7 @@ private val FAILED = setOf("failed", "error", "conflict")
 private val UNCERTAIN = setOf("interrupted", "cancelled")
 private val RUNNING = setOf("running", "executing", "preparing")
 private val SUCCESS = setOf("completed", "applied", "exited")
-private val FILE_EFFECTS = setOf("edit_file", "replace_text", "create_file", "move_file", "delete_file")
+private val FILE_EFFECTS = setOf("edit_file", "replace_text", "create_file", "move_file", "delete_file", "generate_image")
 
 /** Short user-facing state for the current run, derived only from engine state. */
 internal fun runProgressLabel(state: RunState): String? = when {
@@ -131,7 +131,7 @@ internal fun ToolGroup(activities: List<Activity>, reduced: Boolean, onUndo: (St
 
 /** Results stay visible independently of disclosure state. Latest presentation wins per path. */
 internal fun presentedFiles(activities: List<Activity>): List<FilePresentation> = activities
-    .filter { it.status in SUCCESS && it.name in setOf("show_file", "capture_window") }
+    .filter { it.status in SUCCESS && it.name in setOf("show_file", "capture_window", "generate_image") }
     .mapNotNull { presentedFileFromOutput(it.output) }
     .asReversed().distinctBy { it.path }.asReversed()
 
@@ -157,7 +157,7 @@ internal fun ToolRow(activity: Activity, reduced: Boolean, onUndo: (String) -> U
     val failed = activity.status in FAILED
     val running = activity.status in RUNNING
     val success = activity.status in SUCCESS
-    val presentedFile = if (success && activity.name in setOf("show_file", "capture_window")) presentedFileFromOutput(activity.output) else null
+    val presentedFile = if (success && activity.name in setOf("show_file", "capture_window", "generate_image")) presentedFileFromOutput(activity.output) else null
     var open by remember(activity.id) { mutableStateOf(failed) }
     LaunchedEffect(activity.status) { if (failed) open = true }
     val interaction = remember { MutableInteractionSource() }
@@ -371,6 +371,7 @@ private fun toolIcon(name: String): ImageVector = when (name) {
     "capture_window", "list_capture_targets" -> Icons.Outlined.PhotoCamera
     "create_directory" -> Icons.Outlined.CreateNewFolder
     "show_file" -> Icons.Outlined.InsertDriveFile
+    "generate_image" -> Icons.Outlined.Image
     "git_status", "git_diff", "git_log", "git_show", "find_symbols", "read_symbol" -> Icons.Outlined.Code
     "read_diagnostics" -> Icons.Outlined.Terminal
     "read_file", "read_artifact" -> Icons.Outlined.Description
