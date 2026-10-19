@@ -232,9 +232,10 @@ private fun ConnectionSection(data: SettingsData, actions: SettingsActions) {
  * its key, and what to apply with it. Nothing typed here is sent anywhere until the provider is applied.
  */
 @Composable
-private fun CustomProviderCard(data: SettingsData, actions: SettingsActions, editing: CustomProvider?, onEdit: (CustomProvider?) -> Unit, onUse: (CustomProvider) -> Unit) {
+internal fun CustomProviderCard(data: SettingsData, actions: SettingsActions, editing: CustomProvider?, onEdit: (CustomProvider?) -> Unit, onUse: (CustomProvider) -> Unit) {
     val c = LocalChillerPalette.current
-    val base = editing ?: CustomProvider(java.util.UUID.randomUUID().toString().take(8), "", "")
+    // Remembered: a fresh id on every recomposition would re-key the fields below and wipe each typed character.
+    val base = remember(editing) { editing ?: CustomProvider(java.util.UUID.randomUUID().toString().take(8), "", "") }
     var name by remember(base) { mutableStateOf(base.name) }
     var address by remember(base) { mutableStateOf(base.baseUrl) }
     var keyVariable by remember(base) { mutableStateOf(base.keyVariable.orEmpty()) }

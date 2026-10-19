@@ -28,6 +28,9 @@ dependencies {
     implementation(compose.materialIconsExtended)
     // Ktor logs through slf4j-api; without a binding SLF4J prints a startup warning. Logging stays off.
     runtimeOnly("org.slf4j:slf4j-nop:2.0.17")
+    // Compose UI test (same Compose 1.10.3, Apache-2.0): settings forms are exercised with real typing.
+    @OptIn(org.jetbrains.compose.ExperimentalComposeLibrary::class)
+    testImplementation(compose.uiTest)
 }
 compose.desktop {
     application {
