@@ -358,6 +358,9 @@ class AgentCoordinator(
         // A final answer while the plan still has open steps gets a bounded reminder instead of ending the turn.
         var planNotice: AgentMessage? = null
         var planReminders = 0
+        // The last round, or a run that stopped making progress, answers without tools instead of ending with an error.
+        var answerOnly = false
+        var noProgressTool: String? = null
         repeat(maxRounds) { round ->
             currentCoroutineContext().ensureActive()
             stats.rounds = round + 1
@@ -397,7 +400,12 @@ class AgentCoordinator(
             var roundUsage = TokenUsage()
             var finishReason: String? = null
             val roundStarted = System.nanoTime()
-            val request = ModelRequest(model, selection.messages + listOfNotNull(truncationNotice, planNotice, repeatNotice), enabled, thinking, reserve)
+            if (!answerOnly && round == maxRounds - 1 && round > 0) {
+                answerOnly = true
+                repeatNotice = AgentMessage("user", LAST_ROUND_NOTICE)
+            }
+            val request = ModelRequest(model, selection.messages + listOfNotNull(truncationNotice, planNotice, repeatNotice),
+                if (answerOnly) emptyList() else enabled, thinking, reserve)
             var truncatedCall = false
             var truncatedText = false
             var retryShown = false
@@ -457,7 +465,7 @@ class AgentCoordinator(
             _state.update { it.copy(streamingText = "") }
             if (response.toolCalls.isEmpty()) {
                 val open = openPlanSteps(_state.value.messages)
-                if (open.isNotEmpty() && planReminders < MAX_PLAN_REMINDERS && round < maxRounds - 1) {
+                if (!answerOnly && open.isNotEmpty() && planReminders < MAX_PLAN_REMINDERS && round < maxRounds - 2) {
                     planReminders++
                     planNotice = AgentMessage("user", openPlanNotice(open))
                     events.append(sessionId, "run.plan_open", buildJsonObject {
@@ -470,6 +478,8 @@ class AgentCoordinator(
                 _state.update { it.copy(status = "completed", activeModelId = null) }
                 return
             }
+            if (answerOnly) throw IllegalStateException(noProgressTool?.let { "Агент повторяет один и тот же вызов ($it) без нового результата. Все результаты сохранены; уточните задачу и продолжите." }
+                ?: "Достигнут лимит $maxRounds шагов; работа остановлена с сохранением истории.")
             val calls = response.toolCalls
             require(calls.size <= 16) { "Too many tool calls" }
             for (call in calls) require(call.id.isNotBlank() && executedCalls.add(call.id)) { "Duplicate or empty tool call id; operation not repeated" }
@@ -514,7 +524,12 @@ class AgentCoordinator(
             if (tooManyRepeatedErrors) throw IllegalStateException("Повторяется одна и та же ошибка инструмента. Все результаты сохранены; уточните задачу и продолжите.")
             noProgress?.let { name ->
                 events.append(sessionId, "run.no_progress", buildJsonObject { put("runId", id); put("tool", name) })
-                throw IllegalStateException("Агент повторяет один и тот же вызов ($name) без нового результата. Все результаты сохранены; уточните задачу и продолжите.")
+                if (round >= maxRounds - 1) throw IllegalStateException("Агент повторяет один и тот же вызов ($name) без нового результата. Все результаты сохранены; уточните задачу и продолжите.")
+                // Instead of ending with an error, one more round without tools: the answer says what was and was not found.
+                answerOnly = true; noProgressTool = name
+                repeatNotice = AgentMessage("user", noProgressNotice(name))
+                _state.update { it.copy(recoveryNotice = "Агент повторял один и тот же вызов без нового результата: инструменты отключены, он отвечает тем, что уже знает.") }
+                return@repeat
             }
             if (repeatNotice != null) _state.update { it.copy(recoveryNotice = "Повторный вызов без нового результата: агенту напомнили использовать то, что уже получено.") }
         }
@@ -622,6 +637,13 @@ internal fun resultFingerprint(result: ToolResult): String {
     }
     return (stable(result.data)?.toString() ?: "") + "|" + result.truncated
 }
+
+internal fun noProgressNotice(tool: String): String =
+    "[Chiller] Tools are now disabled: you kept calling $tool with the same result. Answer now from what you already found. " +
+        "Say plainly what you could not find or do; do not make up anything that the tool results did not show."
+
+private const val LAST_ROUND_NOTICE = "[Chiller] This is your last step for this request; tools are disabled. Answer now: what is done (with how it was " +
+    "verified), what is not done, and what the user can do next. Do not claim anything the tool results did not show."
 
 internal fun repeatedCallNotice(tool: String, times: Int): String =
     "[Chiller] You have called $tool with the same arguments $times times and got the same result each time. Repeating it will not change anything. " +

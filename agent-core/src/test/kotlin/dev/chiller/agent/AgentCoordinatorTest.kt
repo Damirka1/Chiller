@@ -537,10 +537,36 @@ class AgentCoordinatorTest {
         val f = fixture(provider, RecordingTools(), eventStore = events, dispatcher = StandardTestDispatcher(testScheduler))
         f.coordinator.send("list", ExecutionMode.PLAN)
         advanceUntilIdle()
-        assertEquals("failed", f.coordinator.state.value.status)
-        assertEquals(5, requests.size, "stopped at the fifth identical result")
+        assertEquals(6, requests.size, "the fifth identical result is followed by one round without tools")
         assertTrue("[Chiller] You have called read with the same arguments 3 times" in requests[3].messages.last().content.orEmpty())
+        assertTrue(requests[5].tools.isEmpty() && "Tools are now disabled" in requests[5].messages.last().content.orEmpty())
+        assertEquals("failed", f.coordinator.state.value.status, "this script keeps asking for tools, so the turn still stops")
         assertEquals(1, events.records.count { it.type == "run.no_progress" })
+    }
+
+    @Test fun aLoopingModelAnswersFromWhatItFoundOnceToolsAreOff() = runTest {
+        val provider = ScriptedProvider { request -> flow {
+            if (request.tools.isEmpty()) emit(ModelEvent.Completed(AgentMessage("assistant", "The page has no temperatures; nothing was written."), "stop"))
+            else emit(ModelEvent.Completed(AgentMessage("assistant", null, listOf(ToolCall(newId(), "read", """{"path":"."}"""))), "tool_calls"))
+        } }
+        val f = fixture(provider, RecordingTools(), dispatcher = StandardTestDispatcher(testScheduler))
+        f.coordinator.send("copy the temperature", ExecutionMode.PLAN)
+        advanceUntilIdle()
+        assertEquals("completed", f.coordinator.state.value.status)
+        assertEquals("The page has no temperatures; nothing was written.", f.coordinator.state.value.messages.last().content)
+    }
+
+    @Test fun theLastAllowedStepAnswersInsteadOfFailing() = runTest {
+        val provider = ScriptedProvider { request -> flow {
+            if (request.tools.isEmpty()) emit(ModelEvent.Completed(AgentMessage("assistant", "Done: a.txt. Not done: b.txt."), "stop"))
+            else emit(ModelEvent.Completed(AgentMessage("assistant", null, listOf(ToolCall(newId(), "read", """{"path":"${newId()}"}"""))), "tool_calls"))
+        } }
+        val scope = CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler))
+        val coordinator = AgentCoordinator(provider, RecordingTools(), MemoryEvents(), RecordingProcesses(), "session", "model", maxRounds = 3, scope = scope)
+        coordinator.send("work", ExecutionMode.WORKSPACE_EDIT)
+        advanceUntilIdle()
+        assertEquals("completed", coordinator.state.value.status)
+        assertEquals("Done: a.txt. Not done: b.txt.", coordinator.state.value.messages.last().content)
     }
 
     @Test fun identifiersThatChangeOnEveryCallDoNotHideARepeat() {
