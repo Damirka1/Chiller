@@ -1,6 +1,8 @@
 package dev.chiller.evals
 
 import dev.chiller.agent.ModelProfiles
+import dev.chiller.contracts.ProviderModel
+import dev.chiller.providers.KtorModelCatalogClient
 import dev.chiller.providers.ChatCompletionsProfile
 import dev.chiller.providers.ChatCompletionsProvider
 import dev.chiller.providers.useSystemTrust
@@ -33,6 +35,8 @@ data class SuiteSpec(
     val outDir: Path,
     /** Overrides the profile's project map, for A/B runs; null keeps the profile's choice. */
     val projectMap: Boolean? = null,
+    /** The endpoint's catalog entry for [model]: name for the auto profile, context window, reasoning switch. */
+    val listed: ProviderModel? = null,
 ) {
     companion object {
         const val DEFAULT_MAX_ROUNDS = 14
@@ -47,7 +51,8 @@ data class SuiteSpec(
 suspend fun runEvalSuite(spec: SuiteSpec, onResult: suspend (EvalResult) -> Unit = {}): EvalReport {
     val tasks = EVAL_TASKS.filter { spec.taskIds == null || it.id in spec.taskIds }
     require(tasks.isNotEmpty()) { "No tasks selected; known: ${EVAL_TASKS.joinToString { it.id }}" }
-    val modelProfile = ModelProfiles.resolve(spec.profileId, spec.model).let { p -> spec.projectMap?.let { p.copy(projectMap = it) } ?: p }
+    val modelProfile = ModelProfiles.resolve(spec.profileId, spec.model, spec.listed?.displayName).let { p -> spec.projectMap?.let { p.copy(projectMap = it) } ?: p }
+    val (supported, skipped) = tasks.partition { task -> modelProfile.tools == null || modelProfile.tools!!.containsAll(task.requiredTools) }
     val host = runCatching { URI(spec.baseUrl).host }.getOrNull().orEmpty()
     val loopback = host in setOf("localhost", "127.0.0.1", "::1")
     val extras = buildJsonObject {
@@ -55,8 +60,10 @@ suspend fun runEvalSuite(spec: SuiteSpec, onResult: suspend (EvalResult) -> Unit
         modelProfile.parallelToolCalls?.let { put("parallel_tool_calls", it) }
         spec.requestExtras.forEach { (k, v) -> put(k, v) }
     }
+    // Same wiring as the desktop app, including the chat-template thinking switch for listed reasoning models.
     val profile = (if (host == "api.deepseek.com") ChatCompletionsProfile.deepSeekFlash(spec.baseUrl, spec.model)
-        else ChatCompletionsProfile("generic", spec.baseUrl, spec.model, requiresApiKey = !loopback)).withExtras(extras)
+        else ChatCompletionsProfile("generic", spec.baseUrl, spec.model, requiresApiKey = !loopback,
+            thinkingOptions = if (spec.listed?.reasoning == true) ChatCompletionsProfile.chatTemplateThinking else { _ -> JsonObject(emptyMap()) })).withExtras(extras)
     Files.createDirectories(spec.outDir.resolve("traces"))
     val http = HttpClient(CIO) {
         engine { useSystemTrust() }
@@ -67,14 +74,15 @@ suspend fun runEvalSuite(spec: SuiteSpec, onResult: suspend (EvalResult) -> Unit
     val results = mutableListOf<EvalResult>()
     val startedAt = java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss"))
     try {
-        for (task in tasks) for (attempt in 1..spec.repeats.coerceIn(1, 5)) {
+        for (task in supported) for (attempt in 1..spec.repeats.coerceIn(1, 5)) {
             currentCoroutineContext().ensureActive()
-            val result = runTask(task, attempt, provider, spec.model, spec.thinking, spec.maxRounds, spec.maxOutputTokens, spec.outDir, modelProfile)
+            val result = runTask(task, attempt, provider, spec.model, spec.thinking, spec.maxRounds, spec.maxOutputTokens, spec.outDir, modelProfile, spec.listed?.contextWindow)
             results += result
             onResult(result)
         }
     } finally { http.close() }
-    val report = EvalReport(spec.model, spec.baseUrl, startedAt, spec.maxRounds, spec.maxOutputTokens, spec.repeats, results, summarize(results), profile = modelProfile.id)
+    val report = EvalReport(spec.model, spec.baseUrl, startedAt, spec.maxRounds, spec.maxOutputTokens, spec.repeats, results, summarize(results), profile = modelProfile.id,
+        skipped = skipped.map { it.id })
     val json = Json { prettyPrint = true; encodeDefaults = true }
     Files.writeString(spec.outDir.resolve("report.json"), json.encodeToString(EvalReport.serializer(), report))
     Files.writeString(spec.outDir.resolve("report.md"), renderMarkdown(report))
@@ -93,6 +101,12 @@ fun summarize(results: List<EvalResult>): List<EvalSummary> = results.groupBy { 
         failedEdits = attempts.sumOf { it.loss.failedEdits },
         toolOutputChars = attempts.sumOf { it.loss.toolOutputChars },
     )
+}
+
+/** The endpoint's catalog entry for a model, or null when the listing fails or omits it; never fatal for an eval. */
+suspend fun listedModel(baseUrl: String, key: String?, model: String): ProviderModel? {
+    val http = HttpClient(CIO) { engine { useSystemTrust() }; followRedirects = false }
+    return try { KtorModelCatalogClient(http).discover(baseUrl, key).models.firstOrNull { it.id == model } } finally { http.close() }
 }
 
 /** Task ids and titles for pickers. */

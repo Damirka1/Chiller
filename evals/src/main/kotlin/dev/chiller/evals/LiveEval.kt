@@ -47,6 +47,8 @@ data class EvalResult(
     val durationMs: Long, val promptTokens: Long?, val completionTokens: Long?, val cachedPromptTokens: Long?, val finalAnswer: String,
     val subagents: Int = 0, val subagentsCompleted: Int = 0,
     val loss: LossMetrics = LossMetrics(),
+    /** The provider, not the model, ended the attempt (connection, TLS, credentials, quota, server error). */
+    val infrastructure: Boolean = false,
 )
 
 @Serializable
@@ -65,7 +67,9 @@ data class EvalSummary(
 )
 
 @Serializable
-data class EvalReport(val model: String, val endpoint: String, val startedAt: String, val maxRounds: Int, val maxOutputTokens: Int, val repeats: Int, val results: List<EvalResult>, val summaries: List<EvalSummary>, val profile: String = "full")
+data class EvalReport(val model: String, val endpoint: String, val startedAt: String, val maxRounds: Int, val maxOutputTokens: Int, val repeats: Int, val results: List<EvalResult>, val summaries: List<EvalSummary>, val profile: String = "full",
+    /** Tasks the profile cannot attempt (a required tool is not in its toolbox). */
+    val skipped: List<String> = emptyList())
 
 /**
  * Opt-in live evaluation of the agent on [EVAL_TASKS]. Never part of `check`.
@@ -98,17 +102,23 @@ fun main() = runBlocking {
     val thinking = env["CHILLER_EVAL_THINKING"] == "true"
 
     val profileId = env["CHILLER_EVAL_PROFILE"]?.trim()?.ifEmpty { null } ?: "auto"
-    val resolved = ModelProfiles.resolve(profileId, model)
+    val listed = listedModel(baseUrl, key, model)
+    val resolved = ModelProfiles.resolve(profileId, model, listed?.displayName)
     val stamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss"))
     val outDir = Path.of("reports/local/evals/$stamp-${model.replace(Regex("[^A-Za-z0-9._-]"), "_")}-${resolved.id}").toAbsolutePath()
-    println("=== CHILLER LIVE EVAL · $model · profile ${resolved.id} · ${tasks.size} task(s) × $repeats · maxRounds=$maxRounds maxOutput=$maxOutput thinking=$thinking ===")
+    println("=== CHILLER LIVE EVAL · $model${listed?.displayName?.let { " ($it)" } ?: ""} · profile ${resolved.id} · ${tasks.size} task(s) × $repeats · maxRounds=$maxRounds maxOutput=$maxOutput thinking=$thinking" +
+        " · context ${listed?.contextWindow ?: "unknown"} ===")
     val report = runEvalSuite(SuiteSpec(baseUrl, model, { key }, profileId, tasks.map { it.id }.toSet(), repeats, maxRounds, maxOutput, thinking, outDir = outDir,
-        projectMap = env["CHILLER_EVAL_PROJECT_MAP"]?.toBooleanStrictOrNull())) { result ->
-        println("%-20s #%d %s  rounds=%-2d tools=%-2d errors=%-2d reread=%-2d badEdits=%-2d out=%4dk %5.1fs  %s".format(result.task, result.attempt, if (result.passed) "PASS" else "FAIL",
-            result.rounds, result.toolCalls, result.failedToolCalls, result.loss.repeatedReads, result.loss.failedEdits, result.loss.toolOutputChars / 1000, result.durationMs / 1000.0, result.verdict.take(80)))
+        projectMap = env["CHILLER_EVAL_PROJECT_MAP"]?.toBooleanStrictOrNull(), listed = listed)) { result ->
+        println("%-20s #%d %s  rounds=%-2d tools=%-2d errors=%-2d reread=%-2d badEdits=%-2d out=%4dk %5.1fs  %s".format(result.task, result.attempt, outcomeLabel(result),
+            result.rounds, result.toolCalls, result.failedToolCalls, result.loss.repeatedReads, result.loss.failedEdits, result.loss.toolOutputChars / 1000, result.durationMs / 1000.0,
+            (if (result.infrastructure) result.error.orEmpty() else result.verdict).take(80)))
     }
+    report.skipped.forEach { println("%-20s    SKIP  a required tool is not in the ${report.profile} profile".format(it)) }
     val passed = report.results.count { it.passed }
-    println("PASSED $passed/${report.results.size} (${if (report.results.isEmpty()) 0 else passed * 100 / report.results.size}%) · report: ${outDir.resolve("report.md")}")
+    val infrastructure = report.results.count { it.infrastructure }
+    println("PASSED $passed/${report.results.size} (${if (report.results.isEmpty()) 0 else passed * 100 / report.results.size}%)" +
+        (if (infrastructure > 0) " · provider errors $infrastructure (not model failures)" else "") + " · report: ${outDir.resolve("report.md")}")
 }
 
 /**
@@ -127,7 +137,8 @@ fun dotenvKey(names: List<String>, start: Path = Path.of("").toAbsolutePath()): 
     return names.firstNotNullOfOrNull { values[it] }
 }
 
-internal suspend fun runTask(task: EvalTask, attempt: Int, provider: ChatCompletionsProvider, model: String, thinking: Boolean, maxRounds: Int, maxOutput: Int, outDir: Path, modelProfile: ModelProfile = ModelProfiles.FULL): EvalResult {
+internal suspend fun runTask(task: EvalTask, attempt: Int, provider: ChatCompletionsProvider, model: String, thinking: Boolean, maxRounds: Int, maxOutput: Int, outDir: Path, modelProfile: ModelProfile = ModelProfiles.FULL,
+    contextWindowTokens: Int? = null): EvalResult {
     val root = Files.createTempDirectory("chiller-eval-${task.id}-")
     val project = root.resolve("project").also { Files.createDirectories(it) }
     task.materialize(project)
@@ -152,7 +163,7 @@ internal suspend fun runTask(task: EvalTask, attempt: Int, provider: ChatComplet
         val output = modelProfile.maxOutputTokens?.let { minOf(it, maxOutput) } ?: maxOutput
         val engine = AgentCoordinator(budget, tools, store, processes, session, model, thinking, maxRounds = maxRounds, maxOutputTokens = output,
             projectInstructions = ProjectInstructions.load(project)?.text, traces = RunTraceSink { traceFile.append(it) }, subagents = supervisor.takeIf { helpersAllowed },
-            systemPrompt = modelProfile.systemPrompt, projectMap = if (modelProfile.projectMap) code.projectMap() else null, scope = this)
+            systemPrompt = modelProfile.systemPrompt, projectMap = if (modelProfile.projectMap) code.projectMap() else null, scope = this, contextWindowTokens = contextWindowTokens)
         try {
             withTimeout(5 * 60_000L) { engine.send(task.prompt, task.mode, task.allowProcesses).join() }
         } catch (_: kotlinx.coroutines.TimeoutCancellationException) { failure = "timeout after 5 min"; engine.stop() }
@@ -166,15 +177,23 @@ internal suspend fun runTask(task: EvalTask, attempt: Int, provider: ChatComplet
         processes.close()
         Files.walk(root).use { it.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists) }
         val helpers = supervisor.state.value
+        val error = failure ?: state.error?.take(300)
         EvalResult(
-            task.id, attempt, verdict.passed && state.status == "completed", verdict.detail, state.status, failure ?: state.error?.take(300),
+            task.id, attempt, verdict.passed && state.status == "completed", verdict.detail, state.status, error,
             state.modelRounds, state.toolCalls, state.failedToolCalls, errors, state.activities.map { it.name }.distinct(),
             (System.nanoTime() - started) / 1_000_000, state.usage.promptTokens, state.usage.completionTokens, state.usage.cachedPromptTokens, answer.take(1500),
             subagents = helpers.size, subagentsCompleted = helpers.count { it.status == dev.chiller.contracts.SubagentStatus.COMPLETED },
             loss = lossMetrics(state.messages, state.activities),
+            infrastructure = state.status != "completed" && error?.substringBefore(':')?.trim() in INFRASTRUCTURE_CODES,
         )
     }
 }
+
+/** Provider failures that say nothing about the model or the harness's tools. */
+private val INFRASTRUCTURE_CODES = setOf("PROVIDER_TRANSPORT_ERROR", "PROVIDER_TLS_ERROR", "PROVIDER_TIMEOUT", "PROVIDER_HTTP_ERROR",
+    "AUTHENTICATION_FAILED", "RATE_LIMITED", "MISSING_CREDENTIAL")
+
+internal fun outcomeLabel(result: EvalResult): String = when { result.passed -> "PASS"; result.infrastructure -> "ERROR"; else -> "FAIL" }
 
 internal fun renderMarkdown(report: EvalReport): String = buildString {
     val results = report.results
@@ -183,7 +202,8 @@ internal fun renderMarkdown(report: EvalReport): String = buildString {
     appendLine()
     appendLine("Endpoint `${report.endpoint}` · started ${report.startedAt} · repeats ${report.repeats} · maxRounds ${report.maxRounds} · maxOutput ${report.maxOutputTokens}")
     appendLine()
-    appendLine("**Passed ${passed}/${results.size}** · rounds ${results.sumOf { it.rounds }} · tool calls ${results.sumOf { it.toolCalls }} (failed ${results.sumOf { it.failedToolCalls }}) · " +
+    val infrastructure = results.count { it.infrastructure }
+    appendLine("**Passed ${passed}/${results.size}**" + (if (infrastructure > 0) " (provider errors $infrastructure)" else "") + " · rounds ${results.sumOf { it.rounds }} · tool calls ${results.sumOf { it.toolCalls }} (failed ${results.sumOf { it.failedToolCalls }}) · " +
         "time ${"%.1f".format(results.sumOf { it.durationMs } / 1000.0)} s · prompt ${results.sumOf { it.promptTokens ?: 0 }} · completion ${results.sumOf { it.completionTokens ?: 0 }} · cached ${results.sumOf { it.cachedPromptTokens ?: 0 }} tokens")
     appendLine()
     appendLine("Losses: repeated reads ${results.sumOf { it.loss.repeatedReads }} · failed edits ${results.sumOf { it.loss.failedEdits }} · tool output sent ${results.sumOf { it.loss.toolOutputChars } / 1000}k chars")
@@ -191,7 +211,7 @@ internal fun renderMarkdown(report: EvalReport): String = buildString {
     appendLine("| Task | # | Result | Rounds | Tools (failed) | Re-reads | Failed edits | Tool output, k chars | Helpers | Time, s | Prompt / completion tok. | Verdict |")
     appendLine("|---|---|---|---|---|---|---|---|---|---|---|---|")
     results.forEach { r ->
-        appendLine("| ${r.task} | ${r.attempt} | ${if (r.passed) "PASS" else "FAIL"} | ${r.rounds} | ${r.toolCalls} (${r.failedToolCalls}) | ${r.loss.repeatedReads} | ${r.loss.failedEdits} | ${"%.1f".format(r.loss.toolOutputChars / 1000.0)} | ${if (r.subagents > 0) "${r.subagentsCompleted}/${r.subagents}" else "—"} | ${"%.1f".format(r.durationMs / 1000.0)} | ${r.promptTokens ?: "—"} / ${r.completionTokens ?: "—"} | ${r.verdict.replace("|", "\\|").take(120)} |")
+        appendLine("| ${r.task} | ${r.attempt} | ${outcomeLabel(r)} | ${r.rounds} | ${r.toolCalls} (${r.failedToolCalls}) | ${r.loss.repeatedReads} | ${r.loss.failedEdits} | ${"%.1f".format(r.loss.toolOutputChars / 1000.0)} | ${if (r.subagents > 0) "${r.subagentsCompleted}/${r.subagents}" else "—"} | ${"%.1f".format(r.durationMs / 1000.0)} | ${r.promptTokens ?: "—"} / ${r.completionTokens ?: "—"} | ${r.verdict.replace("|", "\\|").take(120)} |")
     }
     appendLine()
     appendLine("## Per-task aggregate")
@@ -207,4 +227,5 @@ internal fun renderMarkdown(report: EvalReport): String = buildString {
         appendLine("Tool errors: " + errors.entries.sortedByDescending { it.value }.joinToString(", ") { "${it.key} ×${it.value}" })
     }
     results.filter { !it.passed && it.error != null }.forEach { appendLine(); appendLine("- ${it.task} #${it.attempt}: status ${it.status}, ${it.error}") }
+    if (report.skipped.isNotEmpty()) { appendLine(); appendLine("Skipped (a required tool is not in the ${report.profile} profile): ${report.skipped.joinToString()}") }
 }

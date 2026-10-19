@@ -37,4 +37,19 @@ class LossMetricsTest {
         val md = renderMarkdown(EvalReport("m", "e", "s", 14, 2048, 2, listOf(r), listOf(summary)))
         assertTrue("Losses: repeated reads 2 · failed edits 1 · tool output sent 4k chars" in md, md)
     }
+
+    @Test fun `provider errors and skipped tasks are not reported as model failures`() {
+        val down = EvalResult("t", 1, false, "checks failed", "failed", "RATE_LIMITED: Provider rate limit reached", 1, 0, 0, emptyMap(), emptyList(), 100, null, null, null, "",
+            infrastructure = true)
+        val wrong = down.copy(task = "u", error = null, status = "completed", infrastructure = false)
+        assertEquals("ERROR", outcomeLabel(down)); assertEquals("FAIL", outcomeLabel(wrong))
+        val md = renderMarkdown(EvalReport("m", "e", "s", 14, 2048, 1, listOf(down, wrong), summarize(listOf(down, wrong)), profile = "compact", skipped = listOf("delegate-research")))
+        assertTrue("**Passed 0/2** (provider errors 1)" in md, md)
+        assertTrue("| t | 1 | ERROR |" in md && "| u | 1 | FAIL |" in md, md)
+        assertTrue("Skipped (a required tool is not in the compact profile): delegate-research" in md, md)
+    }
+
+    @Test fun `only the delegation task needs helpers`() {
+        assertEquals(listOf("delegate-research"), EVAL_TASKS.filter { "spawn_agent" in it.requiredTools }.map { it.id })
+    }
 }

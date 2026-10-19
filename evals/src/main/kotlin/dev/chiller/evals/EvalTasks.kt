@@ -24,6 +24,8 @@ class EvalTask(
     check: (project: Path, finalAnswer: String) -> Verdict,
     /** Applies a correct solution to the project and returns a correct final answer. */
     val reference: (project: Path) -> String,
+    /** Tools the task cannot be done without; a profile lacking one skips the task instead of failing it. */
+    val requiredTools: Set<String> = emptySet(),
 ) {
     val check: (Path, String) -> Verdict = protectOracle(files, check)
 
@@ -227,6 +229,7 @@ val EVAL_TASKS: List<EvalTask> = listOf(
         allowProcesses = false,
         check = { _, answer -> mentionsAll(answer, "MAX_INVOICE_TOTAL", "25000", "MAX_PARCELS_PER_ORDER", "12") },
         reference = { "MAX_INVOICE_TOTAL = 25000 (billing/limits.py); MAX_PARCELS_PER_ORDER = 12 (shipping/rules.py)." },
+        requiredTools = setOf("spawn_agent"),
     ),
     EvalTask(
         id = "fix-without-running",
