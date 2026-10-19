@@ -243,6 +243,17 @@ private fun CustomProviderCard(data: SettingsData, actions: SettingsActions, edi
     var profile by remember(base) { mutableStateOf(base.profile) }
     var message by remember(base) { mutableStateOf<String?>(null) }
     val draft = CustomProvider(base.id, name, address, keyVariable, defaultModel, thinking, profile).normalized()
+    // Folded until asked for or a custom provider is chosen, so the connection form stays near the presets.
+    var open by remember(editing) { mutableStateOf(editing != null) }
+    if (!open) {
+        Card {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Свой провайдер: шлюз компании или домашний сервер, хранится только на этом компьютере", color = c.muted, fontSize = 12.sp, modifier = Modifier.weight(1f))
+                ChillerControl("Добавить свой провайдер", { open = true }, style = ControlStyle.OUTLINE)
+            }
+        }
+        return
+    }
     Card {
         SectionTitle(if (editing == null) "Свой провайдер" else "Свой провайдер · ${editing.name}",
             "Например, шлюз компании. Хранится только в настройках этого компьютера и не попадает в репозиторий. Ключ читается из переменной окружения или .env.")
@@ -270,8 +281,8 @@ private fun CustomProviderCard(data: SettingsData, actions: SettingsActions, edi
             }, style = ControlStyle.PRIMARY, enabled = name.isNotBlank() && address.isNotBlank())
             if (editing != null) {
                 ChillerControl("Удалить", { actions.deleteCustomProvider(editing.id); onEdit(null) }, style = ControlStyle.OUTLINE)
-                ChillerControl("Новый", { onEdit(null) })
             }
+            ChillerControl("Свернуть", { if (editing != null) onEdit(null) else open = false })
         }
         message?.let { Text(it, color = if (it == "Сохранено") c.positive else c.negative, fontSize = 11.sp) }
         if (draft.keyVariable != null) Text("Ключ берётся из ${draft.keyVariable} при запуске и при сохранении; уходит только на ${originOf(draft.baseUrl) ?: "этот адрес"}.", color = c.faint, fontSize = 11.sp, lineHeight = 15.sp)
