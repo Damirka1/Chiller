@@ -14,14 +14,14 @@ import dev.chiller.app.ui.AppMenuSection
 import dev.chiller.app.ui.TitleBarSpec
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.isActive
-import java.awt.Frame
+import java.awt.Window
 
 /**
  * Native custom title bar on Windows through the JetBrains Runtime: the window keeps its native caption buttons,
  * snap layouts, resize borders and double-click maximize, while the app draws the rest of the bar itself.
  * [install] returns null on other systems or JDKs, and the standard frame with its menu bar is used instead.
  */
-internal class WindowsTitleBar private constructor(private val frame: Frame, private val bar: WindowDecorations.CustomTitleBar) {
+internal class WindowsTitleBar private constructor(private val frame: Window, private val bar: WindowDecorations.CustomTitleBar) {
     private var captionWidth by mutableFloatStateOf(DEFAULT_CAPTION_WIDTH)
     private var dark: Boolean? = null
 
@@ -31,7 +31,7 @@ internal class WindowsTitleBar private constructor(private val frame: Frame, pri
         dark = value
         runCatching {
             bar.putProperty("controls.dark", value)
-            JBR.getWindowDecorations().setCustomTitleBar(frame, bar)
+            when (frame) { is java.awt.Frame -> JBR.getWindowDecorations().setCustomTitleBar(frame, bar); is java.awt.Dialog -> JBR.getWindowDecorations().setCustomTitleBar(frame, bar) }
             captionWidth = bar.rightInset.takeIf { it > 0f } ?: DEFAULT_CAPTION_WIDTH
         }
     }
@@ -48,12 +48,13 @@ internal class WindowsTitleBar private constructor(private val frame: Frame, pri
         /** Three 46 dp Windows caption buttons; used until the runtime reports the real width. */
         private const val DEFAULT_CAPTION_WIDTH = 138f
 
-        fun install(frame: Frame): WindowsTitleBar? = runCatching {
+        /** The main frame or a dialog such as the image viewer. */
+        fun install(frame: Window): WindowsTitleBar? = runCatching {
             if (!System.getProperty("os.name").orEmpty().startsWith("Windows") || !JBR.isWindowDecorationsSupported()) return@runCatching null
             val decorations = JBR.getWindowDecorations()
             val bar = decorations.createCustomTitleBar()
             bar.height = HEIGHT
-            decorations.setCustomTitleBar(frame, bar)
+            when (frame) { is java.awt.Frame -> decorations.setCustomTitleBar(frame, bar); is java.awt.Dialog -> decorations.setCustomTitleBar(frame, bar); else -> return@runCatching null }
             WindowsTitleBar(frame, bar).also { it.captionWidth = bar.rightInset.takeIf { inset -> inset > 0f } ?: DEFAULT_CAPTION_WIDTH }
         }.getOrNull()
     }

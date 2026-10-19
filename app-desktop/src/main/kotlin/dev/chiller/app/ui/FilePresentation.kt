@@ -1,5 +1,11 @@
 package dev.chiller.app.ui
 
+import androidx.compose.ui.graphics.luminance
+
+import androidx.compose.ui.input.pointer.pointerHoverIcon
+
+import androidx.compose.ui.input.pointer.PointerIcon
+
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -68,7 +74,7 @@ internal fun FilePresentationCard(file: FilePresentation, onPreviewFile: suspend
             BoxWithConstraints(Modifier.fillMaxWidth()) {
                 val slot = minOf(maxWidth * (image.height.toFloat() / image.width), 380.dp)
                 Image(image, "Открыть изображение ${file.name}", contentScale = ContentScale.Fit,
-                    modifier = Modifier.fillMaxWidth().height(slot).clipToBounds()
+                    modifier = Modifier.fillMaxWidth().height(slot).clipToBounds().pointerHoverIcon(PointerIcon.Hand)
                         .clickable(role = Role.Button, onClickLabel = "Открыть изображение") { viewing = true })
             }
             // The hover highlight stops at the image: a divider and some air before the caption.
@@ -133,8 +139,14 @@ internal fun ImageViewer(file: FilePresentation, bitmap: ImageBitmap, onClose: (
         }) {
         LaunchedEffect(Unit) { focus.requestFocus() }
         LaunchedEffect(viewport, actualScale) { pan = clampImagePan(pan, image, viewport, actualScale) }
+        // Like the main window on Windows/JBR: the header is the title bar, under the native caption buttons.
+        val nativeBar = remember { if (System.getProperty("os.name").orEmpty().startsWith("Mac")) null else dev.chiller.app.WindowsTitleBar.install(window) }
+        val bar = nativeBar?.spec(emptyList())
+        val dark = c.canvas.luminance() < .5f
+        LaunchedEffect(dark, nativeBar) { nativeBar?.setDark(dark) }
         Column(Modifier.fillMaxSize().background(c.canvas).focusRequester(focus).focusable()) {
-            Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.fillMaxWidth().then(if (bar != null) Modifier.height(bar.height).then(bar.hitTest).padding(start = 12.dp, end = bar.captionButtonsWidth + 8.dp)
+                else Modifier.padding(horizontal = 12.dp, vertical = 6.dp)), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text(file.name, color = c.text, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     Text("${image.width} × ${image.height} · ${formatPresentedSize(file.sizeBytes)}", color = c.faint, fontSize = 11.sp)
@@ -145,7 +157,7 @@ internal fun ImageViewer(file: FilePresentation, bitmap: ImageBitmap, onClose: (
                 ChillerControl("Вписать", { reset() }, style = ControlStyle.QUIET)
                 ChillerControl("100%", { setScale(1f) }, style = ControlStyle.QUIET)
                 onReveal?.let { ChillerIconButton(Icons.Outlined.FolderOpen, "Показать в папке", it) }
-                ChillerIconButton(Icons.Outlined.Close, "Закрыть просмотр", onClose)
+                if (bar == null) ChillerIconButton(Icons.Outlined.Close, "Закрыть просмотр", onClose)
             }
             Box(Modifier.weight(1f).fillMaxWidth().clipToBounds().background(c.sidebar)
                 .onSizeChanged { viewport = it }
