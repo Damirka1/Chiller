@@ -135,3 +135,15 @@ fun turnResult(state: RunState, undone: Set<String> = emptySet()): TurnResult {
     return TurnResult(files.values.toList(), commands, presented, issues)
 }
 
+
+/** File types that are results for the user (a chart, a page, a report) rather than build output. */
+private val DELIVERABLES = setOf("png", "jpg", "jpeg", "gif", "webp", "svg", "pdf", "html", "csv", "xlsx", "docx", "pptx", "md")
+
+/**
+ * Deliverables a process created during the turn (a script's chart, a generated report) that were never shown to
+ * the user: the answer may describe a result the user has not seen.
+ */
+fun TurnResult.withUnshownOutputs(outside: dev.chiller.app.di.OutsideChanges?): TurnResult {
+    val unshown = outside?.added.orEmpty().filter { it.substringAfterLast('.', "").lowercase() in DELIVERABLES && it !in presented }
+    return if (unshown.isEmpty()) this else copy(issues = issues + unshown.map { "«$it» создан, но не показан" })
+}

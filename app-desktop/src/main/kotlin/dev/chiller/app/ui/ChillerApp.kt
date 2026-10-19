@@ -1225,7 +1225,7 @@ private fun Conversation(state: RunState, reduced: Boolean, onAnswer: (String) -
             val finished = state.status in setOf("completed", "failed", "cancelled", "interrupted")
             val result = if (finished) turnResult(state, undoneChanges) else null
             val outside = outsideChanges?.takeIf { it.count > 0 && it.userIndex == state.messages.indexOfLast { m -> m.role == "user" } }
-            if (result != null && (!result.isEmpty || outside != null)) item(key = "turn-result") { TurnResultCard(state, result, entryModifier("turn-result"), outside = outside) }
+            if (result != null && (!result.isEmpty || outside != null)) item(key = "turn-result") { TurnResultCard(state, result.withUnshownOutputs(outside), entryModifier("turn-result"), outside = outside) }
             else {
                 if (state.status in setOf("completed", "cancelled", "interrupted")) item(key = "run-outcome") {
                     Text(runProgressLabel(state).orEmpty(), color = c.muted, fontSize = 12.sp, modifier = entryModifier("run-outcome").padding(start = 6.dp))

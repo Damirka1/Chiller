@@ -102,6 +102,13 @@ class AgentCoordinatorTest {
         assertEquals(4, calls, "one plan round, then the answer, two reminders and the answer that stands")
     }
 
+    @Test fun capabilityLineFollowsTheEnabledTools() {
+        val line = capabilityLine(setOf("generate_image", "web_search", "run_process", "show_file"))
+        assertTrue("generate and edit images" in line && "search the web" in line && "run programs" in line, line)
+        assertTrue("helpers" !in line)
+        assertEquals("", capabilityLine(emptySet()))
+    }
+
     private class PlanTools : ToolExecutor {
         override val specs = listOf(ToolSpec("update_plan", "plan", JsonObject(emptyMap()), ToolEffect.READ))
         override suspend fun execute(call: ToolCall, context: ToolContext) = ToolResult(true, buildJsonObject { put("ok", true) })

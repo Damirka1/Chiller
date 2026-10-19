@@ -2,6 +2,7 @@ package dev.chiller.app.di
 
 import dev.chiller.contracts.ProviderModel
 import kotlin.test.Test
+import dev.chiller.app.ui.withUnshownOutputs
 import kotlin.test.assertEquals
 
 class ModelCatalogStateTest {
@@ -20,5 +21,12 @@ class ModelCatalogStateTest {
         assertEquals(null, imageModelFor(AgentOptions(imageModel = "off"), catalog))
         assertEquals(null, imageModelFor(AgentOptions(), ModelCatalogState("ready", listOf(ProviderModel("quasar")))))
         assertEquals("dall-e-3", imageModelFor(AgentOptions(imageModel = "dall-e-3"), catalog)?.id, "a typed id works without a listing")
+    }
+
+    @Test fun processMadeChartsThatWereNotShownAreFlagged() {
+        val result = dev.chiller.app.ui.TurnResult(emptyList(), emptyList(), listOf("shown.png"), emptyList())
+        val outside = OutsideChanges(0, added = listOf("weather_graph.png", "shown.png", "build/out.class"))
+        assertEquals(listOf("«weather_graph.png» создан, но не показан"), result.withUnshownOutputs(outside).issues)
+        assertEquals(result, result.withUnshownOutputs(null))
     }
 }
