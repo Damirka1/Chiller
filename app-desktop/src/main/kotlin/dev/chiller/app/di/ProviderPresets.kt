@@ -47,7 +47,7 @@ data class CustomProvider(
     fun problem(): String? = when {
         name.isBlank() || name.length > 60 -> "Название: от 1 до 60 символов"
         !endpointAllowed(baseUrl) -> "Адрес: HTTPS, или HTTP только для localhost; без логина, query и #"
-        keyVariable != null && !Regex("[A-Za-z_][A-Za-z0-9_]{0,63}").matches(keyVariable) -> "Переменная ключа: латиница, цифры и _, например QARMET_API_KEY"
+        keyVariable != null && !isVariableName(keyVariable) -> "Переменная ключа: заглавные латинские буквы, цифры и _, например QARMET_API_KEY"
         defaultModel != null && defaultModel.length > 200 -> "Модель: не длиннее 200 символов"
         profile != null && profile !in setOf("auto", "full", "compact") -> "Профиль: авто, полный или компактный"
         else -> null
@@ -56,6 +56,9 @@ data class CustomProvider(
     fun normalized() = copy(name = name.trim(), baseUrl = baseUrl.trim().trimEnd('/'), keyVariable = keyVariable?.trim()?.ifEmpty { null },
         defaultModel = defaultModel?.trim()?.ifEmpty { null })
 }
+
+/** An environment variable name as people write them (QARMET_API_KEY); a pasted key with lowercase letters is not one. */
+fun isVariableName(value: String): Boolean = Regex("[A-Z_][A-Z0-9_]{0,63}").matches(value)
 
 /** The same rule the connection settings apply: HTTPS, or plain HTTP to a loopback host; no credentials, query or fragment. */
 fun endpointAllowed(url: String): Boolean = runCatching {

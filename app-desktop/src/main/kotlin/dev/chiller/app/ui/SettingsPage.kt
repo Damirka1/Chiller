@@ -147,16 +147,38 @@ private fun ConnectionSection(data: SettingsData, actions: SettingsActions) {
     var model by remember(data.model) { mutableStateOf(data.model) }
     var thinking by remember(data.thinking) { mutableStateOf(data.thinking) }
     var key by remember { mutableStateOf("") }
+    // One form for every provider. A custom one (picked, or new from the "+" tile) adds a name and a profile.
+    var creating by remember { mutableStateOf(false) }
     val formOrigin = originOf(url)
-    val preset = ProviderPresets.byOrigin(url, data.customProviders)
-    val custom = data.customProviders.firstOrNull { originOf(it.baseUrl) == formOrigin }
-    var editing by remember { mutableStateOf<CustomProvider?>(null) }
-    val changed = url.trimEnd('/') != data.baseUrl || model.trim() != data.model || thinking != data.thinking || key.isNotEmpty()
+    val custom = if (creating) null else data.customProviders.firstOrNull { originOf(it.baseUrl) == formOrigin }
+    val preset = if (creating) null else ProviderPresets.byOrigin(url, data.customProviders)
+    val isCustom = creating || custom != null
+    var name by remember(custom?.id, creating) { mutableStateOf(custom?.name.orEmpty()) }
+    var profile by remember(custom?.id, creating) { mutableStateOf(custom?.profile) }
+    var problem by remember(custom?.id, creating) { mutableStateOf<String?>(null) }
+    val customChanged = creating || (custom != null && (name.trim() != custom.name || profile != custom.profile))
+    val changed = url.trimEnd('/') != data.baseUrl || model.trim() != data.model || thinking != data.thinking || key.isNotEmpty() || customChanged
+    fun apply() {
+        val typed = key.takeIf { it.isNotBlank() }
+        if (isCustom) profile?.takeIf { it != data.agent.profile }?.let { actions.agent(data.agent.copy(profile = it)) }
+        if (!isCustom) { key = ""; actions.applyConnection(url.trim(), model.trim(), thinking, typed); return }
+        val provider = CustomProvider(custom?.id ?: java.util.UUID.randomUUID().toString().take(8), name, url, custom?.keyVariable, model, thinking, profile).normalized()
+        provider.problem()?.let { problem = it; return }
+        // Saved first (with the key, remembered in the OS store), then connected with that key.
+        actions.saveCustomProvider(provider, typed) { refused ->
+            problem = refused
+            if (refused == null) { key = ""; creating = false; actions.applyConnection(provider.baseUrl, provider.defaultModel.orEmpty(), thinking, null) }
+        }
+    }
     Card {
         SectionTitle("Провайдер", "Все провайдеры совместимы с OpenAI Chat Completions. Ключ уходит только на адрес, для которого он задан.")
-        (ProviderPresets.all + data.customProviders.map { it.preset() }).chunked(3).forEach { row ->
+        (ProviderPresets.all.map { it as ProviderPreset? } + data.customProviders.map { it.preset() } + listOf(null)).chunked(3).forEach { row ->
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 row.forEach { p ->
+                    if (p == null) {
+                        AddProviderTile(selected = creating, Modifier.weight(1f)) { creating = true; url = ""; model = ""; key = "" }
+                        return@forEach
+                    }
                     val origin = originOf(p.baseUrl)
                     val status = when {
                         p.keyless -> "без ключа" to c.muted
@@ -165,32 +187,27 @@ private fun ConnectionSection(data: SettingsData, actions: SettingsActions) {
                         data.keySources[origin] == "ui" -> "ключ задан" to c.positive
                         else -> "нужен ключ" to c.faint
                     }
-                    PresetCard(p, status, selected = origin == formOrigin, Modifier.weight(1f)) {
-                        url = p.baseUrl; key = ""
+                    PresetCard(p, status, selected = !creating && origin == formOrigin, Modifier.weight(1f)) {
+                        creating = false; url = p.baseUrl; key = ""
                         model = if (originOf(data.baseUrl) == origin) data.model else p.defaultModel.orEmpty()
-                        // A custom provider brings its own thinking default and opens for editing.
-                        data.customProviders.firstOrNull { "custom:${it.id}" == p.id }.let { chosen ->
-                            editing = chosen
-                            chosen?.thinking?.takeIf { originOf(data.baseUrl) != origin }?.let { thinking = it }
-                        }
+                        data.customProviders.firstOrNull { "custom:${it.id}" == p.id }?.thinking?.takeIf { originOf(data.baseUrl) != origin }?.let { thinking = it }
                     }
                 }
                 repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
             }
         }
     }
-    // Adding or saving a provider also connects to it: the form alone does not change the endpoint the chat uses.
-    CustomProviderCard(data, actions, editing, onEdit = { editing = it }, onUse = { p ->
-        url = p.baseUrl; key = ""; model = p.defaultModel.orEmpty(); p.thinking?.let { thinking = it }
-        p.profile?.takeIf { it != data.agent.profile }?.let { actions.agent(data.agent.copy(profile = it)) }
-        actions.applyConnection(p.baseUrl, p.defaultModel.orEmpty(), p.thinking ?: thinking, null)
-    })
     Card {
-        SectionTitle(preset?.name ?: "Свой адрес", preset?.note?.ifBlank { null } ?: "Любой сервер с /chat/completions; HTTP разрешён только для localhost.")
+        SectionTitle(when { creating -> "Свой провайдер"; custom != null -> custom.name; else -> preset?.name ?: "Свой адрес" },
+            when {
+                isCustom -> "Шлюз компании или свой сервер. Хранится только в настройках этого компьютера и не попадает в репозиторий."
+                else -> preset?.note?.ifBlank { null } ?: "Любой сервер с /chat/completions; HTTP разрешён только для localhost."
+            })
+        if (isCustom) ChillerField(name, { name = it }, "Название", "Qarmet")
         ChillerField(url, { url = it }, "Адрес API", "https://api.example.com/v1")
         ChillerField(model, { model = it }, "Модель", preset?.defaultModel ?: "ID модели у провайдера")
         // Discovered models of the applied endpoint, one click to use.
-        if (originOf(data.baseUrl) == formOrigin) {
+        if (!creating && originOf(data.baseUrl) == formOrigin) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(catalogLine(data.catalog, data.keyConfigured), color = c.faint, fontSize = 11.sp, modifier = Modifier.weight(1f))
                 ChillerControl("Загрузить список моделей", actions.refreshModels, icon = Icons.Outlined.Refresh, enabled = data.catalog.status != "loading")
@@ -199,106 +216,56 @@ private fun ConnectionSection(data: SettingsData, actions: SettingsActions) {
         } else Text("Примените адрес и ключ, затем загрузите список моделей. ID заранее знать не нужно.", color = c.faint, fontSize = 11.sp)
         val keyHint = when {
             preset?.keyless == true || isLoopback(url) -> "Локальный сервер: ключ не нужен"
-            data.keySources[formOrigin] == "env" -> "Ключ загружен из .env или переменной окружения. Новый заменит его до выхода"
-            data.keySources[formOrigin] == "keychain" -> "Ключ сохранён: ${data.secureStorageName}. Новый заменит его только после сохранения"
+            data.keySources[formOrigin] == "env" -> "Ключ загружен из .env или переменной окружения. Новый заменит его"
+            data.keySources[formOrigin] == "keychain" -> "Ключ сохранён: ${data.secureStorageName}. Пустое поле оставляет его"
             data.keySources[formOrigin] == "ui" -> "Ключ задан. Пустое поле оставляет его"
-            else -> "Введите ключ" + (preset?.keyVariables?.firstOrNull()?.let { " или задайте $it в .env" } ?: "")
+            else -> "Вставьте ключ"
         }
         ChillerField(key, { key = it }, "API-ключ", keyHint, secret = true)
-        if (originOf(data.baseUrl) == formOrigin && data.keyConfigured && !isLoopback(url)) {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (data.secureStorageSupported) ChillerControl("Запомнить ключ (${data.secureStorageName})", actions.saveCredential, enabled = !changed)
-                ChillerControl("Удалить текущий ключ", actions.deleteCredential, enabled = !changed)
-            }
-        }
-        Text(if (data.secureStorageSupported) "Применить — использовать до выхода. Чтобы ключ остался после перезапуска, нажмите «Запомнить ключ» — он попадёт в ${data.secureStorageName}." else "На этой платформе ключ из поля действует до выхода. Для запуска используйте переменную окружения или .env.", color = c.faint, fontSize = 11.sp)
+        Text(if (data.secureStorageSupported) "При «Применить» ключ сохраняется в «${data.secureStorageName}» и уходит только на этот адрес."
+            else "Ключ действует до выхода и уходит только на этот адрес; для постоянного ключа используйте переменную окружения или .env.", color = c.faint, fontSize = 11.sp)
         preset?.keysUrl?.let { link -> ChillerControl("Где взять ключ: ${link.removePrefix("https://")}", { actions.openUrl(link) }, icon = Icons.AutoMirrored.Outlined.OpenInNew) }
         SettingToggle("Рассуждения модели", "Если провайдер поддерживает режим thinking", thinking) { thinking = it }
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            ChillerControl("Применить", {
-                custom?.profile?.takeIf { it != data.agent.profile }?.let { actions.agent(data.agent.copy(profile = it)) }
-                actions.applyConnection(url.trim(), model.trim(), thinking, key.takeIf { it.isNotBlank() }); key = ""
-            }, style = ControlStyle.PRIMARY, enabled = changed && url.isNotBlank() )
-            if (data.connection.status == "checking") ChillerControl("Отменить проверку", actions.cancelCheck, style = ControlStyle.OUTLINE)
-            else ChillerControl("Проверить подключение", actions.checkConnection, style = ControlStyle.OUTLINE, enabled = !changed && data.keyConfigured && model.isNotBlank())
-        }
-        val (line, color) = connectionSummary(data.connection, data.keyConfigured)
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(7.dp).clip(CircleShape).background(color)); Spacer(Modifier.width(8.dp))
-            Text(if (changed) "Изменения не применены" else data.connection.message.ifBlank { line }, color = if (data.connection.status == "failed" && !changed) c.negative else c.muted, fontSize = 12.sp)
-        }
-        Text("Ключ: ${if (data.keyConfigured) "настроен" else "не задан"} · каталог: ${if (data.catalog.models.isEmpty()) "не загружен" else "${data.catalog.models.size} моделей"}. Проверка генерации — отдельный запрос.", color = c.faint, fontSize = 11.sp, lineHeight = 17.sp)
-        Text("Применение начинает новый диалог. Проверка отправляет один короткий запрос без файлов и инструментов. Ключ действует до выхода, если не сохранён явно в системное хранилище (Keychain или Диспетчер учётных данных Windows); из .env и переменных окружения читается при запуске. Вживую в Chiller проверен только DeepSeek.", color = c.faint, fontSize = 11.sp, lineHeight = 17.sp)
-    }
-}
-
-/**
- * Adds or edits a provider kept only in this computer's settings: name, address, the env/.env variable that holds
- * its key, and what to apply with it. Nothing typed here is sent anywhere until the provider is applied.
- */
-@Composable
-internal fun CustomProviderCard(data: SettingsData, actions: SettingsActions, editing: CustomProvider?, onEdit: (CustomProvider?) -> Unit, onUse: (CustomProvider) -> Unit) {
-    val c = LocalChillerPalette.current
-    // Remembered: a fresh id on every recomposition would re-key the fields below and wipe each typed character.
-    val base = remember(editing) { editing ?: CustomProvider(java.util.UUID.randomUUID().toString().take(8), "", "") }
-    var name by remember(base) { mutableStateOf(base.name) }
-    var address by remember(base) { mutableStateOf(base.baseUrl) }
-    var keyVariable by remember(base) { mutableStateOf(base.keyVariable.orEmpty()) }
-    var defaultModel by remember(base) { mutableStateOf(base.defaultModel.orEmpty()) }
-    var thinking by remember(base) { mutableStateOf(base.thinking) }
-    var profile by remember(base) { mutableStateOf(base.profile) }
-    var message by remember(base) { mutableStateOf<String?>(null) }
-    var apiKey by remember(base) { mutableStateOf("") }
-    val draft = CustomProvider(base.id, name, address, keyVariable, defaultModel, thinking, profile).normalized()
-    // Folded until asked for or a custom provider is chosen, so the connection form stays near the presets.
-    var open by remember(editing) { mutableStateOf(editing != null) }
-    if (!open) {
-        Card {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Свой провайдер: шлюз компании или домашний сервер, хранится только на этом компьютере", color = c.muted, fontSize = 12.sp, modifier = Modifier.weight(1f))
-                ChillerControl("Добавить свой провайдер", { open = true }, style = ControlStyle.OUTLINE)
-            }
-        }
-        return
-    }
-    Card {
-        SectionTitle(if (editing == null) "Свой провайдер" else "Свой провайдер · ${editing.name}",
-            "Например, шлюз компании. Хранится только в настройках этого компьютера и не попадает в репозиторий.")
-        ChillerField(name, { name = it }, "Название", "Qarmet")
-        ChillerField(address, { address = it }, "Адрес API", "https://gateway.example.com/v1")
-        ChillerField(apiKey, { apiKey = it }, "API-ключ", when {
-            data.keySources[originOf(address.trim())] == "keychain" -> "Ключ сохранён. Пустое поле оставляет его"
-            data.keySources[originOf(address.trim())] != null -> "Ключ задан. Пустое поле оставляет его"
-            else -> "Вставьте ключ"
-        }, secret = true)
-        ChillerField(keyVariable, { keyVariable = it }, "или переменная с ключом из .env (необязательно)", "QARMET_API_KEY")
-        ChillerField(defaultModel, { defaultModel = it }, "Модель по умолчанию (необязательно)", "quasar")
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text("Рассуждения", color = c.text, fontSize = 12.sp, modifier = Modifier.width(110.dp))
-            listOf(null to "Не менять", true to "Вкл", false to "Выкл").forEach { (value, label) ->
-                ChillerControl(label, { thinking = value }, style = if (thinking == value) ControlStyle.SELECTED else ControlStyle.QUIET)
-            }
-        }
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text("Профиль", color = c.text, fontSize = 12.sp, modifier = Modifier.width(110.dp))
+        if (isCustom) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text("Профиль с этим провайдером", color = c.text, fontSize = 13.sp, modifier = Modifier.weight(1f))
             listOf(null to "Не менять", "auto" to "Авто", "full" to "Полный", "compact" to "Компактный").forEach { (value, label) ->
                 ChillerControl(label, { profile = value }, style = if (profile == value) ControlStyle.SELECTED else ControlStyle.QUIET)
             }
         }
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            ChillerControl(if (editing == null) "Добавить и подключить" else "Сохранить и подключить", {
-                val problem = draft.problem()
-                if (problem != null) message = problem
-                else actions.saveCustomProvider(draft, apiKey.takeIf { it.isNotBlank() }) { refused -> apiKey = ""; message = refused ?: "Сохранено"; if (refused == null) { onEdit(draft); onUse(draft) } }
-            }, style = ControlStyle.PRIMARY, enabled = name.isNotBlank() && address.isNotBlank())
-            if (editing != null) {
-                ChillerControl("Удалить", { actions.deleteCustomProvider(editing.id); onEdit(null) }, style = ControlStyle.OUTLINE)
-            }
-            ChillerControl("Свернуть", { if (editing != null) onEdit(null) else open = false })
+            ChillerControl("Применить", ::apply, style = ControlStyle.PRIMARY, enabled = changed && url.isNotBlank() && (!isCustom || name.isNotBlank()))
+            if (data.connection.status == "checking") ChillerControl("Отменить проверку", actions.cancelCheck, style = ControlStyle.OUTLINE)
+            else ChillerControl("Проверить подключение", actions.checkConnection, style = ControlStyle.OUTLINE, enabled = !changed && data.keyConfigured && model.isNotBlank())
+            if (originOf(data.baseUrl) == formOrigin && data.keyConfigured && !isLoopback(url) && !creating) ChillerControl("Удалить ключ", actions.deleteCredential, enabled = !changed)
+            if (custom != null) ChillerControl("Удалить провайдер", { actions.deleteCustomProvider(custom.id) })
         }
-        message?.let { Text(it, color = if (it == "Сохранено") c.positive else c.negative, fontSize = 11.sp) }
-        Text(if (data.secureStorageSupported) "Ключ сохранится в «${data.secureStorageName}» и уходит только на ${originOf(draft.baseUrl) ?: "этот адрес"}. Переменная из .env нужна, только если ключ не вставлен."
-            else "Ключ действует до выхода и уходит только на ${originOf(draft.baseUrl) ?: "этот адрес"}; чтобы он сохранялся, укажите переменную из .env.", color = c.faint, fontSize = 11.sp, lineHeight = 15.sp)
+        problem?.let { Text(it, color = c.negative, fontSize = 12.sp) }
+        val (line, color) = connectionSummary(data.connection, data.keyConfigured)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(7.dp).clip(CircleShape).background(color)); Spacer(Modifier.width(8.dp))
+            Text(if (changed) "Изменения не применены" else data.connection.message.ifBlank { line }, color = if (data.connection.status == "failed" && !changed) c.negative else c.muted, fontSize = 12.sp)
+        }
+        Text("Применение начинает новый диалог. Проверка отправляет один короткий запрос без файлов и инструментов.", color = c.faint, fontSize = 11.sp, lineHeight = 17.sp)
+    }
+}
+
+/** The "+" tile that opens the form for a new custom provider. */
+@Composable
+private fun AddProviderTile(selected: Boolean, modifier: Modifier, onClick: () -> Unit) {
+    val c = LocalChillerPalette.current
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    val shape = RoundedCornerShape(10.dp)
+    Column(
+        modifier.clip(shape).background(if (selected) c.selected.copy(alpha = .6f) else if (hovered) c.hover else c.surface)
+            .border(if (selected) 1.5.dp else 1.dp, if (selected) c.accent.copy(alpha = .7f) else c.border, shape)
+            .hoverable(interaction).pointerHoverIcon(PointerIcon.Hand).clickable(interactionSource = interaction, indication = null, role = Role.Button, onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+    ) {
+        Text("+ Свой провайдер", color = c.text, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+        Text("шлюз компании, свой сервер", color = c.faint, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Spacer(Modifier.height(4.dp))
+        Text("хранится только здесь", color = c.muted, fontSize = 11.sp)
     }
 }
 

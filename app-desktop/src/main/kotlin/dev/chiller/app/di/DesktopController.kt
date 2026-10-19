@@ -210,6 +210,8 @@ class DesktopController(
                 } catch (_: Exception) { /* Keep configured references; explicit save/delete can retry. */ }
             }
         }
+        // A key pasted into the former "variable name" field must not stay in settings.json: keep only real names.
+        settings = settings.copy(customProviders = settings.customProviders.map { it.copy(keyVariable = it.keyVariable?.takeIf(::isVariableName)) })
         settings.customProviders.forEach(::adoptKey)
         settings = rememberModel(settings, settings.baseUrl, settings.model)
         // A demo folder must never come back as the project on the next launch.
@@ -545,6 +547,16 @@ class DesktopController(
         originOf(nextUrl)?.let { origin -> if (key != null) { envOrigins.remove(origin); secureOrigins.remove(origin); if (key.isBlank()) credentials.remove(origin) else credentials[origin] = key } }
         var next = oldSettings.copy(baseUrl = nextUrl, model = model.trim(), thinking = thinking)
         next = rememberModel(next, next.baseUrl, next.model)
+        // A key typed with "Применить" is remembered in the OS store when there is one, so it is entered once.
+        val typedKey = key?.trim()?.takeIf { it.isNotEmpty() }
+        val keyOrigin = originOf(nextUrl)
+        if (typedKey != null && keyOrigin != null && credentialStore.supported) {
+            try {
+                withContext(Dispatchers.IO) { credentialStore.save(keyOrigin, typedKey) }
+                secureOrigins += keyOrigin
+                next = next.copy(credentialOrigins = (next.credentialOrigins + keyOrigin).distinct().takeLast(32))
+            } catch (_: Exception) { /* The key still works until exit. */ }
+        }
         val nextCredential = originOf(nextUrl)?.let { credentials[it] }
         val profileChanged = oldSettings.baseUrl != next.baseUrl || oldSettings.model != next.model || oldSettings.thinking != next.thinking || oldCredential != nextCredential
         if (profileChanged) invalidateConnectionCheck()
