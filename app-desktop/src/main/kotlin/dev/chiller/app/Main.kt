@@ -43,14 +43,43 @@ private fun chillerApplication() = application {
     val mac = remember { System.getProperty("os.name").startsWith("Mac") }
     val active = state.run.status in setOf("preparing", "streaming", "executing")
     LaunchedEffect(Unit) { controller.initialize() }
+    val preview = java.lang.Boolean.getBoolean("chiller.offlinePreview")
+    val savedPreferences by produceState<dev.chiller.app.di.UiPreferences?>(null, directory) {
+        value = dev.chiller.app.di.UiPreferencesStore(directory).load()
+    }
+    val initialPreferences = savedPreferences ?: return@application
+    val windowState = rememberWindowState(
+        width = (if (preview) System.getenv("CHILLER_PREVIEW_WIDTH")?.toIntOrNull()?.coerceIn(800, 1800)?.toFloat() ?: 1280f else initialPreferences.windowWidth).dp,
+        height = (if (preview) System.getenv("CHILLER_PREVIEW_HEIGHT")?.toIntOrNull()?.coerceIn(600, 1200)?.toFloat() ?: 860f else initialPreferences.windowHeight).dp,
+        placement = if (!preview && initialPreferences.windowMaximized) WindowPlacement.Maximized else WindowPlacement.Floating,
+    )
+    var normalSize by remember { mutableStateOf(androidx.compose.ui.unit.DpSize(initialPreferences.windowWidth.dp, initialPreferences.windowHeight.dp)) }
+    LaunchedEffect(windowState) {
+        snapshotFlow { Triple(windowState.size, windowState.placement, windowState.isMinimized) }
+            .collect { (size, placement, minimized) ->
+                if (placement == WindowPlacement.Floating && !minimized) normalSize = size
+            }
+    }
     Window(
         title = "Chiller",
         icon = androidx.compose.ui.res.painterResource("chiller-icon.png"),
-        state = rememberWindowState(
-            width = (if (java.lang.Boolean.getBoolean("chiller.offlinePreview")) System.getenv("CHILLER_PREVIEW_WIDTH")?.toIntOrNull()?.coerceIn(800, 1800) ?: 1280 else 1280).dp,
-            height = (if (java.lang.Boolean.getBoolean("chiller.offlinePreview")) System.getenv("CHILLER_PREVIEW_HEIGHT")?.toIntOrNull()?.coerceIn(600, 1200) ?: 860 else 860).dp,
-        ),
-        onCloseRequest = { scope.launch { controller.close(); exitApplication() } },
+        state = windowState,
+        onCloseRequest = { scope.launch {
+            if (!preview) {
+                val size = if (windowState.placement == WindowPlacement.Floating && !windowState.isMinimized) windowState.size else normalSize
+                try {
+                    controller.updateUiPreferences(controller.state.value.uiPreferences.copy(
+                        windowWidth = size.width.value,
+                        windowHeight = size.height.value,
+                        windowMaximized = windowState.placement == WindowPlacement.Maximized,
+                    ))
+                } catch (_: java.io.IOException) {
+                    System.err.println("Chiller: could not save window size")
+                }
+            }
+            controller.close()
+            exitApplication()
+        } },
     ) {
         // Codex/Claude-style window: transparent title bar, content under it, traffic lights over the sidebar.
         // The title stays set for Mission Control and the Window menu but is not drawn.

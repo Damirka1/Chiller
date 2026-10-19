@@ -17,6 +17,9 @@ data class UiPreferences(
     val layout: String = "focus",
     val inspectorWidth: Float = 348f,
     val reducedMotion: Boolean = false,
+    val windowWidth: Float = 1280f,
+    val windowHeight: Float = 860f,
+    val windowMaximized: Boolean = false,
 )
 
 /** Stores non-secret appearance preferences separately from provider/session data. */
@@ -55,6 +58,8 @@ class UiPreferencesStore(private val directory: Path) {
         density = value.density.takeIf { it in DENSITIES } ?: "normal",
         layout = value.layout.takeIf { it in LAYOUTS } ?: "focus",
         inspectorWidth = if (value.inspectorWidth.isFinite()) value.inspectorWidth.coerceIn(280f, 480f) else 348f,
+        windowWidth = value.windowWidth.takeIf { it.isFinite() && it > 0f }?.coerceIn(320f, 16384f) ?: 1280f,
+        windowHeight = value.windowHeight.takeIf { it.isFinite() && it > 0f }?.coerceIn(240f, 16384f) ?: 860f,
     )
 
     private companion object {
