@@ -67,8 +67,8 @@ class SettingsActions(
     val openComparison: (() -> Unit)? = null, val close: () -> Unit = {},
     val setVerifyCommand: (root: String, command: String) -> Unit = { _, _ -> },
     val saveCredential: () -> Unit = {}, val deleteCredential: () -> Unit = {},
-    /** Saves a custom provider; the callback gets why it was refused, or null. */
-    val saveCustomProvider: (CustomProvider, (String?) -> Unit) -> Unit = { _, done -> done(null) },
+    /** Saves a custom provider; the callback gets why it was refused, or null. Unwired, it refuses instead of pretending. */
+    val saveCustomProvider: (CustomProvider, (String?) -> Unit) -> Unit = { _, done -> done("Сохранение недоступно") },
     val deleteCustomProvider: (String) -> Unit = {},
     val refreshCaptureTargets: () -> Unit = {}, val selectCaptureTarget: (String) -> Unit = {},
 )
@@ -179,7 +179,12 @@ private fun ConnectionSection(data: SettingsData, actions: SettingsActions) {
             }
         }
     }
-    CustomProviderCard(data, actions, editing, onEdit = { editing = it }, onUse = { p -> url = p.baseUrl; key = ""; model = p.defaultModel.orEmpty(); p.thinking?.let { thinking = it } })
+    // Adding or saving a provider also connects to it: the form alone does not change the endpoint the chat uses.
+    CustomProviderCard(data, actions, editing, onEdit = { editing = it }, onUse = { p ->
+        url = p.baseUrl; key = ""; model = p.defaultModel.orEmpty(); p.thinking?.let { thinking = it }
+        p.profile?.takeIf { it != data.agent.profile }?.let { actions.agent(data.agent.copy(profile = it)) }
+        actions.applyConnection(p.baseUrl, p.defaultModel.orEmpty(), p.thinking ?: thinking, null)
+    })
     Card {
         SectionTitle(preset?.name ?: "Свой адрес", preset?.note?.ifBlank { null } ?: "Любой сервер с /chat/completions; HTTP разрешён только для localhost.")
         ChillerField(url, { url = it }, "Адрес API", "https://api.example.com/v1")
@@ -275,7 +280,7 @@ internal fun CustomProviderCard(data: SettingsData, actions: SettingsActions, ed
             }
         }
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            ChillerControl(if (editing == null) "Добавить" else "Сохранить", {
+            ChillerControl(if (editing == null) "Добавить и подключить" else "Сохранить и подключить", {
                 val problem = draft.problem()
                 if (problem != null) message = problem
                 else actions.saveCustomProvider(draft) { refused -> message = refused ?: "Сохранено"; if (refused == null) { onEdit(draft); onUse(draft) } }

@@ -29,7 +29,7 @@ class CustomProviderCardTest {
         onNodeWithContentDescription("Переменная с ключом (необязательно)").performTextInput("QARMET_API_KEY")
         onNodeWithContentDescription("Название").assertTextEquals("Qarmet", includeEditableText = true)
         onNodeWithText("Полный").performClick()
-        onNodeWithText("Добавить").performClick()
+        onNodeWithText("Добавить и подключить").performClick()
         val provider = saved.single()
         assertEquals("Qarmet", provider.name)
         assertEquals("https://gateway.example.com/v1", provider.baseUrl)
