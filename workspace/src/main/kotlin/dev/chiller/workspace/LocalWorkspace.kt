@@ -341,6 +341,14 @@ class LocalWorkspace(
         return edit(EditFileRequest(path, snapshotId, edits))
     }
 
+    override suspend fun readBinary(path: String, maxBytes: Int): ByteArray = withContext(Dispatchers.IO) {
+        val file = resolve(path, mustExist = true)
+        if (!Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS) || Files.isSymbolicLink(file)) fail("UNSUPPORTED_FILE", "Only regular files can be read")
+        val bytes = Files.newInputStream(file, LinkOption.NOFOLLOW_LINKS).use { it.readNBytes(maxBytes + 1) }
+        if (bytes.size > maxBytes) fail("FILE_TOO_LARGE", "File exceeds ${maxBytes / 1_048_576} MiB")
+        bytes
+    }
+
     override suspend fun create(path: String, content: String): FileChange = createNew(path, content.toByteArray(StandardCharsets.UTF_8))
 
     override suspend fun createBinary(path: String, bytes: ByteArray): FileChange {

@@ -13,8 +13,12 @@ class BuiltinTools(
     private val code: ReadOnlyCodeService = UnsupportedReadOnlyCodeService,
     private val web: WebService = DisabledWebService,
     private val screens: ScreenCaptureService? = null,
+    /** The endpoint's image model; null keeps generate_image out of the toolbox. */
+    private val images: ImageService? = null,
+    private val attachmentImages: AttachmentImages? = null,
 ) : ToolExecutor {
     private val json = Json { encodeDefaults = true }
+    private val imagesPerRun = java.util.concurrent.ConcurrentHashMap<String, Int>()
     override val specs: List<ToolSpec> = listOf(
         spec("list_files", "List project files respecting ignore rules. Results are bounded; copy returned nextCursor to cursor to continue.", ToolEffect.READ, mapOf("path" to string(), "glob" to string(), "limit" to integer(), "cursor" to string())),
         spec("search_text", "Search text in project; literal by default. Optional context adds surrounding lines. Copy returned nextCursor to cursor, keeping the same query options.", ToolEffect.READ, mapOf("query" to string(), "path" to string(), "glob" to string(), "regex" to boolean(), "limit" to integer(), "context" to integer(), "cursor" to string()), "query"),
@@ -53,7 +57,14 @@ class BuiltinTools(
                 put("required", JsonArray(listOf(JsonPrimitive("step"), JsonPrimitive("status"))))
             }) }), "steps"),
         spec("ask_user", "Ask the user a necessary question, optionally with choices.", ToolEffect.USER_INTERACTION, mapOf("question" to string(), "options" to array(string())), "question"),
-    ) + if (screens?.supported == true) listOf(
+    ) + listOfNotNull(images?.let { service ->
+        spec("generate_image", "Generate an image with the image model (${service.model}) and save it as a NEW file in the project; never overwrites, so pick a new path ending in .png. " +
+            (if (service.supportsEditing) "To change an existing picture pass reference_image: a project image path or an attachment artifact_id; the model edits it and the result goes to path. " else "") +
+            "Takes 15-60 s; at most $MAX_IMAGES_PER_RUN per turn. Describe subject, style and composition in the prompt. Then show_file is not needed: the result is shown to the user.",
+            ToolEffect.FILE_WRITE,
+            mapOf("prompt" to boundedString(4000), "path" to string(), "size" to boundedString(16)) + (if (service.supportsEditing) mapOf("reference_image" to string()) else emptyMap()),
+            "prompt", "path")
+    }) + if (screens?.supported == true) listOf(
         spec("list_capture_targets", "List only the window explicitly selected by the user for capture. Ask the user to choose in Settings if empty.", ToolEffect.SCREEN_CAPTURE, emptyMap()),
         spec("capture_window", "Capture the user's selected window and present its PNG. Requires app and OS permission. Never captures the entire display; pixels are not sent as model vision input.", ToolEffect.SCREEN_CAPTURE, emptyMap()),
     ) else emptyList()
@@ -127,6 +138,7 @@ class BuiltinTools(
                     })
                 }
                 "create_file" -> success(workspace.create(args.str("path"), args.str("content")))
+                "generate_image" -> generateImage(args, context)
                 "create_directory" -> workspace.createDirectory(args.str("path"))
                 "move_file" -> success(workspace.move(args.str("path"), args.str("snapshot_id"), args.str("destination")))
                 "delete_file" -> success(workspace.delete(args.str("path"), args.str("snapshot_id")))
@@ -176,6 +188,51 @@ class BuiltinTools(
     }
 
     private inline fun <reified T> success(value: T) = ToolResult(true, json.encodeToJsonElement(value))
+
+    /**
+     * Generates (or edits) one image and stores it as a new workspace file through the undoable binary create.
+     * Everything that can be checked locally is checked before the slow request: path, size, reference and quota.
+     */
+    private suspend fun generateImage(args: JsonObject, context: ToolContext): ToolResult {
+        val service = images ?: throw ToolException("UNSUPPORTED", "No image model is configured")
+        val prompt = args.str("prompt").trim().ifEmpty { throw ToolException("INVALID_ARGUMENTS", "prompt must not be empty") }
+        val path = args.str("path")
+        val extension = path.substringAfterLast('.', "").lowercase()
+        if (extension !in IMAGE_EXTENSIONS.keys) throw ToolException("INVALID_ARGUMENTS", "path must end in .png, .jpg, .jpeg or .webp", "Use a path like images/logo.png")
+        if (runCatching { workspace.describeFile(path) }.isSuccess) throw ToolException("ALREADY_EXISTS", "Destination already exists", "Choose a new file name, e.g. add -2 before the extension")
+        val size = args.str("size", DEFAULT_IMAGE_SIZE)
+        if (!IMAGE_SIZE.matches(size)) throw ToolException("INVALID_ARGUMENTS", "size must look like 1024x1024")
+        val reference = args.optionalString("reference_image")?.takeIf { it.isNotBlank() }?.let { loadReference(it, context.sessionId) }
+        if ((imagesPerRun[context.runId] ?: 0) >= MAX_IMAGES_PER_RUN)
+            throw ToolException("LIMIT_REACHED", "At most $MAX_IMAGES_PER_RUN images per turn", "Show the user what you have and ask before making more")
+        imagesPerRun.merge(context.runId, 1, Int::plus)
+        val started = System.nanoTime()
+        val image = service.generate(prompt, size, reference)
+        val seconds = (System.nanoTime() - started) / 1_000_000_000.0
+        // The file type follows the bytes the model returned; a mismatching extension is corrected and reported.
+        val target = if (IMAGE_EXTENSIONS[extension] == image.mimeType) path
+            else path.substringBeforeLast('.') + "." + IMAGE_EXTENSIONS.entries.first { it.value == image.mimeType }.key
+        val change = workspace.createBinary(target, image.bytes)
+        val presentation = workspace.describeFile(change.path)
+        val dimensions = pngSize(image.bytes)
+        return ToolResult(true, JsonObject(json.encodeToJsonElement(change).jsonObject + buildJsonObject {
+            put("file", json.encodeToJsonElement(presentation))
+            put("model", service.model); put("size", size); put("edited", reference != null)
+            dimensions?.let { put("width", it.first); put("height", it.second) }
+            put("bytes", image.bytes.size); put("seconds", "%.1f".format(java.util.Locale.ROOT, seconds).toDouble())
+            if (target != path) put("note", "Saved as ${change.path}: the model returned ${image.mimeType}")
+            put("model_can_view", false)
+        }))
+    }
+
+    /** A reference is an attachment the user gave (by artifact_id) or an image file in the project; nothing else is sent. */
+    private suspend fun loadReference(value: String, sessionId: String): ImageData {
+        if (images?.supportsEditing != true) throw ToolException("UNSUPPORTED", "The image model cannot edit images", "Generate a new image from a text prompt instead")
+        attachmentImages?.takeIf { ARTIFACT_ID.matches(value) }?.load(sessionId, value)?.let { return it }
+        val bytes = workspace.readBinary(value, MAX_REFERENCE_BYTES)
+        val mime = imageMimeType(bytes) ?: throw ToolException("NOT_AN_IMAGE", "reference_image is not a PNG, JPEG or WebP image", "Pass an image file path or an image attachment's artifact_id")
+        return ImageData(bytes, mime)
+    }
     /**
      * Literal, case-insensitive line search through an artifact, read in 64 KiB chunks so a line split across chunks is
      * still found. Returns at most [MAX_ARTIFACT_MATCHES] lines with their 1-based number and character offset.
@@ -250,4 +307,10 @@ class BuiltinTools(
 }
 
 private const val ARTIFACT_CHUNK = 65_536
+private const val MAX_IMAGES_PER_RUN = 4
+private const val DEFAULT_IMAGE_SIZE = "1024x1024"
+private const val MAX_REFERENCE_BYTES = 20 * 1_048_576
+private val IMAGE_EXTENSIONS = linkedMapOf("png" to "image/png", "jpg" to "image/jpeg", "jpeg" to "image/jpeg", "webp" to "image/webp")
+private val ARTIFACT_ID = Regex("[0-9a-fA-F-]{16,64}")
+private val IMAGE_SIZE = Regex("[0-9]{2,4}x[0-9]{2,4}")
 private const val MAX_ARTIFACT_MATCHES = 40

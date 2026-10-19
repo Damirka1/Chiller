@@ -3,6 +3,7 @@ package dev.chiller.providers
 import dev.chiller.contracts.ImageData
 import dev.chiller.contracts.ImageService
 import dev.chiller.contracts.ToolException
+import dev.chiller.contracts.imageMimeType
 import io.ktor.client.HttpClient
 import io.ktor.client.plugins.HttpRequestTimeoutException
 import io.ktor.client.plugins.timeout
@@ -127,21 +128,6 @@ class OpenAiImageService(
 
     /** A failure worth one more attempt after [delayMs]: nothing was produced and the request is stateless. */
     private class Retry(val error: ToolException, val delayMs: Long) : Exception(error.message)
-}
-
-/** PNG, JPEG or WebP by signature; null for anything else. */
-fun imageMimeType(bytes: ByteArray): String? = when {
-    bytes.size >= 8 && bytes[0] == 0x89.toByte() && bytes[1] == 'P'.code.toByte() && bytes[2] == 'N'.code.toByte() && bytes[3] == 'G'.code.toByte() -> "image/png"
-    bytes.size >= 3 && bytes[0] == 0xFF.toByte() && bytes[1] == 0xD8.toByte() && bytes[2] == 0xFF.toByte() -> "image/jpeg"
-    bytes.size >= 12 && String(bytes, 0, 4, Charsets.US_ASCII) == "RIFF" && String(bytes, 8, 4, Charsets.US_ASCII) == "WEBP" -> "image/webp"
-    else -> null
-}
-
-/** Width and height from a PNG header; null for other formats or a damaged header. */
-fun pngSize(bytes: ByteArray): Pair<Int, Int>? {
-    if (imageMimeType(bytes) != "image/png" || bytes.size < 24) return null
-    fun int(offset: Int) = (bytes[offset].toInt() and 0xFF shl 24) or (bytes[offset + 1].toInt() and 0xFF shl 16) or (bytes[offset + 2].toInt() and 0xFF shl 8) or (bytes[offset + 3].toInt() and 0xFF)
-    return (int(16) to int(20)).takeIf { it.first > 0 && it.second > 0 }
 }
 
 private fun extensionOf(mime: String) = when (mime) { "image/jpeg" -> "jpg"; "image/webp" -> "webp"; else -> "png" }
