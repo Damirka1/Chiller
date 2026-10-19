@@ -69,6 +69,26 @@ class WebServiceTest {
         assertTrue(transport.uris.single().rawQuery.contains("Kotlin+tools"))
     }
 
+    @Test fun snippetsAreKeptAndAnEmptyPageWithoutANoticeIsAnError() = runBlocking {
+        val html = """<html><div class="result"><a class="result__a" href="https://weather.example/temirtau">Temirtau weather</a>
+            <a class="result__snippet" href="https://weather.example/temirtau">Today <b>12</b>° / night 2°</a></div></html>"""
+        val row = BoundedWebService(FixtureTransport(WebResponse(200, "text/html", null, html.toByteArray())), publicResolver)
+            .search("weather").data!!.jsonObject.getValue("results").jsonArray.single().jsonObject
+        assertEquals("Today 12° / night 2°", row.getValue("snippet").jsonPrimitive.content)
+        val empty = assertFailsWith<dev.chiller.contracts.ToolException> {
+            BoundedWebService(FixtureTransport(WebResponse(200, "text/html", null, "<html><body>Loading…</body></html>".toByteArray())), publicResolver).search("weather")
+        }
+        assertEquals("SEARCH_UNAVAILABLE", empty.code)
+        val none = BoundedWebService(FixtureTransport(WebResponse(200, "text/html", null, "<html><div class=\"no-results\">No results found for x</div></html>".toByteArray())), publicResolver).search("x")
+        assertTrue(none.ok && none.data!!.jsonObject.getValue("results").jsonArray.isEmpty())
+    }
+
+    @Test fun scriptRenderedPagesAreFlagged() = runBlocking {
+        val html = "<html><head><title>Weather</title><script>" + "x".repeat(80_000) + "</script></head><body>Menu Sign in</body></html>"
+        val page = BoundedWebService(FixtureTransport(WebResponse(200, "text/html", null, html.toByteArray())), publicResolver).fetch("https://weather.example/today")
+        assertTrue("rendered by scripts" in page.data!!.jsonObject.getValue("note").jsonPrimitive.content)
+    }
+
     @Test fun acceptsBoundedPlainTextAndJsonWithoutHtmlRewriting() = runBlocking {
         val plain = "<script>plain text stays literal</script>".toByteArray()
         val json = "{\"html\":\"<script>json stays data</script>\",\"ok\":true}".toByteArray()

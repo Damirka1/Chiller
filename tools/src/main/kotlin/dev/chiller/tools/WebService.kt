@@ -60,6 +60,10 @@ class BoundedWebService(
                 found += buildJsonObject { put("title", hit.title.take(300)); put("url", safe.toASCIIString()); put("snippet", hit.snippet.take(700)) }
                 if (found.size > limit) break
             }
+            // An empty page without DuckDuckGo's own "no results" notice is a block or a changed layout, not an answer.
+            if (found.isEmpty() && !DdgResultParser.saysNoResults(page.text))
+                throw ToolException("SEARCH_UNAVAILABLE", "Search returned a page without results or a 'no results' notice; the provider may be limiting requests",
+                    "Retry once with a different query, or web_fetch a site you know. Do not treat this as 'nothing exists'.")
             val truncated = page.truncated || found.size > limit
             val results = found.take(limit)
             ToolResult(true, buildJsonObject {
@@ -79,9 +83,13 @@ class BoundedWebService(
         } else FetchedText("", page.text)
         val content = extracted.content.take(MAX_OUTPUT_CHARS)
         val truncated = page.truncated || extracted.content.length > MAX_OUTPUT_CHARS
+        // A big page with little readable text is drawn by scripts: its data is not in this text.
+        val scriptRendered = isHtml(page.contentType) && extracted.content.trim().length < THIN_TEXT_CHARS && page.text.length > extracted.content.length * 20
         return ToolResult(true, buildJsonObject {
             put("url", page.uri.toASCIIString()); put("title", extracted.title.take(300)); put("content", content)
             put("content_type", page.contentType.take(MAX_CONTENT_TYPE_CHARS)); put("truncated", truncated)
+            if (scriptRendered) put("note", "Little readable text: this page is rendered by scripts, so its data (numbers, tables) is not in this content. " +
+                "Do not infer it; try another source or tell the user it was not found.")
         }, truncated = truncated)
     }
 
@@ -164,20 +172,36 @@ class BoundedWebService(
 
     private object DdgResultParser {
         fun isChallenge(html: String) = Regex("(?i)(captcha|unusual traffic|automated requests)").containsMatchIn(html.take(100_000))
+        /** DuckDuckGo's own notice that the query matched nothing. */
+        fun saysNoResults(html: String) = Regex("(?i)(class=\"[^\"]*no-results|No results found|No more results)").containsMatchIn(html.take(200_000))
         fun parse(html: String): List<SearchHit> {
             val hits = mutableListOf<SearchHit>()
             val callback = object : HTMLEditorKit.ParserCallback() {
                 var active = false
                 var href = ""
                 var title = StringBuilder()
+                // The snippet follows its result's title link; it often carries the answer itself (a temperature, a version).
+                var snippetTag: HTML.Tag? = null
+                var snippet = StringBuilder()
                 override fun handleStartTag(tag: HTML.Tag, attrs: MutableAttributeSet, pos: Int) {
-                    if (tag == HTML.Tag.A && attrs.getAttribute(HTML.Attribute.CLASS)?.toString().orEmpty().split(' ').any { it == "result__a" }) {
+                    val classes = attrs.getAttribute(HTML.Attribute.CLASS)?.toString().orEmpty().split(' ')
+                    if (tag == HTML.Tag.A && classes.any { it == "result__a" }) {
                         active = true; href = attrs.getAttribute(HTML.Attribute.HREF)?.toString().orEmpty(); title = StringBuilder()
+                    } else if (snippetTag == null && classes.any { it == "result__snippet" } && hits.isNotEmpty()) {
+                        snippetTag = tag; snippet = StringBuilder()
                     }
                 }
-                override fun handleText(data: CharArray, pos: Int) { if (active) title.append(data) }
+                override fun handleText(data: CharArray, pos: Int) {
+                    if (active) title.append(data)
+                    else if (snippetTag != null) snippet.append(data)
+                }
                 override fun handleEndTag(tag: HTML.Tag, pos: Int) {
                     if (tag == HTML.Tag.A && active) { if (href.isNotBlank() && title.isNotBlank()) hits += SearchHit(title.toString().trim(), href, ""); active = false }
+                    else if (tag == snippetTag) {
+                        val last = hits.removeAt(hits.lastIndex)
+                        hits += last.copy(snippet = snippet.toString().replace(Regex("\\s+"), " ").trim())
+                        snippetTag = null
+                    }
                 }
             }
             ParserDelegator().parse(StringReader(html), callback, true)
@@ -244,3 +268,5 @@ internal object DisabledWebService : WebService {
     override suspend fun search(query: String, limit: Int): ToolResult = disabled()
     override suspend fun fetch(url: String): ToolResult = disabled()
 }
+/** Below this much readable text a large HTML page is treated as script-rendered. */
+private const val THIN_TEXT_CHARS = 2_500
