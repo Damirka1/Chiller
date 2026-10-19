@@ -6,6 +6,7 @@ import dev.chiller.contracts.InteractionBroker
 import dev.chiller.contracts.UserQuestion
 import dev.chiller.providers.ChatCompletionsProfile
 import dev.chiller.providers.ChatCompletionsProvider
+import dev.chiller.providers.useSystemTrust
 import dev.chiller.runtime.LocalProcessService
 import dev.chiller.sessions.JsonlEventStore
 import dev.chiller.sessions.LocalArtifactStore
@@ -60,6 +61,7 @@ fun main() = runBlocking {
         override suspend fun ask(question: UserQuestion) = error("Live smoke does not answer questions")
     })
     val http = HttpClient(CIO) {
+        engine { useSystemTrust() }
         followRedirects = false
         install(HttpTimeout) { connectTimeoutMillis = 20_000; socketTimeoutMillis = 180_000; requestTimeoutMillis = 300_000 }
     }

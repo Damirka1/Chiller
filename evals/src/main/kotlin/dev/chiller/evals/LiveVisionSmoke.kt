@@ -6,6 +6,7 @@ import dev.chiller.contracts.ModelEvent
 import dev.chiller.contracts.ModelRequest
 import dev.chiller.providers.ChatCompletionsProfile
 import dev.chiller.providers.ChatCompletionsProvider
+import dev.chiller.providers.useSystemTrust
 import dev.chiller.providers.ImageInput
 import dev.chiller.providers.ModelImage
 import io.ktor.client.HttpClient
@@ -52,7 +53,7 @@ fun main() = runBlocking {
     val base = if (host == "api.deepseek.com") ChatCompletionsProfile.deepSeekFlash(baseUrl, model)
         else ChatCompletionsProfile("generic", baseUrl, model, requiresApiKey = !loopback)
     val profile = base.copy(imageInput = ImageInput { ModelImage("image/png", Base64.getEncoder().encodeToString(png)) })
-    val http = HttpClient(CIO) { install(HttpTimeout) { requestTimeoutMillis = 60_000 } }
+    val http = HttpClient(CIO) { engine { useSystemTrust() }; install(HttpTimeout) { requestTimeoutMillis = 60_000 } }
     val started = System.nanoTime()
     try {
         val message = AgentMessage("user", "What number is written in the attached image? Reply with the digits only.",

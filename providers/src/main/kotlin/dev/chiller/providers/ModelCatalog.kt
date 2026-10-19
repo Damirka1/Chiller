@@ -48,8 +48,8 @@ class KtorModelCatalogClient(private val client: HttpClient) : ModelCatalogClien
         throw cancelled
     } catch (_: HttpRequestTimeoutException) {
         failure("PROVIDER_TIMEOUT", "Provider request timed out")
-    } catch (_: Exception) {
-        failure("PROVIDER_TRANSPORT_ERROR", "Provider connection failed")
+    } catch (error: Exception) {
+        if (isTlsFailure(error)) failure("PROVIDER_TLS_ERROR", TLS_FAILURE_MESSAGE) else failure("PROVIDER_TRANSPORT_ERROR", "Provider connection failed")
     }
 
     private suspend fun read(response: HttpResponse): ModelCatalogResult {

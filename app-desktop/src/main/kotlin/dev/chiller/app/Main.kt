@@ -24,7 +24,13 @@ import java.awt.FileDialog
 import java.awt.Frame
 import javax.swing.JFileChooser
 
-fun main() = application {
+fun main() {
+    // The JDK's java.net.http clients (web tools) trust the system certificate store as the provider clients do.
+    javax.net.ssl.SSLContext.setDefault(dev.chiller.providers.SystemTrust.sslContext)
+    chillerApplication()
+}
+
+private fun chillerApplication() = application {
     val scope = rememberCoroutineScope()
     val directory = remember { System.getenv("CHILLER_DATA_DIR")?.let(Path::of) ?: if (java.lang.Boolean.getBoolean("chiller.offlinePreview")) Path.of(System.getProperty("java.io.tmpdir"), "chiller-preview") else Path.of(System.getProperty("user.home"), ".chiller") }
     val controller = remember { DesktopController(directory, if (java.lang.Boolean.getBoolean("chiller.offlinePreview")) null else LocalCredentials.load(),

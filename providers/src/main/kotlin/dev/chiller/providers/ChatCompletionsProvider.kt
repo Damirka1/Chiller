@@ -267,8 +267,9 @@ class ChatCompletionsProvider private constructor(
             outcome = AttemptOutcome.Failure(ModelEvent.Failed("PROVIDER_TIMEOUT", "Provider request timed out"), retryable = true)
         } catch (_: TooLongLineException) {
             outcome = AttemptOutcome.Failure(ModelEvent.Failed("RESPONSE_TOO_LARGE", "Provider response exceeded the streaming size limit"), retryable = false)
-        } catch (_: Exception) {
-            outcome = AttemptOutcome.Failure(ModelEvent.Failed("PROVIDER_TRANSPORT_ERROR", "Provider connection failed"), retryable = true)
+        } catch (error: Exception) {
+            outcome = if (isTlsFailure(error)) AttemptOutcome.Failure(ModelEvent.Failed("PROVIDER_TLS_ERROR", TLS_FAILURE_MESSAGE), retryable = false)
+                else AttemptOutcome.Failure(ModelEvent.Failed("PROVIDER_TRANSPORT_ERROR", "Provider connection failed"), retryable = true)
         }
         return outcome ?: AttemptOutcome.Failure(ModelEvent.Failed("PROVIDER_TRANSPORT_ERROR", "Provider connection failed"), retryable = true)
     }
@@ -345,6 +346,7 @@ private const val MAX_SSE_FRAME_CHARS = 1_048_576
 /** Counted, not stored: room for a reply at a model's full output limit (hundreds of thousands of tokens). */
 private const val MAX_SSE_RESPONSE_CHARS = 67_108_864
 private const val MAX_ATTEMPTS = 3
+const val TLS_FAILURE_MESSAGE = "TLS connection failed: the provider certificate is not trusted by the JDK or the system certificate store"
 /** Longest Retry-After the provider waits out before resending; a gateway quota usually resets within a minute. */
 private const val MAX_RETRY_AFTER_MS = 120_000L
 /** Shorter backoffs pass silently; longer ones are announced so the turn does not look frozen. */

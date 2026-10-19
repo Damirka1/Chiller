@@ -1,5 +1,7 @@
 package dev.chiller.app.di
 
+import dev.chiller.providers.isTlsFailure
+import dev.chiller.providers.useSystemTrust
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.cio.CIO
 import io.ktor.client.plugins.HttpTimeout
@@ -35,6 +37,7 @@ class KtorConnectionChecker(
     private val deepSeekHosts: Set<String> = setOf("api.deepseek.com"),
 ) : ConnectionChecker, AutoCloseable {
     private val client = HttpClient(CIO) {
+        engine { useSystemTrust() }
         followRedirects = false
         install(HttpTimeout) {
             connectTimeoutMillis = timeoutMillis
@@ -92,8 +95,9 @@ class KtorConnectionChecker(
             }
         } catch (cancelled: CancellationException) {
             throw cancelled
-        } catch (_: Exception) {
-            ConnectionCheckResult(false, "Сетевая ошибка или истекло время ожидания")
+        } catch (error: Exception) {
+            if (isTlsFailure(error)) ConnectionCheckResult(false, "Сертификат сервера не прошёл проверку TLS: его нет ни в хранилище JDK, ни в системном хранилище")
+            else ConnectionCheckResult(false, "Сетевая ошибка или истекло время ожидания")
         }
     }
 

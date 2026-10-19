@@ -3,6 +3,7 @@ package dev.chiller.evals
 import dev.chiller.agent.ModelProfiles
 import dev.chiller.providers.ChatCompletionsProfile
 import dev.chiller.providers.ChatCompletionsProvider
+import dev.chiller.providers.useSystemTrust
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.cio.CIO
 import io.ktor.client.plugins.HttpTimeout
@@ -58,6 +59,7 @@ suspend fun runEvalSuite(spec: SuiteSpec, onResult: suspend (EvalResult) -> Unit
         else ChatCompletionsProfile("generic", spec.baseUrl, spec.model, requiresApiKey = !loopback)).withExtras(extras)
     Files.createDirectories(spec.outDir.resolve("traces"))
     val http = HttpClient(CIO) {
+        engine { useSystemTrust() }
         followRedirects = false
         install(HttpTimeout) { connectTimeoutMillis = 20_000; socketTimeoutMillis = 180_000; requestTimeoutMillis = 300_000 }
     }

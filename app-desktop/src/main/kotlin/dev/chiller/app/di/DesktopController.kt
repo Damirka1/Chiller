@@ -180,6 +180,7 @@ class DesktopController(
     private val sendReceipts = LinkedHashMap<String, SendReceipt>()
     private val sendReceiptsLock = Any()
     private val http = HttpClient(CIO) {
+        engine { useSystemTrust() }
         followRedirects = false
         install(HttpTimeout) { connectTimeoutMillis = 15_000; socketTimeoutMillis = 120_000; requestTimeoutMillis = 600_000 }
     }
