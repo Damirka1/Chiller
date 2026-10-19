@@ -2,7 +2,7 @@
 
 Версии фиксируются в корневом и модульных `build.gradle.kts`, Gradle — в `gradle/wrapper/gradle-wrapper.properties`.
 
-Основные компоненты: Kotlin 2.3.21, Compose 1.10.3, coroutines 1.10.2, serialization 1.9.0, Ktor 3.4.1 и JNA 5.18.1. JNA используется для macOS Keychain; системные frameworks предоставляет macOS. Только для тестов: Compose UI Test той же версии 1.10.3 (Apache-2.0) — формы настроек проверяются настоящим вводом текста; в приложение не входит. Иконка Chiller создана для проекта; генераторы ресурсов не являются runtime-зависимостями.
+Основные компоненты: Kotlin 2.3.21, Compose 1.10.3, coroutines 1.10.2, serialization 1.9.0, Ktor 3.4.1 и JNA 5.18.1. JNA используется для системного хранилища ключей: macOS Keychain (Security.framework) и Диспетчер учётных данных Windows (Advapi32); системные библиотеки предоставляет ОС. Только для тестов: Compose UI Test той же версии 1.10.3 (Apache-2.0) — формы настроек проверяются настоящим вводом текста; в приложение не входит. Иконка Chiller создана для проекта; генераторы ресурсов не являются runtime-зависимостями.
 
 JetBrains Runtime API 1.10.1 (`org.jetbrains.runtime:jbr-api`, Apache-2.0) даёт собственный заголовок окна на Windows. Установщик для Windows собирается с JetBrains Runtime 21 (GPLv2 with Classpath Exception, как OpenJDK) и включает его как среду выполнения; установщик для macOS по-прежнему использует Temurin 21. На JVM без JetBrains Runtime API сообщает о недоступности, и используется стандартная рамка окна.
 
