@@ -91,6 +91,12 @@ data class ProviderModel(
     val vision: Boolean? = null,
     /** Can produce reasoning, as the listing's capabilities state it; null when it does not say. */
     val reasoning: Boolean? = null,
+    /** Answers chat completions; false only when the listing shows it cannot (an image-only model), null when silent. */
+    val chat: Boolean? = null,
+    /** Generates images from text (capability or /images/generations endpoint); null when the listing is silent. */
+    val imageGeneration: Boolean? = null,
+    /** Edits a reference image (capability or /images/edits endpoint); null when the listing is silent. */
+    val imageEditing: Boolean? = null,
 )
 
 @Serializable

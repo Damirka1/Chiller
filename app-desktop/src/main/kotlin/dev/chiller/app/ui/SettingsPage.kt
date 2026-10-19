@@ -178,7 +178,7 @@ private fun ConnectionSection(data: SettingsData, actions: SettingsActions) {
                 Text(catalogLine(data.catalog, data.keyConfigured), color = c.faint, fontSize = 11.sp, modifier = Modifier.weight(1f))
                 ChillerControl("Загрузить список моделей", actions.refreshModels, icon = Icons.Outlined.Refresh, enabled = data.catalog.status != "loading")
             }
-            if (data.catalog.models.isNotEmpty()) ChipFlow(data.catalog.models.map { it.id }.take(24), model, data.catalog.models.associate { it.id to (it.displayName?.let { name -> "$name · ${it.id}" } ?: it.id) }) { model = it }
+            if (data.catalog.chatModels.isNotEmpty()) ChipFlow(data.catalog.chatModels.map { it.id }.take(24), model, data.catalog.chatModels.associate { it.id to (it.displayName?.let { name -> "$name · ${it.id}" } ?: it.id) }) { model = it }
         } else Text("Примените адрес и ключ, затем загрузите список моделей. ID заранее знать не нужно.", color = c.faint, fontSize = 11.sp)
         val keyHint = when {
             preset?.keyless == true || isLoopback(url) -> "Локальный сервер: ключ не нужен"

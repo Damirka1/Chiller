@@ -111,7 +111,10 @@ data class ModelCatalogState(
     val message: String = "",
     val fetchedAt: String? = null,
     val stale: Boolean = false,
-)
+) {
+    /** Models that can hold a conversation; image-only models are listed for their own setting, never for chat. */
+    val chatModels: List<ProviderModel> get() = models.filter { it.chat != false }
+}
 data class DesktopState(val run: RunState = RunState(), val sessions: List<SessionInfo> = emptyList(), val sessionId: String = newId(), val settings: DesktopSettings = DesktopSettings(), val apiKeyConfigured: Boolean = false, val allowProcesses: Boolean = false, val exportContent: String? = null, val exportFormat: String = "markdown", val exportSessionId: String? = null, val uiPreferences: UiPreferences = UiPreferences(), val connection: ConnectionState = ConnectionState(), val catalog: ModelCatalogState = ModelCatalogState(), val sessionWorkspaces: Map<String, String> = emptyMap(), val subagents: List<SubagentSnapshot> = emptyList(), val captureTargets: List<CaptureTarget> = emptyList(), val selectedCaptureTarget: String? = null, val activeProfile: String? = null, val verify: VerifyState = VerifyState(), val undoneChanges: Set<String> = emptySet(), val outside: OutsideChanges? = null)
 
 class DesktopController(
@@ -224,7 +227,7 @@ class DesktopController(
 
     fun configuredModels(): List<String> {
         val settings = state.value.settings
-        val discovered = state.value.catalog.models.map { it.id }
+        val discovered = state.value.catalog.chatModels.map { it.id }
         return (listOf(settings.model) + discovered + settings.rememberedModels[normalizeEndpoint(settings.baseUrl)].orEmpty()).distinct().take(20)
     }
 

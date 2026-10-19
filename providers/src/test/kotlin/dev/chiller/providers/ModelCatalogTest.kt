@@ -67,6 +67,24 @@ class ModelCatalogTest {
         }
     }
 
+    @Test fun imageModelsAreToldApartFromChatModels() = runBlocking {
+        Fixture { exchange, _ ->
+            sendJson(exchange, """
+                {"object":"list","data":[
+                  {"id":"flux-2-klein","name":"Flux 2 Klein","capabilities":["image_generation","image_editing"],"input_modalities":["text","image"],
+                   "output_modalities":["image"],"supported_endpoints":["/v1/images/generations","/v1/images/edits"],"limits":{"max_images_per_request":1}},
+                  {"id":"quasar","capabilities":["chat_completions","vision","tools","reasoning"],"output_modalities":["text"],"supported_endpoints":["/v1/chat/completions"]},
+                  {"id":"plain"}
+                ]}
+            """.trimIndent())
+        }.use { fixture ->
+            val (flux, quasar, plain) = fixture.discover().models
+            assertEquals(false, flux.chat); assertEquals(true, flux.imageGeneration); assertEquals(true, flux.imageEditing)
+            assertEquals(true, quasar.chat); assertEquals(false, quasar.imageGeneration); assertEquals(false, quasar.imageEditing)
+            assertNull(plain.chat, "a bare OpenAI-style entry stays usable for chat"); assertNull(plain.imageGeneration)
+        }
+    }
+
     @Test fun baseWithoutVersionRequestsModelsAndVersionedBaseRequestsV1Models() = runBlocking {
         Fixture { exchange, _ -> sendJson(exchange, """{"data":[]}""") }.use { fixture ->
             fixture.discover()

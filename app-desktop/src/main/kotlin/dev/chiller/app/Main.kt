@@ -157,7 +157,7 @@ private fun chillerApplication() = application {
             verify = state.verify, onDismissVerify = controller::dismissVerify, undoneChanges = state.undoneChanges, outsideChanges = state.outside,
             comparison = dev.chiller.app.ui.ComparisonModel(
                 comparisonState, state.settings.baseUrl,
-                (listOf(state.settings.model) + state.catalog.models.map { it.id } + controller.configuredModels()).filter { it.isNotBlank() }.distinct(),
+                (listOf(state.settings.model) + state.catalog.chatModels.map { it.id } + controller.configuredModels()).filter { it.isNotBlank() }.distinct(),
                 dev.chiller.evals.EVAL_TASK_INDEX,
                 dev.chiller.app.ui.ComparisonActions(
                     start = { sides, tasks, repeats -> controller.startComparison(sides, tasks, repeats) },

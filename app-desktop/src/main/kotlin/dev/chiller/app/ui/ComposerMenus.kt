@@ -161,7 +161,7 @@ internal fun ModelPickerContent(
 ) {
     val c = LocalChillerPalette.current
     var filter by remember { mutableStateOf("") }
-    val discovered = catalog.models.map { it.id }
+    val discovered = catalog.chatModels.map { it.id }
     val known = (listOf(model) + discovered + models).filter { it.isNotBlank() }.distinct().take(40)
     val query = filter.trim()
     val shown = if (query.isEmpty()) known else known.filter { id -> id.contains(query, true) || modelLabel(id).contains(query, true) || catalog.models.firstOrNull { it.id == id }?.displayName?.contains(query, true) == true }
@@ -209,7 +209,7 @@ internal fun ModelPickerContent(
             }
             when {
                 shown.isEmpty() && known.isNotEmpty() -> EmptyNote("Ничего не найдено по запросу «$query»")
-                catalog.status == "ready" && catalog.models.isEmpty() -> EmptyNote("Провайдер не вернул ни одной модели. Задайте ID вручную в настройках.")
+                catalog.status == "ready" && catalog.chatModels.isEmpty() -> EmptyNote("Провайдер не вернул ни одной модели. Задайте ID вручную в настройках.")
             }
         }
         MenuDivider()
@@ -242,7 +242,7 @@ internal fun catalogLine(catalog: ModelCatalogState, configured: Boolean): Strin
     "loading" -> "Загружаю список моделей…"
     "failed" -> catalog.message.ifBlank { "Список моделей не получен" }
     "ready" -> {
-        val base = if (catalog.models.isEmpty()) "Список пуст — задайте ID вручную" else "Доступно моделей: ${catalog.models.size}"
+        val base = if (catalog.chatModels.isEmpty()) "Список пуст — задайте ID вручную" else "Доступно моделей: ${catalog.chatModels.size}"
         val time = catalog.fetchedAt?.let(::formatCheckTime)
         val line = if (time.isNullOrBlank()) base else "$base · $time"
         if (catalog.stale) "устарел · $line" else line

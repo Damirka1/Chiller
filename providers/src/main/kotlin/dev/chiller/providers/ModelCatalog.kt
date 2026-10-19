@@ -85,6 +85,8 @@ class KtorModelCatalogClient(private val client: HttpClient) : ModelCatalogClien
             // Input modalities are the precise statement about images; capabilities are the fallback.
             val capabilities = names(entry["capabilities"])
             val inputs = names(entry["input_modalities"]) ?: names((entry["architecture"] as? JsonObject)?.get("input_modalities"))
+            val outputs = names(entry["output_modalities"]) ?: names((entry["architecture"] as? JsonObject)?.get("output_modalities"))
+            val endpoints = names(entry["supported_endpoints"])
             models[id] = ProviderModel(
                 id = id,
                 displayName = displayName(entry["name"]),
@@ -93,6 +95,9 @@ class KtorModelCatalogClient(private val client: HttpClient) : ModelCatalogClien
                 maxOutputTokens = positiveInt(entry["max_output_tokens"]),
                 vision = inputs?.let { "image" in it } ?: capabilities?.let { "vision" in it },
                 reasoning = capabilities?.let { "reasoning" in it },
+                chat = chatSupport(capabilities, outputs, endpoints),
+                imageGeneration = declared(capabilities, "image_generation", endpoints, "/images/generations"),
+                imageEditing = declared(capabilities, "image_editing", endpoints, "/images/edits"),
             )
         }
         return ModelCatalogResult(models = models.values.toList())
@@ -122,6 +127,23 @@ private fun displayName(node: JsonElement?): String? =
 private fun names(node: JsonElement?): Set<String>? {
     val array = node as? JsonArray ?: return null
     return array.take(MAX_NAMES).mapNotNull { (it as? JsonPrimitive)?.takeIf { p -> p.isString }?.content?.trim()?.lowercase()?.take(MAX_NAME_CHARS) }.toSet()
+}
+
+/**
+ * Chat is assumed unless the listing shows otherwise: no text output, or endpoints that exclude chat completions.
+ * Null when the listing says nothing either way, which keeps a plain OpenAI-style catalog usable.
+ */
+private fun chatSupport(capabilities: Set<String>?, outputs: Set<String>?, endpoints: Set<String>?): Boolean? = when {
+    outputs != null && "text" !in outputs -> false
+    endpoints != null && endpoints.none { it.endsWith("/chat/completions") } -> false
+    capabilities?.contains("chat_completions") == true || endpoints != null || outputs != null -> true
+    else -> null
+}
+
+/** True when a capability or an endpoint declares the feature, false when the listing has those fields without it. */
+private fun declared(capabilities: Set<String>?, capability: String, endpoints: Set<String>?, endpoint: String): Boolean? {
+    if (capabilities == null && endpoints == null) return null
+    return capabilities?.contains(capability) == true || endpoints?.any { it.endsWith(endpoint) } == true
 }
 
 private fun positiveInt(node: JsonElement?): Int? {
