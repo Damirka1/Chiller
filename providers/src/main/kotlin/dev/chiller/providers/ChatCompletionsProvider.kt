@@ -62,6 +62,14 @@ data class ChatCompletionsProfile(
                 put("thinking", buildJsonObject { put("type", if (enabled) "enabled" else "disabled") })
             } },
         )
+
+        /**
+         * Thinking switch for chat templates that take `enable_thinking` (Gemma 4, Qwen 3 on vLLM/SGLang). Sent both
+         * ways: Qwen templates think by default. A user extra with its own chat_template_kwargs replaces this.
+         */
+        val chatTemplateThinking: (Boolean) -> JsonObject = { enabled ->
+            buildJsonObject { put("chat_template_kwargs", buildJsonObject { put("enable_thinking", enabled) }) }
+        }
     }
 }
 
@@ -242,6 +250,15 @@ class ChatCompletionsProvider private constructor(
                                 outcome = AttemptOutcome.Failure(ModelEvent.Failed("MALFORMED_STREAM", "Provider sent malformed streaming data"), retryable = false)
                                 return@execute
                             }
+                            // A gateway reports a failure after the response started as an SSE event with an error object.
+                            (parsed["error"] as? JsonObject)?.takeIf { parsed["choices"] == null }?.let { error ->
+                                val text = error.toString()
+                                outcome = AttemptOutcome.Failure(
+                                    ModelEvent.Failed("PROVIDER_STREAM_ERROR", "Provider reported an error in the stream" + (providerErrorMessage(parsed.toString())?.let { ": $it" } ?: "")),
+                                    retryable = false, outputLimit = parseOutputLimit(text), requestOutputLimit = parseRequestOutputLimit(text),
+                                )
+                                return@execute
+                            }
                             val chunk = accumulator.consume(parsed)
                             if (accumulator.isTooLarge()) {
                                 outcome = AttemptOutcome.Failure(ModelEvent.Failed("RESPONSE_TOO_LARGE", "Provider response exceeded the streaming size limit"), retryable = false)
@@ -346,6 +363,8 @@ private const val MAX_SSE_FRAME_CHARS = 1_048_576
 /** Counted, not stored: room for a reply at a model's full output limit (hundreds of thousands of tokens). */
 private const val MAX_SSE_RESPONSE_CHARS = 67_108_864
 private const val MAX_ATTEMPTS = 3
+/** Delta fields that carry reasoning text on OpenAI-compatible servers: DeepSeek/SGLang/older vLLM, then vLLM 0.10+. */
+private val VISIBLE_REASONING_FIELDS = listOf("reasoning_content", "reasoning")
 const val TLS_FAILURE_MESSAGE = "TLS connection failed: the provider certificate is not trusted by the JDK or the system certificate store"
 /** Longest Retry-After the provider waits out before resending; a gateway quota usually resets within a minute. */
 private const val MAX_RETRY_AFTER_MS = 120_000L
@@ -384,7 +403,11 @@ private class StreamAccumulator(private val reasoningField: String?) {
         choice["finish_reason"]?.takeUnless { it is JsonNull }?.let { finishReason = it.jsonPrimitive.content }
         val delta = choice["delta"]?.jsonObject ?: return Delta()
         val text = delta["content"]?.let { if (it is JsonPrimitive && it.isString) it.content else null }
-        val why = reasoningField?.let { delta[it]?.let { item -> if (item is JsonPrimitive && item.isString) item.content else null } }
+        // Visible reasoning from the protocol field or the names OpenAI-compatible servers use (vLLM: "reasoning");
+        // only the protocol field is replayed.
+        val why = (listOfNotNull(reasoningField) + VISIBLE_REASONING_FIELDS).firstNotNullOfOrNull { field ->
+            delta[field]?.let { item -> if (item is JsonPrimitive && item.isString) item.content else null }
+        }
         if (text != null) content.append(text)
         if (why != null) reasoning.append(why)
         delta["tool_calls"]?.jsonArray?.forEach { item ->

@@ -878,7 +878,9 @@ class DesktopController(
         val modelProfile = effectiveProfile(options, modelOverride ?: s.settings.model, listed)
         val engineSession = s.sessionId
         val vision = if (visionEnabled(options, modelOverride ?: s.settings.model, listed)) ImageInput { id -> inputAttachments.modelImage(engineSession, id) } else null
-        val profile = baseProfile.withExtras(requestExtrasFor(modelProfile, options)).copy(imageInput = vision)
+        // A listed reasoning model on a generic endpoint takes the thinking switch through its chat template.
+        val thinkingProfile = if (listed?.reasoning == true && baseProfile.id == "generic") baseProfile.copy(thinkingOptions = ChatCompletionsProfile.chatTemplateThinking) else baseProfile
+        val profile = thinkingProfile.withExtras(requestExtrasFor(modelProfile, options)).copy(imageInput = vision)
         // The engine's provider is bound to its own endpoint's key, read at request time.
         val engineOrigin = originOf(s.settings.baseUrl)
         val provider = providerOverride ?: RunBudgetProvider(ChatCompletionsProvider(http, profile) { engineOrigin?.let { credentials[it] } }, options.effectiveMaxRequests, options.effectiveTotalOutputTokens)

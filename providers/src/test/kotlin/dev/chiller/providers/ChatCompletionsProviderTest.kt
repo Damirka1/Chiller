@@ -181,6 +181,43 @@ class ChatCompletionsProviderTest {
         } finally { client.close(); server.stop(0) }
     }
 
+    @Test fun vllmReasoningIsShownButNotReplayedAndThinkingGoesThroughTheChatTemplate() = runBlocking {
+        val bodies = mutableListOf<String>()
+        val server = testServer { exchange ->
+            bodies += exchange.requestBody.readBytes().toString(StandardCharsets.UTF_8)
+            sendSse(exchange, sse("""{"choices":[{"delta":{"reasoning":"weigh it"},"finish_reason":null}]}""",
+                """{"choices":[{"delta":{"content":"391"},"finish_reason":"stop"}]}""", "[DONE]"))
+        }
+        val client = HttpClient(CIO)
+        try {
+            val profile = ChatCompletionsProfile("generic", "http://127.0.0.1:${server.address.port}", "quasar", requiresApiKey = false,
+                thinkingOptions = ChatCompletionsProfile.chatTemplateThinking)
+            val provider = ChatCompletionsProvider(client, profile, emptyList()) { null }
+            val events = provider.stream(ModelRequest("quasar", listOf(AgentMessage("user", "17*23")), thinking = true)).toList()
+            assertEquals(listOf("weigh it"), events.filterIsInstance<ModelEvent.ReasoningDelta>().map { it.text })
+            val message = assertIs<ModelEvent.Completed>(events.last()).message
+            assertTrue(message.replay.isEmpty(), "optional reasoning is not protocol replay")
+            assertEquals("true", Json.parseToJsonElement(bodies[0]).jsonObject.getValue("chat_template_kwargs").jsonObject.getValue("enable_thinking").jsonPrimitive.content)
+            provider.stream(ModelRequest("quasar", listOf(AgentMessage("user", "x")), thinking = false)).toList()
+            assertEquals("false", Json.parseToJsonElement(bodies[1]).jsonObject.getValue("chat_template_kwargs").jsonObject.getValue("enable_thinking").jsonPrimitive.content)
+            // The user's own chat_template_kwargs wins over the switch.
+            val custom = ChatCompletionsProvider(client, profile.withExtras(buildJsonObject { put("chat_template_kwargs", buildJsonObject { put("custom", 1) }) }), emptyList()) { null }
+            custom.stream(ModelRequest("quasar", listOf(AgentMessage("user", "x")), thinking = true)).toList()
+            assertEquals("""{"custom":1}""", Json.parseToJsonElement(bodies[2]).jsonObject.getValue("chat_template_kwargs").toString())
+        } finally { client.close(); server.stop(0) }
+    }
+
+    @Test fun errorEventInTheStreamIsReportedWithTheProvidersText() = runBlocking {
+        val server = testServer { exchange ->
+            sendSse(exchange, sse("""{"choices":[{"delta":{"content":"par"},"finish_reason":null}]}""",
+                """{"error":{"message":"This model's maximum context length is 131072 tokens","type":"BadRequestError","param":null,"code":400}}"""))
+        }
+        val events = invoke(server)
+        val failure = assertIs<ModelEvent.Failed>(events.last(), "Stream events: $events")
+        assertEquals("PROVIDER_STREAM_ERROR", failure.code)
+        assertTrue("maximum context length is 131072" in failure.message, failure.message)
+    }
+
     @Test fun keylessProfileSendsNoAuthorizationAndKeyedProfileStillRequiresKey() = runBlocking {
         var authorization: String? = "unset"
         val server = testServer { exchange ->
