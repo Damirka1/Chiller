@@ -578,7 +578,7 @@ internal fun capabilityLine(tools: Set<String>): String {
 private const val MAX_PLAN_REMINDERS = 2
 
 /** Steps of this turn's latest update_plan that are neither done nor skipped; empty without a plan. */
-internal fun openPlanSteps(messages: List<AgentMessage>): List<String> {
+fun openPlanSteps(messages: List<AgentMessage>): List<String> {
     val lastUser = messages.indexOfLast { it.role == "user" }
     val call = messages.drop(lastUser + 1).asReversed().asSequence()
         .flatMap { it.toolCalls.asReversed().asSequence() }.firstOrNull { it.name == "update_plan" } ?: return emptyList()

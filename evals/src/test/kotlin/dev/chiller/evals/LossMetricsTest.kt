@@ -35,7 +35,7 @@ class LossMetricsTest {
         val summary = summarize(listOf(r, r.copy(attempt = 2))).single()
         assertEquals(4, summary.repeatedReads); assertEquals(2, summary.failedEdits); assertEquals(8000, summary.toolOutputChars)
         val md = renderMarkdown(EvalReport("m", "e", "s", 14, 2048, 2, listOf(r), listOf(summary)))
-        assertTrue("Losses: repeated reads 2 · failed edits 1 · tool output sent 4k chars" in md, md)
+        assertTrue("Losses: repeated reads 2 · failed edits 1 · tool output sent 4k chars · attempts ending with an open plan 0" in md, md)
     }
 
     @Test fun `provider errors and skipped tasks are not reported as model failures`() {

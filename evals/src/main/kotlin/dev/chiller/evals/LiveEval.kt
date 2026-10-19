@@ -50,6 +50,8 @@ data class EvalResult(
     val loss: LossMetrics = LossMetrics(),
     /** The provider, not the model, ended the attempt (connection, TLS, credentials, quota, server error). */
     val infrastructure: Boolean = false,
+    /** Steps the model's last plan of the turn left neither done nor skipped. */
+    val openPlanSteps: Int = 0,
 )
 
 @Serializable
@@ -173,7 +175,9 @@ internal suspend fun runTask(task: EvalTask, attempt: Int, provider: ChatComplet
         catch (error: Exception) { failure = error.javaClass.simpleName }
         val state = engine.state.value
         val answer = state.messages.lastOrNull { it.role == "assistant" && !it.content.isNullOrBlank() }?.content.orEmpty()
-        val verdict = runCatching { task.check(project, answer) }.getOrElse { Verdict(false, "check crashed: ${it.message}") }
+        val checked = runCatching { task.check(project, answer) }.getOrElse { Verdict(false, "check crashed: ${it.message}") }
+        val openSteps = dev.chiller.agent.openPlanSteps(state.messages).size
+        val verdict = if (task.requireClosedPlan && openSteps > 0) Verdict(false, "${checked.detail}; plan left $openSteps step(s) open") else checked
         val errors = state.activities.filter { it.status == "failed" }.mapNotNull { activity ->
             runCatching { Json.parseToJsonElement(activity.output).jsonObject["error"]?.jsonObject?.get("code")?.jsonPrimitive?.content }.getOrNull()?.let { "${activity.name}:$it" }
         }.groupingBy { it }.eachCount()
@@ -188,6 +192,7 @@ internal suspend fun runTask(task: EvalTask, attempt: Int, provider: ChatComplet
             subagents = helpers.size, subagentsCompleted = helpers.count { it.status == dev.chiller.contracts.SubagentStatus.COMPLETED },
             loss = lossMetrics(state.messages, state.activities),
             infrastructure = state.status != "completed" && error?.substringBefore(':')?.trim() in INFRASTRUCTURE_CODES,
+            openPlanSteps = openSteps,
         )
     }
 }
@@ -209,7 +214,8 @@ internal fun renderMarkdown(report: EvalReport): String = buildString {
     appendLine("**Passed ${passed}/${results.size}**" + (if (infrastructure > 0) " (provider errors $infrastructure)" else "") + " · rounds ${results.sumOf { it.rounds }} · tool calls ${results.sumOf { it.toolCalls }} (failed ${results.sumOf { it.failedToolCalls }}) · " +
         "time ${"%.1f".format(results.sumOf { it.durationMs } / 1000.0)} s · prompt ${results.sumOf { it.promptTokens ?: 0 }} · completion ${results.sumOf { it.completionTokens ?: 0 }} · cached ${results.sumOf { it.cachedPromptTokens ?: 0 }} tokens")
     appendLine()
-    appendLine("Losses: repeated reads ${results.sumOf { it.loss.repeatedReads }} · failed edits ${results.sumOf { it.loss.failedEdits }} · tool output sent ${results.sumOf { it.loss.toolOutputChars } / 1000}k chars")
+    appendLine("Losses: repeated reads ${results.sumOf { it.loss.repeatedReads }} · failed edits ${results.sumOf { it.loss.failedEdits }} · tool output sent ${results.sumOf { it.loss.toolOutputChars } / 1000}k chars" +
+        " · attempts ending with an open plan ${results.count { it.openPlanSteps > 0 }}")
     appendLine()
     appendLine("| Task | # | Result | Rounds | Tools (failed) | Re-reads | Failed edits | Tool output, k chars | Helpers | Time, s | Prompt / completion tok. | Verdict |")
     appendLine("|---|---|---|---|---|---|---|---|---|---|---|---|")
