@@ -45,6 +45,16 @@ object ModelProfiles {
     val all = listOf(FULL, COMPACT)
 
     /**
+     * Reasoning is generated inside the same max_tokens as the answer, so with thinking on a reply gets this much on
+     * top of its cap. Measured on Gemma 4 26B A4B: a 2048 cap cut 2 of ~90 thinking rounds.
+     */
+    const val THINKING_HEADROOM_TOKENS = 4096
+
+    /** Output tokens for one model reply: [answerCap] plus reasoning headroom when thinking is on, saturating. */
+    fun replyTokens(answerCap: Int, thinking: Boolean): Int =
+        if (!thinking) answerCap else (answerCap.toLong() + THINKING_HEADROOM_TOKENS).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+
+    /**
      * "auto" picks by model id, then by the catalog's display name when the id says nothing about size (a gateway
      * alias like "quasar" named "Gemma 4 26B A4B"); unknown models get the full profile.
      */

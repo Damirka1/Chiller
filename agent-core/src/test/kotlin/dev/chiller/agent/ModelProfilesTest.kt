@@ -26,6 +26,9 @@ class ModelProfilesTest {
         assertEquals("full", ModelProfiles.resolve("auto", "quasar", null).id)
         assertEquals("full", ModelProfiles.resolve("auto", "qwen3-235b-a22b", "Tiny 7B").id)
         assertFalse("spawn_agent" in ModelProfiles.COMPACT.tools!!, "compact profile has no helpers")
+        assertEquals(2048, ModelProfiles.replyTokens(2048, thinking = false))
+        assertEquals(2048 + ModelProfiles.THINKING_HEADROOM_TOKENS, ModelProfiles.replyTokens(2048, thinking = true))
+        assertEquals(Int.MAX_VALUE, ModelProfiles.replyTokens(Int.MAX_VALUE, thinking = true), "unlimited stays unlimited")
         assertTrue(ModelProfiles.COMPACT.tools!!.containsAll(setOf("read_artifact", "show_file", "find_symbols")), "compact keeps attachments and results usable")
     }
 }

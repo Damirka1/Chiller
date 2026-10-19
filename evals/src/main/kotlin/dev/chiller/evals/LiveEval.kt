@@ -160,7 +160,7 @@ internal suspend fun runTask(task: EvalTask, attempt: Int, provider: ChatComplet
         val helpersAllowed = modelProfile.tools == null || "spawn_agent" in modelProfile.tools!!
         val delegating: ToolExecutor = if (helpersAllowed) SubagentTools(builtin, supervisor) else builtin
         val tools: ToolExecutor = modelProfile.tools?.let { ProfiledTools(delegating, it) } ?: delegating
-        val output = modelProfile.maxOutputTokens?.let { minOf(it, maxOutput) } ?: maxOutput
+        val output = ModelProfiles.replyTokens(modelProfile.maxOutputTokens?.let { minOf(it, maxOutput) } ?: maxOutput, thinking)
         val engine = AgentCoordinator(budget, tools, store, processes, session, model, thinking, maxRounds = maxRounds, maxOutputTokens = output,
             projectInstructions = ProjectInstructions.load(project)?.text, traces = RunTraceSink { traceFile.append(it) }, subagents = supervisor.takeIf { helpersAllowed },
             systemPrompt = modelProfile.systemPrompt, projectMap = if (modelProfile.projectMap) code.projectMap() else null, scope = this, contextWindowTokens = contextWindowTokens)
