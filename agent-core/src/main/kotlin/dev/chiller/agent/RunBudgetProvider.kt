@@ -13,6 +13,7 @@ class RunBudgetProvider(
     private val delegate: LlmProvider,
     private val maxRequests: Int = 48,
     private val maxOutputTokens: Int = 32768,
+    val requestBudget: RequestBudget? = null,
 ) : LlmProvider {
     private val lock = Any()
     private var requests = 0
@@ -20,8 +21,9 @@ class RunBudgetProvider(
     private var active = 0
     init { require(maxRequests > 0 && maxOutputTokens > 0) }
 
-    fun beginRun() = synchronized(lock) {
+    fun beginRun(resetCostBudget: Boolean = true) = synchronized(lock) {
         check(active == 0) { "Предыдущие запросы ещё завершаются" }
+        if (resetCostBudget) requestBudget?.beginTask()
         requests = 0; output = 0
     }
     override fun outputTokenLimit(model: String): Int = synchronized(lock) {

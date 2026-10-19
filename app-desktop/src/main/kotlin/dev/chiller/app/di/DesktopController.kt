@@ -36,7 +36,9 @@ data class DesktopSettings(val baseUrl: String = "https://api.deepseek.com", val
     val modelCatalogs: Map<String, CachedModelCatalog> = emptyMap(),
     val allowProcesses: Boolean = false,
     /** Providers defined on this machine; see [CustomProvider]. */
-    val customProviders: List<CustomProvider> = emptyList())
+    val customProviders: List<CustomProvider> = emptyList(),
+    /** Money limit per task with the user's prices for one endpoint and model; off by default. */
+    val costBudget: CostBudgetSettings = CostBudgetSettings())
 
 @Serializable
 data class CachedModelCatalog(val models: List<ProviderModel>, val fetchedAt: String)
@@ -899,8 +901,10 @@ class DesktopController(
         val code = LocalReadOnlyCodeService(workspace.root); codeService = code
         // generate_image uses the image model on the same endpoint and the same origin-bound key as the chat model.
         val imageOrigin = originOf(s.settings.baseUrl)
-        val images = imageModelFor(options, s.catalog)?.let { model ->
-            OpenAiImageService(http, s.settings.baseUrl, model.id, model.imageEditing != false) { imageOrigin?.let { credentials[it] } }
+        val imageModel = imageModelFor(options, s.catalog)
+        val cost = costBudgetFor(s.settings, modelOverride ?: s.settings.model, imageModel?.id)
+        val images = imageModel?.let { model ->
+            OpenAiImageService(http, s.settings.baseUrl, model.id, model.imageEditing != false, requestBudget = cost) { imageOrigin?.let { credentials[it] } }
         }
         val imageSession = s.sessionId
         val attachmentImages = AttachmentImages { session, id -> if (session == imageSession) inputAttachments.originalImage(session, id) else null }
@@ -918,7 +922,7 @@ class DesktopController(
         val profile = thinkingProfile.withExtras(requestExtrasFor(modelProfile, options)).copy(imageInput = vision)
         // The engine's provider is bound to its own endpoint's key, read at request time.
         val engineOrigin = originOf(s.settings.baseUrl)
-        val provider = providerOverride ?: RunBudgetProvider(ChatCompletionsProvider(http, profile) { engineOrigin?.let { credentials[it] } }, options.effectiveMaxRequests, options.effectiveTotalOutputTokens)
+        val provider = providerOverride ?: RunBudgetProvider(ChatCompletionsProvider(http, profile, cost) { engineOrigin?.let { credentials[it] } }, options.effectiveMaxRequests, options.effectiveTotalOutputTokens, cost)
         // Children use the same provider and model, read-only tools and the plain executor (no delegation).
         val supervisor = SubagentSupervisor(provider, builtin, events, s.sessionId, modelOverride ?: s.settings.model, scope)
         subagentService = supervisor
@@ -934,7 +938,11 @@ class DesktopController(
         val map = if (modelProfile.projectMap) runCatching { code.projectMap() }.getOrNull() else null
         val engine = AgentCoordinator(provider, tools, events, processes, s.sessionId, modelOverride ?: s.settings.model, s.settings.thinking, maxRounds = options.effectiveMaxRounds, maxOutputTokens = maxOutput,
             projectInstructions = instructions?.text, traces = traceSink(s.sessionId), subagents = supervisor.takeIf { helpers }, systemPrompt = modelProfile.systemPrompt, projectMap = map, scope = scope,
-            contextWindowTokens = s.catalog.models.firstOrNull { it.id == (modelOverride ?: s.settings.model) }?.contextWindow)
+            // With a cost budget the prompt must stay within the input ceiling its reservations assume.
+            contextWindowTokens = (s.catalog.models.firstOrNull { it.id == (modelOverride ?: s.settings.model) }?.contextWindow ?: 32_768).let { window ->
+                if (cost == null) s.catalog.models.firstOrNull { it.id == (modelOverride ?: s.settings.model) }?.contextWindow
+                else minOf(window, s.settings.costBudget.inputTokenCeiling + maxOutput.coerceAtMost(window / 2))
+            })
         events.append(s.sessionId, "context.profile", buildJsonObject { put("profile", modelProfile.id); put("tools", tools.specs.size) })
         coordinator = engine
         if (instructions != null) events.append(s.sessionId, "context.instructions", buildJsonObject {
@@ -1061,6 +1069,16 @@ class DesktopController(
         keyLookup(name)?.takeIf { it.isNotBlank() }?.let { key -> credentials[origin] = key; envOrigins += origin }
     }
 
+    /** Saves the cost budget; returns why it was refused (an unusable price or limit), or null. */
+    suspend fun updateCostBudget(budget: CostBudgetSettings): String? = commands.withLock {
+        if (budget.enabled) try { MonetaryBudget(budget) } catch (e: ToolException) { return@withLock e.message }
+        val settings = _state.value.settings.copy(costBudget = budget)
+        engineStale = true
+        _state.update { it.copy(settings = settings) }
+        saveSettings(settings)
+        null
+    }
+
     suspend fun removeRecentWorkspace(path: String) = commands.withLock {
         val settings = _state.value.settings.let { it.copy(recentWorkspaces = it.recentWorkspaces - path) }
         _state.update { it.copy(settings = settings) }
@@ -1175,3 +1193,21 @@ class DesktopController(
 }
 
 private const val MAX_CUSTOM_PROVIDERS = 16
+
+/**
+ * The task's money budget, or null when it is off. Its prices belong to one endpoint, chat model and image model;
+ * a different one gets a budget that refuses to spend instead of pricing with the wrong rates. An unusable setting
+ * (a missing price) also refuses, with the reason.
+ */
+internal fun costBudgetFor(settings: DesktopSettings, chatModel: String, imageModel: String?): RequestBudget? {
+    val budget = settings.costBudget.takeIf { it.enabled } ?: return null
+    val base = try { MonetaryBudget(budget) } catch (e: ToolException) {
+        return BoundBudget(MonetaryBudget(budget.copy(limitUsd = "1", inputUsdPerMillion = "0", outputUsdPerMillion = "0", inputTokenCeiling = 32768)), e.message, e.message)
+    }
+    val endpointMatches = budget.baseUrl.trim().trimEnd('/').equals(settings.baseUrl.trim().trimEnd('/'), ignoreCase = true)
+    val chatRefusal = if (endpointMatches && budget.model == chatModel) null
+        else "Денежный бюджет задан для ${budget.model.ifBlank { "другой модели" }}; для $chatModel цены не указаны. Обновите бюджет в Настройки → Агент."
+    val imageRefusal = if (imageModel == null || (endpointMatches && budget.imageModel == imageModel)) null
+        else "Денежный бюджет не содержит цену для модели картинок $imageModel. Обновите бюджет в Настройки → Агент."
+    return BoundBudget(base, chatRefusal, imageRefusal)
+}

@@ -452,6 +452,28 @@ class ChatCompletionsProviderTest {
         assertTrue(events.none { it is ModelEvent.Retrying })
     }
 
+    @Test fun anExhaustedCostBudgetStopsBeforeTheRequestIsSent() = runBlocking {
+        val (server, requests) = sequenceServer(listOf(500)) { _, _ -> }
+        // Room for exactly one attempt: the retry after the server error must reserve again and be refused.
+        val budget = object : dev.chiller.contracts.RequestBudget {
+            var reserved = 0
+            override fun beginTask() = Unit
+            override fun reserveChat(maxOutputTokens: Int): dev.chiller.contracts.RequestReservation {
+                if (reserved++ >= 1) throw dev.chiller.contracts.ToolException("COST_BUDGET_EXHAUSTED", "no money left")
+                return object : dev.chiller.contracts.RequestReservation { override fun finish(usage: dev.chiller.contracts.TokenUsage?) = Unit }
+            }
+            override fun reserveImage() = error("unused")
+            override fun snapshot() = dev.chiller.contracts.CostBudgetSnapshot("1", "1", "0", reserved, 0)
+        }
+        val client = HttpClient(CIO)
+        try {
+            val provider = ChatCompletionsProvider(client, ChatCompletionsProfile("test", "http://127.0.0.1:${server.address.port}", "m"), emptyList(), requestBudget = budget) { "k" }
+            val events = provider.stream(ModelRequest("m", listOf(AgentMessage("user", "x")), maxOutputTokens = 4096)).toList()
+            assertEquals("COST_BUDGET_EXHAUSTED", assertIs<ModelEvent.Failed>(events.last(), "Stream events: $events").code)
+            assertEquals(1, requests.get(), "the first attempt fit, its retry did not: retries are paid too")
+        } finally { client.close(); server.stop(0) }
+    }
+
     @Test fun serverErrorsRetryThreeTimesThenFail() = runBlocking {
         val (server, requests) = sequenceServer(listOf(500, 500, 500)) { _, _ -> }
         val events = invoke(server)

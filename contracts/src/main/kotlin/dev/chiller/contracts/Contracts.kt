@@ -80,6 +80,45 @@ interface LlmProvider {
     fun stream(request: ModelRequest): Flow<ModelEvent>
 }
 
+/** Transport-level spending gate shared by chat retries, helpers and image requests. */
+interface RequestBudget {
+    /** Reset only for an explicitly started user task, never for an automatic retry/follow-up. */
+    fun beginTask()
+    fun reserveChat(maxOutputTokens: Int): RequestReservation
+    fun reserveImage(): RequestReservation
+    fun snapshot(): CostBudgetSnapshot
+}
+
+interface RequestReservation {
+    /** Call once even on cancellation. Unknown/partial usage keeps the reservation. */
+    fun finish(usage: TokenUsage? = null)
+}
+
+@Serializable
+data class CostBudgetSnapshot(
+    val limitUsd: String,
+    val accountedUsd: String,
+    val reservedUsd: String,
+    val attempts: Int,
+    val uncertainAttempts: Int,
+    val exceededEstimate: Boolean = false,
+)
+
+/** Prices are user-supplied upper bounds, not a built-in provider price list. Empty prices fail closed. */
+@Serializable
+data class CostBudgetSettings(
+    val enabled: Boolean = false,
+    val limitUsd: String = "1.00",
+    val inputUsdPerMillion: String = "",
+    val outputUsdPerMillion: String = "",
+    val imageUsdPerRequest: String = "",
+    val inputTokenCeiling: Int = 32768,
+    /** Rates belong to this endpoint/model. Switching either requires configuring the budget again. */
+    val baseUrl: String = "",
+    val model: String = "",
+    val imageModel: String = "",
+)
+
 /** One model returned by a provider's model listing. Absent metadata stays null, never guessed. */
 @Serializable
 data class ProviderModel(

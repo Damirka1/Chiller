@@ -5,8 +5,10 @@ import dev.chiller.contracts.CapabilityReport
 import dev.chiller.contracts.LlmProvider
 import dev.chiller.contracts.ModelEvent
 import dev.chiller.contracts.ModelRequest
+import dev.chiller.contracts.RequestBudget
 import dev.chiller.contracts.TokenUsage
 import dev.chiller.contracts.ToolCall
+import dev.chiller.contracts.ToolException
 import dev.chiller.contracts.ToolSpec
 import io.ktor.client.HttpClient
 import io.ktor.client.plugins.HttpRequestTimeoutException
@@ -101,9 +103,13 @@ class ChatCompletionsProvider private constructor(
     private val apiKey: () -> String?,
     private val retryDelaysMs: List<Long>,
     private val sleep: suspend (Long) -> Unit,
+    private val requestBudget: RequestBudget?,
 ) : LlmProvider {
     constructor(client: HttpClient, profile: ChatCompletionsProfile, apiKey: () -> String?) :
-        this(client, profile, apiKey, RETRY_DELAYS_MS, { delay(it) })
+        this(client, profile, apiKey, RETRY_DELAYS_MS, { delay(it) }, null)
+
+    constructor(client: HttpClient, profile: ChatCompletionsProfile, requestBudget: RequestBudget?, apiKey: () -> String?) :
+        this(client, profile, apiKey, RETRY_DELAYS_MS, { delay(it) }, requestBudget)
 
     /** Test seam: shorten the backoff between safe retries of the stateless model request, or record it. */
     constructor(
@@ -111,8 +117,9 @@ class ChatCompletionsProvider private constructor(
         profile: ChatCompletionsProfile,
         retryDelaysMs: List<Long>,
         sleep: suspend (Long) -> Unit = { delay(it) },
+        requestBudget: RequestBudget? = null,
         apiKey: () -> String?,
-    ) : this(client, profile, apiKey, retryDelaysMs, sleep)
+    ) : this(client, profile, apiKey, retryDelaysMs, sleep, requestBudget)
 
     override fun outputTokenLimit(model: String): Int? = OutputLimits.known(profile.baseUrl, model)
 
@@ -126,16 +133,36 @@ class ChatCompletionsProvider private constructor(
         }
         var payload = runCatching { requestJson(request) }.getOrElse {
             emit(ModelEvent.Failed("INVALID_REQUEST", "Could not encode provider request")); return@flow
-        }.toString()
+        }
+        if (requestBudget != null && !supportsCostBudget(payload)) {
+            emit(ModelEvent.Failed("COST_BUDGET_UNSUPPORTED_REQUEST", "The cost budget supports one text completion with max_tokens; additional choices, output modalities, paid search and alternative output limits are not supported"))
+            return@flow
+        }
         val modelId = request.model.ifBlank { profile.model }
         var clampedToProviderLimit = false
         var attempt = 0
         while (true) {
             attempt++
             var emittedAny = false
-            val outcome = attemptStream(key, payload) { event ->
-                emittedAny = true
-                emit(event)
+            val reservation = try {
+                requestBudget?.reserveChat(payload.getValue("max_tokens").jsonPrimitive.int)
+            } catch (error: ToolException) {
+                emit(ModelEvent.Failed(error.code, error.message))
+                return@flow
+            }
+            var terminalUsage: TokenUsage? = null
+            val outcome = try {
+                attemptStream(key, payload.toString()) { event ->
+                    emittedAny = true
+                    emit(event)
+                }.also { result ->
+                    // A usage chunk in an interrupted stream may be partial. Only settle a complete response.
+                    if (result is AttemptOutcome.Streamed && result.sawDone && result.accumulator.finishReason != null) {
+                        terminalUsage = result.accumulator.usage
+                    }
+                }
+            } finally {
+                reservation?.finish(terminalUsage)
             }
             val failure: ModelEvent.Failed
             val retryable: Boolean
@@ -164,7 +191,7 @@ class ChatCompletionsProvider private constructor(
                     val requested = OutputLimits.effective(profile.baseUrl, modelId, request.maxOutputTokens)
                     if (limit != null && limit in 1 until requested && !clampedToProviderLimit && !emittedAny) {
                         if (outcome.outputLimit != null) OutputLimits.learn(profile.baseUrl, modelId, limit)
-                        payload = requestJson(request.copy(maxOutputTokens = minOf(request.maxOutputTokens, limit))).toString()
+                        payload = requestJson(request.copy(maxOutputTokens = minOf(request.maxOutputTokens, limit)))
                         clampedToProviderLimit = true
                         attempt--
                         continue
@@ -356,6 +383,16 @@ class ChatCompletionsProvider private constructor(
         put("function", buildJsonObject {
             put("name", tool.name); put("description", tool.description); put("parameters", tool.parameters)
         })
+    }
+
+    private fun supportsCostBudget(payload: JsonObject): Boolean {
+        if (listOf("n", "best_of").any { field -> payload[field]?.let { (it as? JsonPrimitive)?.intOrNull != 1 } == true }) return false
+        if (payload["max_completion_tokens"]?.let { it != payload["max_tokens"] } == true) return false
+        if (listOf("audio", "web_search_options", "plugins").any { payload[it]?.let { value -> value !is JsonNull } == true }) return false
+        if ((payload["use_beam_search"] as? JsonPrimitive)?.booleanOrNull == true) return false
+        val modalities = payload["modalities"]
+        if (modalities != null && (modalities !is JsonArray || modalities.any { it != JsonPrimitive("text") })) return false
+        return true
     }
 }
 

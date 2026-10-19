@@ -2,6 +2,7 @@ package dev.chiller.providers
 
 import dev.chiller.contracts.ImageData
 import dev.chiller.contracts.ImageService
+import dev.chiller.contracts.RequestBudget
 import dev.chiller.contracts.ToolException
 import dev.chiller.contracts.imageMimeType
 import io.ktor.client.HttpClient
@@ -43,6 +44,7 @@ class OpenAiImageService(
     override val model: String,
     override val supportsEditing: Boolean,
     private val sleep: suspend (Long) -> Unit = { delay(it) },
+    private val requestBudget: RequestBudget? = null,
     private val apiKey: () -> String?,
 ) : ImageService {
     override suspend fun generate(prompt: String, size: String, reference: ImageData?): ImageData {
@@ -50,8 +52,10 @@ class OpenAiImageService(
         var attempt = 0
         while (true) {
             attempt++
+            val reservation = requestBudget?.reserveImage()
             try {
-                return request(prompt, size, reference)
+                // The fixed per-image ceiling remains reserved when no token usage is reported, including retries.
+                return try { request(prompt, size, reference) } finally { reservation?.finish() }
             } catch (retry: Retry) {
                 if (attempt >= MAX_ATTEMPTS) throw retry.error
                 sleep(retry.delayMs)

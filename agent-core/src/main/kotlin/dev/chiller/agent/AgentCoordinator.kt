@@ -237,9 +237,15 @@ class AgentCoordinator(
     private suspend fun appendSummary(id: String, stats: RunStats, durationMs: Long) {
         val state = _state.value
         val usage = state.usage
+        val cost = runCatching { (provider as? RunBudgetProvider)?.requestBudget?.snapshot() }.getOrNull()
         events.append(sessionId, "run.summary", buildJsonObject {
             put("runId", id)
             put("status", state.status)
+            // Money as the task's cost budget accounted it: measured where usage was reported, upper bounds otherwise.
+            cost?.let { put("cost", buildJsonObject {
+                put("limitUsd", it.limitUsd); put("accountedUsd", it.accountedUsd); put("reservedUsd", it.reservedUsd)
+                put("attempts", it.attempts); put("uncertainAttempts", it.uncertainAttempts); put("exceededEstimate", it.exceededEstimate)
+            }) }
             put("rounds", stats.rounds)
             put("toolCalls", stats.toolCalls)
             put("failedToolCalls", stats.failedToolCalls)

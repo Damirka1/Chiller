@@ -41,6 +41,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.chiller.app.di.*
 import dev.chiller.contracts.CaptureTarget
+import dev.chiller.contracts.CostBudgetSettings
 import dev.chiller.design.*
 import kotlinx.coroutines.launch
 
@@ -51,6 +52,8 @@ data class SettingsData(
     val connection: ConnectionState = ConnectionState(), val catalog: ModelCatalogState = ModelCatalogState(),
     val preferences: UiPreferences = UiPreferences(), val allowProcesses: Boolean = false, val agent: AgentOptions = AgentOptions(),
     val customProviders: List<CustomProvider> = emptyList(),
+    /** The task's money budget and the image model in use, which its prices must cover. */
+    val costBudget: CostBudgetSettings = CostBudgetSettings(), val imageModel: String? = null,
     val recent: List<String> = emptyList(), val dataDir: String = "", val demoCount: Int = 0,
     val version: String = "dev", val build: String = "", val commit: String = "", val runtime: String = "", val os: String = "",
     val captureTargets: List<CaptureTarget> = emptyList(), val selectedCaptureTarget: String? = null, val screenshotSupported: Boolean = false,
@@ -70,6 +73,8 @@ class SettingsActions(
     /** Saves a custom provider with an optional typed key; the callback gets why it was refused, or null. Unwired, it refuses instead of pretending. */
     val saveCustomProvider: (CustomProvider, String?, (String?) -> Unit) -> Unit = { _, _, done -> done("Сохранение недоступно") },
     val deleteCustomProvider: (String) -> Unit = {},
+    /** Saves the cost budget; the callback gets why it was refused, or null. Unwired, it refuses. */
+    val costBudget: (CostBudgetSettings, (String?) -> Unit) -> Unit = { _, done -> done("Сохранение недоступно") },
     val refreshCaptureTargets: () -> Unit = {}, val selectCaptureTarget: (String) -> Unit = {},
 )
 
@@ -256,6 +261,45 @@ private fun ConnectionSection(data: SettingsData, actions: SettingsActions) {
     }
 }
 
+/**
+ * A money limit per task with the user's own prices. Requests reserve their worst case before they start; the
+ * prices belong to the endpoint and models it was saved for, and any other model is refused rather than guessed.
+ */
+@Composable
+private fun CostBudgetCard(data: SettingsData, actions: SettingsActions) {
+    val c = LocalChillerPalette.current
+    val saved = data.costBudget
+    var limit by remember(saved) { mutableStateOf(saved.limitUsd) }
+    var input by remember(saved) { mutableStateOf(saved.inputUsdPerMillion) }
+    var output by remember(saved) { mutableStateOf(saved.outputUsdPerMillion) }
+    var image by remember(saved) { mutableStateOf(saved.imageUsdPerRequest) }
+    var ceiling by remember(saved) { mutableStateOf(saved.inputTokenCeiling.toString()) }
+    var message by remember(saved) { mutableStateOf<String?>(null) }
+    // Saving binds the prices to what is in use now.
+    fun draft(enabled: Boolean) = CostBudgetSettings(enabled, limit.trim(), input.trim(), output.trim(), image.trim(), ceiling.trim().toIntOrNull() ?: -1,
+        baseUrl = data.baseUrl, model = data.model, imageModel = data.imageModel.orEmpty())
+    val bound = saved.enabled && (saved.baseUrl.trimEnd('/') != data.baseUrl.trimEnd('/') || saved.model != data.model)
+    Card {
+        SectionTitle("Денежный бюджет", "Лимит в USD на одну задачу по вашим ценам. Каждый запрос, включая повторы, помощников и картинки, заранее резервирует худший случай; после ответа резерв заменяется фактическим расходом.")
+        SettingToggle("Ограничивать расходы", if (saved.enabled) "Включено для ${saved.model} · ${saved.baseUrl.removePrefix("https://")}" else "Выключено", saved.enabled) { on ->
+            actions.costBudget(draft(on)) { refused -> message = refused }
+        }
+        ChillerField(limit, { limit = it }, "Лимит на задачу, USD", "1.00")
+        ChillerField(input, { input = it }, "Цена 1M входных токенов, USD", "0.27")
+        ChillerField(output, { output = it }, "Цена 1M выходных токенов, USD", "1.10")
+        if (data.imageModel != null) ChillerField(image, { image = it }, "Цена одной картинки (${data.imageModel}), USD", "0.04")
+        ChillerField(ceiling, { ceiling = it }, "Потолок входных токенов на запрос", "32768")
+        Text("Потолок ограничивает контекст запроса: так резерв на вход не может оказаться меньше фактического. Пустая цена — бюджет отказывает, а не считает её нулём.",
+            color = c.faint, fontSize = 11.sp, lineHeight = 16.sp)
+        if (bound) Text("Цены сохранены для ${saved.model}; с текущей моделью ${data.model} бюджет откажет в запросах. Сохраните, чтобы указать цены для неё.",
+            color = c.negative, fontSize = 12.sp, lineHeight = 17.sp)
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            ChillerControl("Сохранить для ${data.model.ifBlank { "текущей модели" }}", { actions.costBudget(draft(true)) { refused -> message = refused ?: "Сохранено" } }, style = ControlStyle.PRIMARY)
+        }
+        message?.let { Text(it, color = if (it == "Сохранено") c.positive else c.negative, fontSize = 12.sp) }
+    }
+}
+
 /** The "+" tile that opens the form for a new custom provider. */
 @Composable
 private fun AddProviderTile(selected: Boolean, modifier: Modifier, onClick: () -> Unit) {
@@ -324,6 +368,7 @@ private fun AgentSection(data: SettingsData, actions: SettingsActions) {
     val c = LocalChillerPalette.current
     val a = data.agent
     ProfileCard(data, actions)
+    CostBudgetCard(data, actions)
     VerifyCard(data, actions)
     Card {
         SectionTitle("Лимиты прогона", "Ограничивают одну задачу. Применяются со следующего сообщения, история сохраняется.")
