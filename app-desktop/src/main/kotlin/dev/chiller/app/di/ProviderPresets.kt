@@ -1,5 +1,6 @@
 package dev.chiller.app.di
 
+import kotlinx.serialization.Serializable
 import java.net.URI
 
 /**
@@ -23,6 +24,47 @@ data class ProviderPreset(
     val keyless: Boolean get() = isLoopback(baseUrl)
 }
 
+/**
+ * A provider the user defines on this machine (a company gateway, a home server). It lives in the local settings
+ * file only, so a private address never reaches the repository or the installers. Its key comes from the named
+ * environment/.env variable, bound to this provider's origin like every other key.
+ */
+@Serializable
+data class CustomProvider(
+    val id: String,
+    val name: String,
+    val baseUrl: String,
+    val keyVariable: String? = null,
+    val defaultModel: String? = null,
+    /** Thinking switch the provider is applied with; null keeps the current one. */
+    val thinking: Boolean? = null,
+    /** "auto", "full" or "compact" applied with the provider; null keeps the current profile. */
+    val profile: String? = null,
+) {
+    fun preset() = ProviderPreset("custom:$id", name, baseUrl, listOfNotNull(keyVariable), defaultModel, note = "Свой провайдер · хранится только в настройках этого компьютера")
+
+    /** Why this provider cannot be saved, in words for the settings page; null when it is valid. */
+    fun problem(): String? = when {
+        name.isBlank() || name.length > 60 -> "Название: от 1 до 60 символов"
+        !endpointAllowed(baseUrl) -> "Адрес: HTTPS, или HTTP только для localhost; без логина, query и #"
+        keyVariable != null && !Regex("[A-Za-z_][A-Za-z0-9_]{0,63}").matches(keyVariable) -> "Переменная ключа: латиница, цифры и _, например QARMET_API_KEY"
+        defaultModel != null && defaultModel.length > 200 -> "Модель: не длиннее 200 символов"
+        profile != null && profile !in setOf("auto", "full", "compact") -> "Профиль: авто, полный или компактный"
+        else -> null
+    }
+
+    fun normalized() = copy(name = name.trim(), baseUrl = baseUrl.trim().trimEnd('/'), keyVariable = keyVariable?.trim()?.ifEmpty { null },
+        defaultModel = defaultModel?.trim()?.ifEmpty { null })
+}
+
+/** The same rule the connection settings apply: HTTPS, or plain HTTP to a loopback host; no credentials, query or fragment. */
+fun endpointAllowed(url: String): Boolean = runCatching {
+    val uri = URI(url.trim())
+    val host = uri.host ?: return false
+    uri.userInfo == null && uri.query == null && uri.fragment == null &&
+        (uri.scheme == "https" || (uri.scheme == "http" && isLoopback(url)))
+}.getOrDefault(false)
+
 object ProviderPresets {
     val all: List<ProviderPreset> = listOf(
         ProviderPreset("deepseek", "DeepSeek", "https://api.deepseek.com", listOf("DEEPSEEK_API_KEY", "API_TOKEN"), "deepseek-flash",
@@ -40,7 +82,8 @@ object ProviderPresets {
         ProviderPreset("vllm", "vLLM", "http://localhost:8000/v1", note = "Локальный сервер (например, Gemma), ключ не нужен"),
     )
 
-    fun byOrigin(url: String): ProviderPreset? = originOf(url)?.let { origin -> all.firstOrNull { originOf(it.baseUrl) == origin } }
+    fun byOrigin(url: String, custom: List<CustomProvider> = emptyList()): ProviderPreset? =
+        originOf(url)?.let { origin -> (all + custom.map { it.preset() }).firstOrNull { originOf(it.baseUrl) == origin } }
     val keyVariables: List<String> get() = all.flatMap { it.keyVariables }.distinct()
 }
 

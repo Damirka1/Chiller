@@ -34,7 +34,9 @@ data class DesktopSettings(val baseUrl: String = "https://api.deepseek.com", val
     /** Check command per project root, e.g. "./gradlew test"; used by auto-verify. */
     val verifyCommands: Map<String, String> = emptyMap(),
     val modelCatalogs: Map<String, CachedModelCatalog> = emptyMap(),
-    val allowProcesses: Boolean = false)
+    val allowProcesses: Boolean = false,
+    /** Providers defined on this machine; see [CustomProvider]. */
+    val customProviders: List<CustomProvider> = emptyList())
 
 @Serializable
 data class CachedModelCatalog(val models: List<ProviderModel>, val fetchedAt: String)
@@ -125,6 +127,8 @@ class DesktopController(
     namedKeys: Map<String, String> = emptyMap(),
     private val credentialStore: CredentialStore = CredentialStore.None,
     private val processServiceFactory: (Path) -> ProcessService = { LocalProcessService(it) },
+    /** Reads one named key from the environment or .env, for a custom provider's key variable. */
+    private val keyLookup: (String) -> String? = { null },
 ) {
     private val commands = Mutex()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -204,6 +208,7 @@ class DesktopController(
                 } catch (_: Exception) { /* Keep configured references; explicit save/delete can retry. */ }
             }
         }
+        settings.customProviders.forEach(::adoptKey)
         settings = rememberModel(settings, settings.baseUrl, settings.model)
         // A demo folder must never come back as the project on the next launch.
         if (settings.workspace?.let(::isDemoFolder) == true) settings = settings.copy(workspace = null)
@@ -997,6 +1002,33 @@ class DesktopController(
         saveSettings(settings)
     }
 
+    /** Adds or replaces (by id) a custom provider; returns why it was refused, or null. */
+    suspend fun saveCustomProvider(provider: CustomProvider): String? = commands.withLock {
+        val clean = provider.normalized()
+        clean.problem()?.let { return@withLock it }
+        val current = _state.value.settings.customProviders
+        if (current.none { it.id == clean.id } && current.size >= MAX_CUSTOM_PROVIDERS) return@withLock "Не больше $MAX_CUSTOM_PROVIDERS своих провайдеров"
+        val settings = _state.value.settings.copy(customProviders = current.filterNot { it.id == clean.id } + clean)
+        adoptKey(clean)
+        _state.update { it.copy(settings = settings, apiKeyConfigured = ready(), connection = if (ready() && it.connection.status == "missing") connectionForUnverified() else it.connection) }
+        saveSettings(settings)
+        null
+    }
+
+    suspend fun deleteCustomProvider(id: String) = commands.withLock {
+        val settings = _state.value.settings.let { it.copy(customProviders = it.customProviders.filterNot { p -> p.id == id }) }
+        _state.update { it.copy(settings = settings) }
+        saveSettings(settings)
+    }
+
+    /** A custom provider's named key becomes its origin's key unless the user already set one for that origin. */
+    private fun adoptKey(provider: CustomProvider) {
+        val name = provider.keyVariable ?: return
+        val origin = originOf(provider.baseUrl) ?: return
+        if (credentials.containsKey(origin) && origin !in envOrigins) return
+        keyLookup(name)?.takeIf { it.isNotBlank() }?.let { key -> credentials[origin] = key; envOrigins += origin }
+    }
+
     suspend fun removeRecentWorkspace(path: String) = commands.withLock {
         val settings = _state.value.settings.let { it.copy(recentWorkspaces = it.recentWorkspaces - path) }
         _state.update { it.copy(settings = settings) }
@@ -1109,3 +1141,5 @@ class DesktopController(
 
     private companion object { const val MAX_MODEL_LENGTH = 200; const val MAX_RECENT_WORKSPACES = 6; const val MAX_SESSION_ROOTS = 60 }
 }
+
+private const val MAX_CUSTOM_PROVIDERS = 16

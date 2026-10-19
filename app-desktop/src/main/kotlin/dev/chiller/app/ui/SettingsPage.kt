@@ -50,6 +50,7 @@ data class SettingsData(
     val keySources: Map<String, String> = emptyMap(), val secureStorageSupported: Boolean = false,
     val connection: ConnectionState = ConnectionState(), val catalog: ModelCatalogState = ModelCatalogState(),
     val preferences: UiPreferences = UiPreferences(), val allowProcesses: Boolean = false, val agent: AgentOptions = AgentOptions(),
+    val customProviders: List<CustomProvider> = emptyList(),
     val recent: List<String> = emptyList(), val dataDir: String = "", val demoCount: Int = 0,
     val version: String = "dev", val build: String = "", val commit: String = "", val runtime: String = "", val os: String = "",
     val captureTargets: List<CaptureTarget> = emptyList(), val selectedCaptureTarget: String? = null, val screenshotSupported: Boolean = false,
@@ -66,6 +67,9 @@ class SettingsActions(
     val openComparison: (() -> Unit)? = null, val close: () -> Unit = {},
     val setVerifyCommand: (root: String, command: String) -> Unit = { _, _ -> },
     val saveCredential: () -> Unit = {}, val deleteCredential: () -> Unit = {},
+    /** Saves a custom provider; the callback gets why it was refused, or null. */
+    val saveCustomProvider: (CustomProvider, (String?) -> Unit) -> Unit = { _, done -> done(null) },
+    val deleteCustomProvider: (String) -> Unit = {},
     val refreshCaptureTargets: () -> Unit = {}, val selectCaptureTarget: (String) -> Unit = {},
 )
 
@@ -144,11 +148,13 @@ private fun ConnectionSection(data: SettingsData, actions: SettingsActions) {
     var thinking by remember(data.thinking) { mutableStateOf(data.thinking) }
     var key by remember { mutableStateOf("") }
     val formOrigin = originOf(url)
-    val preset = ProviderPresets.byOrigin(url)
+    val preset = ProviderPresets.byOrigin(url, data.customProviders)
+    val custom = data.customProviders.firstOrNull { originOf(it.baseUrl) == formOrigin }
+    var editing by remember { mutableStateOf<CustomProvider?>(null) }
     val changed = url.trimEnd('/') != data.baseUrl || model.trim() != data.model || thinking != data.thinking || key.isNotEmpty()
     Card {
         SectionTitle("Провайдер", "Все провайдеры совместимы с OpenAI Chat Completions. Ключ уходит только на адрес, для которого он задан.")
-        ProviderPresets.all.chunked(3).forEach { row ->
+        (ProviderPresets.all + data.customProviders.map { it.preset() }).chunked(3).forEach { row ->
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 row.forEach { p ->
                     val origin = originOf(p.baseUrl)
@@ -162,12 +168,18 @@ private fun ConnectionSection(data: SettingsData, actions: SettingsActions) {
                     PresetCard(p, status, selected = origin == formOrigin, Modifier.weight(1f)) {
                         url = p.baseUrl; key = ""
                         model = if (originOf(data.baseUrl) == origin) data.model else p.defaultModel.orEmpty()
+                        // A custom provider brings its own thinking default and opens for editing.
+                        data.customProviders.firstOrNull { "custom:${it.id}" == p.id }.let { chosen ->
+                            editing = chosen
+                            chosen?.thinking?.takeIf { originOf(data.baseUrl) != origin }?.let { thinking = it }
+                        }
                     }
                 }
                 repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
             }
         }
     }
+    CustomProviderCard(data, actions, editing, onEdit = { editing = it }, onUse = { p -> url = p.baseUrl; key = ""; model = p.defaultModel.orEmpty(); p.thinking?.let { thinking = it } })
     Card {
         SectionTitle(preset?.name ?: "Свой адрес", preset?.note?.ifBlank { null } ?: "Любой сервер с /chat/completions; HTTP разрешён только для localhost.")
         ChillerField(url, { url = it }, "Адрес API", "https://api.example.com/v1")
@@ -198,7 +210,10 @@ private fun ConnectionSection(data: SettingsData, actions: SettingsActions) {
         preset?.keysUrl?.let { link -> ChillerControl("Где взять ключ: ${link.removePrefix("https://")}", { actions.openUrl(link) }, icon = Icons.AutoMirrored.Outlined.OpenInNew) }
         SettingToggle("Рассуждения модели", "Если провайдер поддерживает режим thinking", thinking) { thinking = it }
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            ChillerControl("Применить", { actions.applyConnection(url.trim(), model.trim(), thinking, key.takeIf { it.isNotBlank() }); key = "" }, style = ControlStyle.PRIMARY, enabled = changed && url.isNotBlank() )
+            ChillerControl("Применить", {
+                custom?.profile?.takeIf { it != data.agent.profile }?.let { actions.agent(data.agent.copy(profile = it)) }
+                actions.applyConnection(url.trim(), model.trim(), thinking, key.takeIf { it.isNotBlank() }); key = ""
+            }, style = ControlStyle.PRIMARY, enabled = changed && url.isNotBlank() )
             if (data.connection.status == "checking") ChillerControl("Отменить проверку", actions.cancelCheck, style = ControlStyle.OUTLINE)
             else ChillerControl("Проверить подключение", actions.checkConnection, style = ControlStyle.OUTLINE, enabled = !changed && data.keyConfigured && model.isNotBlank())
         }
@@ -209,6 +224,57 @@ private fun ConnectionSection(data: SettingsData, actions: SettingsActions) {
         }
         Text("Ключ: ${if (data.keyConfigured) "настроен" else "не задан"} · каталог: ${if (data.catalog.models.isEmpty()) "не загружен" else "${data.catalog.models.size} моделей"}. Проверка генерации — отдельный запрос.", color = c.faint, fontSize = 11.sp, lineHeight = 17.sp)
         Text("Применение начинает новый диалог. Проверка отправляет один короткий запрос без файлов и инструментов. Ключ действует до выхода, если не сохранён явно в Keychain; из .env и переменных окружения читается при запуске. Вживую в Chiller проверен только DeepSeek.", color = c.faint, fontSize = 11.sp, lineHeight = 17.sp)
+    }
+}
+
+/**
+ * Adds or edits a provider kept only in this computer's settings: name, address, the env/.env variable that holds
+ * its key, and what to apply with it. Nothing typed here is sent anywhere until the provider is applied.
+ */
+@Composable
+private fun CustomProviderCard(data: SettingsData, actions: SettingsActions, editing: CustomProvider?, onEdit: (CustomProvider?) -> Unit, onUse: (CustomProvider) -> Unit) {
+    val c = LocalChillerPalette.current
+    val base = editing ?: CustomProvider(java.util.UUID.randomUUID().toString().take(8), "", "")
+    var name by remember(base) { mutableStateOf(base.name) }
+    var address by remember(base) { mutableStateOf(base.baseUrl) }
+    var keyVariable by remember(base) { mutableStateOf(base.keyVariable.orEmpty()) }
+    var defaultModel by remember(base) { mutableStateOf(base.defaultModel.orEmpty()) }
+    var thinking by remember(base) { mutableStateOf(base.thinking) }
+    var profile by remember(base) { mutableStateOf(base.profile) }
+    var message by remember(base) { mutableStateOf<String?>(null) }
+    val draft = CustomProvider(base.id, name, address, keyVariable, defaultModel, thinking, profile).normalized()
+    Card {
+        SectionTitle(if (editing == null) "Свой провайдер" else "Свой провайдер · ${editing.name}",
+            "Например, шлюз компании. Хранится только в настройках этого компьютера и не попадает в репозиторий. Ключ читается из переменной окружения или .env.")
+        ChillerField(name, { name = it }, "Название", "Qarmet")
+        ChillerField(address, { address = it }, "Адрес API", "https://gateway.example.com/v1")
+        ChillerField(keyVariable, { keyVariable = it }, "Переменная с ключом (необязательно)", "QARMET_API_KEY")
+        ChillerField(defaultModel, { defaultModel = it }, "Модель по умолчанию (необязательно)", "quasar")
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text("Рассуждения", color = c.text, fontSize = 12.sp, modifier = Modifier.width(110.dp))
+            listOf(null to "Не менять", true to "Вкл", false to "Выкл").forEach { (value, label) ->
+                ChillerControl(label, { thinking = value }, style = if (thinking == value) ControlStyle.SELECTED else ControlStyle.QUIET)
+            }
+        }
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text("Профиль", color = c.text, fontSize = 12.sp, modifier = Modifier.width(110.dp))
+            listOf(null to "Не менять", "auto" to "Авто", "full" to "Полный", "compact" to "Компактный").forEach { (value, label) ->
+                ChillerControl(label, { profile = value }, style = if (profile == value) ControlStyle.SELECTED else ControlStyle.QUIET)
+            }
+        }
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            ChillerControl(if (editing == null) "Добавить" else "Сохранить", {
+                val problem = draft.problem()
+                if (problem != null) message = problem
+                else actions.saveCustomProvider(draft) { refused -> message = refused ?: "Сохранено"; if (refused == null) { onEdit(draft); onUse(draft) } }
+            }, style = ControlStyle.PRIMARY, enabled = name.isNotBlank() && address.isNotBlank())
+            if (editing != null) {
+                ChillerControl("Удалить", { actions.deleteCustomProvider(editing.id); onEdit(null) }, style = ControlStyle.OUTLINE)
+                ChillerControl("Новый", { onEdit(null) })
+            }
+        }
+        message?.let { Text(it, color = if (it == "Сохранено") c.positive else c.negative, fontSize = 11.sp) }
+        if (draft.keyVariable != null) Text("Ключ берётся из ${draft.keyVariable} при запуске и при сохранении; уходит только на ${originOf(draft.baseUrl) ?: "этот адрес"}.", color = c.faint, fontSize = 11.sp, lineHeight = 15.sp)
     }
 }
 

@@ -35,7 +35,8 @@ private fun chillerApplication() = application {
     val directory = remember { System.getenv("CHILLER_DATA_DIR")?.let(Path::of) ?: if (java.lang.Boolean.getBoolean("chiller.offlinePreview")) Path.of(System.getProperty("java.io.tmpdir"), "chiller-preview") else Path.of(System.getProperty("user.home"), ".chiller") }
     val controller = remember { DesktopController(directory, if (java.lang.Boolean.getBoolean("chiller.offlinePreview")) null else LocalCredentials.load(),
         namedKeys = if (java.lang.Boolean.getBoolean("chiller.offlinePreview")) emptyMap() else LocalCredentials.loadNamed(dev.chiller.app.di.ProviderPresets.keyVariables),
-        credentialStore = if (java.lang.Boolean.getBoolean("chiller.offlinePreview")) dev.chiller.app.di.CredentialStore.None else dev.chiller.app.di.CredentialStore.system()) }
+        credentialStore = if (java.lang.Boolean.getBoolean("chiller.offlinePreview")) dev.chiller.app.di.CredentialStore.None else dev.chiller.app.di.CredentialStore.system(),
+        keyLookup = { name -> if (java.lang.Boolean.getBoolean("chiller.offlinePreview")) null else LocalCredentials.loadNamed(listOf(name))[name] }) }
     val state by controller.state.collectAsState()
     val comparisonState by controller.comparison.state.collectAsState()
     val actions = remember { MutableSharedFlow<DesktopAction>(extraBufferCapacity = 16) }
@@ -149,7 +150,7 @@ private fun chillerApplication() = application {
                 captureTargets = state.captureTargets, selectedCaptureTarget = state.selectedCaptureTarget, screenshotSupported = controller.screenshotSupported,
                 workspace = state.settings.workspace, verifyCommand = state.settings.workspace?.let { state.settings.verifyCommands[it] }.orEmpty(),
                 suggestedVerifyCommand = state.settings.workspace?.let { root -> runCatching { dev.chiller.app.di.suggestVerifyCommand(java.nio.file.Path.of(root)) }.getOrNull() },
-                agent = state.settings.agent, recent = state.settings.recentWorkspaces, dataDir = controller.dataDirectory().toString(), demoCount = demoCount,
+                agent = state.settings.agent, customProviders = state.settings.customProviders, recent = state.settings.recentWorkspaces, dataDir = controller.dataDirectory().toString(), demoCount = demoCount,
                 version = dev.chiller.app.di.BuildInfo.displayVersion, build = dev.chiller.app.di.BuildInfo.build, commit = dev.chiller.app.di.BuildInfo.commit,
                 runtime = dev.chiller.app.di.BuildInfo.runtime, os = dev.chiller.app.di.BuildInfo.os,
             ),
@@ -166,6 +167,8 @@ private fun chillerApplication() = application {
             ),
             settingsActions = dev.chiller.app.ui.SettingsActions(
                 saveCredential = { scope.launch { controller.saveCredential() } },
+                saveCustomProvider = { provider, done -> scope.launch { done(controller.saveCustomProvider(provider)) } },
+                deleteCustomProvider = { id -> scope.launch { controller.deleteCustomProvider(id) } },
                 deleteCredential = { scope.launch { controller.deleteCredential() } },
                 agent = { options -> scope.launch { controller.updateAgentOptions(options) } },
                 setVerifyCommand = { root, command -> controller.setVerifyCommand(root, command) },
