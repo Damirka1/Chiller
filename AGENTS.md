@@ -6,7 +6,7 @@ Kotlin/JVM, Compose Desktop, custom Chiller design system. Focus and Studio are 
 
 Read `README.md`, `CONTRIBUTING.md` and `docs/ARCHITECTURE.md`; for relevant changes read `docs/DESIGN.md` and `docs/PROVIDERS.md`. Shared contracts in `contracts/src/main/kotlin/dev/chiller/contracts/Contracts.kt` are the source of truth.
 
-Live requests require an explicitly authorized budget. Keys come only from configured environment/.env or app credentials; never print or commit them. Gemma/vLLM has not been live-verified.
+Live requests require an explicitly authorized budget. Keys come only from configured environment/.env or app credentials; never print or commit them. Gemma/vLLM is live-verified only on one gateway (Gemma 4 26B A4B, vLLM 0.31) with small runs.
 
 ## Collaboration during an authorized implementation run
 
