@@ -40,7 +40,8 @@ class LocalProcessService(root: Path) : ProcessService {
             pruneFinishedLocked()
             if (records.values.count { it.process.isAlive } >= 8)
                 throw ToolException("PROCESS_LIMIT", "At most eight running processes are supported")
-            val process = ProcessBuilder(request.argv).directory(cwd.toFile()).start()
+            val process = try { ProcessBuilder(request.argv).directory(cwd.toFile()).start() }
+            catch (e: java.io.IOException) { throw startFailure(request.argv.first(), e) }
             process.outputStream.close()
             Record(newId(), runId, process, request.background).also { started ->
                 records[started.id] = started
@@ -185,5 +186,22 @@ class LocalProcessService(root: Path) : ProcessService {
         withTimeoutOrNull(500) { while (record.process.isAlive) delay(20) }
         descendants.asReversed().filter { it.isAlive }.forEach { it.destroyForcibly() }
         if (record.process.isAlive) record.process.destroyForcibly()
+    }
+}
+
+/**
+ * Why a program did not start, in words a model can act on. A missing program was reported as a generic tool
+ * failure, and the model kept trying other launchers (xdg-open, firefox, sh -c) on Windows.
+ */
+internal fun startFailure(program: String, error: java.io.IOException, osName: String = System.getProperty("os.name").orEmpty()): ToolException {
+    val message = error.message.orEmpty()
+    val windows = osName.startsWith("Windows", ignoreCase = true)
+    val missing = "error=2," in message || "error=2 " in message || message.endsWith("error=2") || "No such file or directory" in message
+    return when {
+        missing -> ToolException("EXECUTABLE_NOT_FOUND", "Program '$program' was not found on PATH",
+            if (windows) "Shell built-ins (start, dir, echo) need [\"cmd\", \"/c\", ...]; to open a file with its default app use [\"cmd\", \"/c\", \"start\", \"\", \"<file>\"]. Check the program name or use its full path."
+            else "Check the program name or use its full path; shell syntax needs [\"sh\", \"-c\", \"...\"]; to open a file use xdg-open (Linux) or open (macOS).")
+        "error=5" in message || "Permission denied" in message -> ToolException("PERMISSION_DENIED", "Program '$program' could not be started: access denied")
+        else -> ToolException("PROCESS_START_FAILED", "Program '$program' could not be started")
     }
 }
