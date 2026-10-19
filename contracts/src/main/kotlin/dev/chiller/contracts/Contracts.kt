@@ -133,6 +133,20 @@ data class ToolResult(
 
 class ToolException(val code: String, override val message: String, val recovery: String? = null) : RuntimeException(message)
 
+/** An encoded image (PNG, JPEG or WebP) and its type. */
+class ImageData(val bytes: ByteArray, val mimeType: String) { override fun toString() = "ImageData($mimeType, ${bytes.size} bytes)" }
+
+/** Text-to-image generation and image editing through an endpoint's image model; bounded in size and time. */
+interface ImageService {
+    val model: String
+    val supportsEditing: Boolean
+    /** One image for [prompt]; with [reference] the model edits that image. Failures are [ToolException]s with provider codes. */
+    suspend fun generate(prompt: String, size: String, reference: ImageData? = null): ImageData
+}
+
+/** The original bytes of an image the user attached in a session; null when the id is unknown or not an image. */
+fun interface AttachmentImages { suspend fun load(sessionId: String, artifactId: String): ImageData? }
+
 enum class ExecutionMode { PLAN, WORKSPACE_EDIT }
 data class ToolContext(val sessionId: String, val runId: String, val mode: ExecutionMode, val allowProcesses: Boolean = false, val allowNetwork: Boolean = false, val allowScreenshots: Boolean = false)
 interface ToolExecutor {
@@ -177,6 +191,8 @@ interface WorkspaceService {
         if (cursor == null) search(query, path, glob, regex, limit, context) else ToolResult.failure("UNSUPPORTED", "Search continuation is unavailable; narrow the query")
     suspend fun edit(request: EditFileRequest): FileChange
     suspend fun create(path: String, content: String): FileChange
+    /** Raw bytes of an existing regular workspace file, at most [maxBytes]; for reference images, never for text edits. */
+    suspend fun readBinary(path: String, maxBytes: Int): ByteArray = throw ToolException("UNSUPPORTED", "Binary files cannot be read in this workspace")
     /** Creates a new binary file (a generated image); never overwrites. Undoable like [create]. */
     suspend fun createBinary(path: String, bytes: ByteArray): FileChange = throw ToolException("UNSUPPORTED", "Binary files cannot be created in this workspace")
     suspend fun createDirectory(path: String): ToolResult = ToolResult.failure("UNSUPPORTED", "Directory creation is unavailable")
