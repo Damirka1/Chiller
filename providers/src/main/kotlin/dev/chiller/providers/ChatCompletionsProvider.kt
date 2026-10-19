@@ -92,17 +92,19 @@ class ChatCompletionsProvider private constructor(
     private val profile: ChatCompletionsProfile,
     private val apiKey: () -> String?,
     private val retryDelaysMs: List<Long>,
+    private val sleep: suspend (Long) -> Unit,
 ) : LlmProvider {
     constructor(client: HttpClient, profile: ChatCompletionsProfile, apiKey: () -> String?) :
-        this(client, profile, apiKey, RETRY_DELAYS_MS)
+        this(client, profile, apiKey, RETRY_DELAYS_MS, { delay(it) })
 
-    /** Test seam: shorten the backoff between safe retries of the stateless model request. */
+    /** Test seam: shorten the backoff between safe retries of the stateless model request, or record it. */
     constructor(
         client: HttpClient,
         profile: ChatCompletionsProfile,
         retryDelaysMs: List<Long>,
+        sleep: suspend (Long) -> Unit = { delay(it) },
         apiKey: () -> String?,
-    ) : this(client, profile, apiKey, retryDelaysMs)
+    ) : this(client, profile, apiKey, retryDelaysMs, sleep)
 
     override fun outputTokenLimit(model: String): Int? = OutputLimits.known(profile.baseUrl, model)
 
@@ -168,7 +170,9 @@ class ChatCompletionsProvider private constructor(
                 emit(failure)
                 return@flow
             }
-            delay(retryAfterMs ?: retryDelaysMs.getOrNull(attempt - 1) ?: 0L)
+            val wait = retryAfterMs ?: retryDelaysMs.getOrNull(attempt - 1) ?: 0L
+            if (wait >= VISIBLE_RETRY_MS) emit(ModelEvent.Retrying(failure.code, wait, attempt + 1, MAX_ATTEMPTS))
+            sleep(wait)
         }
     }
 
@@ -191,17 +195,21 @@ class ChatCompletionsProvider private constructor(
                     // Error bodies are small JSON; only 400s are read, for the provider's own explanation and limits.
                     val errorText = if (status == 400) runCatching { response.bodyAsText().take(16_384) }.getOrNull() else null
                     val providerMessage = errorText?.let(::providerErrorMessage)
+                    // Retry-After may ask for a minute (a per-key gateway quota); waiting is better than failing the turn,
+                    // but a longer wait than we are willing to hold the turn for ends it with the server's figure.
+                    val retryAfter = response.headers[HttpHeaders.RetryAfter]?.let(::retryAfterMs)
+                    val tooLong = retryAfter != null && retryAfter > MAX_RETRY_AFTER_MS
                     outcome = AttemptOutcome.Failure(
                         ModelEvent.Failed(
                             when (status) { 401, 403 -> "AUTHENTICATION_FAILED"; 429 -> "RATE_LIMITED"; else -> "PROVIDER_HTTP_ERROR" },
                             when (status) { 401, 403 -> "Provider rejected credentials (HTTP $status)"; 429 -> "Provider rate limit reached"
-                                else -> "Provider request failed (HTTP $status)" + (providerMessage?.let { ": $it" } ?: "") },
+                                else -> "Provider request failed (HTTP $status)" + (providerMessage?.let { ": $it" } ?: "") } +
+                                (if (tooLong) "; server asks to retry in ${(retryAfter!! + 999) / 1000} s" else ""),
                         ),
                         outputLimit = errorText?.let(::parseOutputLimit),
                         requestOutputLimit = errorText?.let(::parseRequestOutputLimit),
-                        retryable = status == 429 || status in 500..599,
-                        retryAfterMs = response.headers[HttpHeaders.RetryAfter]?.trim()?.toLongOrNull()
-                            ?.takeIf { it >= 0 && it <= 2 }?.times(1000),
+                        retryable = (status == 429 || status in 500..599) && !tooLong,
+                        retryAfterMs = retryAfter?.takeUnless { tooLong },
                     )
                     return@execute
                 }
@@ -337,6 +345,10 @@ private const val MAX_SSE_FRAME_CHARS = 1_048_576
 /** Counted, not stored: room for a reply at a model's full output limit (hundreds of thousands of tokens). */
 private const val MAX_SSE_RESPONSE_CHARS = 67_108_864
 private const val MAX_ATTEMPTS = 3
+/** Longest Retry-After the provider waits out before resending; a gateway quota usually resets within a minute. */
+private const val MAX_RETRY_AFTER_MS = 120_000L
+/** Shorter backoffs pass silently; longer ones are announced so the turn does not look frozen. */
+private const val VISIBLE_RETRY_MS = 1_000L
 /** Newest user messages whose images are sent, and the cap on images per request. */
 private const val VISION_RECENT_USER_MESSAGES = 2
 private const val VISION_MAX_IMAGES = 4
@@ -444,6 +456,15 @@ fun parseRequestOutputLimit(errorText: String): Int? {
         return (window - prompt - 64).takeIf { it > 0 }
     }
     return null
+}
+
+/** Retry-After in milliseconds: delta-seconds or an HTTP date (RFC 9110); null when absent or unreadable. */
+internal fun retryAfterMs(header: String, now: java.time.Instant = java.time.Instant.now()): Long? {
+    val text = header.trim().ifEmpty { return null }
+    text.toLongOrNull()?.let { seconds -> return if (seconds < 0 || seconds > Long.MAX_VALUE / 1000) null else seconds * 1000 }
+    val at = runCatching { java.time.ZonedDateTime.parse(text, java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME).toInstant() }.getOrNull()
+        ?: return null
+    return java.time.Duration.between(now, at).toMillis().coerceAtLeast(0)
 }
 
 /** The provider's own error text from an OpenAI-style error body, shortened; never the request. */

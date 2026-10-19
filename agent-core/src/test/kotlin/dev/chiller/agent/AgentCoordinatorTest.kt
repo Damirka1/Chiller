@@ -65,6 +65,24 @@ class AgentCoordinatorTest {
         assertEquals(1, events.records.count { it.type == "run.truncated" })
     }
 
+    @Test fun providerRetryWaitIsShownUntilTheModelAnswers() = runTest {
+        val resend = CompletableDeferred<Unit>()
+        val provider = ScriptedProvider { _ -> flow {
+            emit(ModelEvent.Retrying("RATE_LIMITED", 60_000, 2, 3))
+            resend.await()
+            emit(ModelEvent.TextDelta("ok"))
+            emit(ModelEvent.Completed(AgentMessage("assistant", "ok"), "stop"))
+        } }
+        val fixture = fixture(provider, dispatcher = StandardTestDispatcher(testScheduler))
+        fixture.coordinator.send("hi", ExecutionMode.PLAN)
+        runCurrent()
+        assertEquals("Провайдер ограничил частоту запросов. Повтор через 60 с (попытка 2/3).", fixture.coordinator.state.value.recoveryNotice)
+        resend.complete(Unit)
+        advanceUntilIdle()
+        assertEquals("completed", fixture.coordinator.state.value.status)
+        assertEquals(null, fixture.coordinator.state.value.recoveryNotice)
+    }
+
     @Test fun textCutByTheLimitIsKeptAndContinued() = runTest {
         val requests = mutableListOf<ModelRequest>()
         val provider = ScriptedProvider { request -> flow {

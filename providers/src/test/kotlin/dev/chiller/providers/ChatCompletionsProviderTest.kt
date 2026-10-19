@@ -373,6 +373,48 @@ class ChatCompletionsProviderTest {
         assertEquals(2, requests.get())
     }
 
+    @Test fun retryAfterIsReadAsSecondsOrHttpDate() {
+        assertEquals(60_000, retryAfterMs("60"))
+        assertEquals(0, retryAfterMs(" 0 "))
+        assertNull(retryAfterMs("-1"))
+        assertNull(retryAfterMs("soon"))
+        val now = java.time.Instant.parse("2026-10-19T04:40:00Z")
+        assertEquals(56_000, retryAfterMs("Mon, 19 Oct 2026 04:40:56 GMT", now))
+        assertEquals(0, retryAfterMs("Mon, 19 Oct 2026 04:39:00 GMT", now))
+    }
+
+    @Test fun gatewayQuotaIsWaitedOutAndAnnounced() = runBlocking {
+        val (server, requests) = sequenceServer(listOf(429, 200), mapOf("Retry-After" to "60")) { exchange, _ ->
+            sendSse(exchange, sse("""{"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}""", "[DONE]"))
+        }
+        val waits = mutableListOf<Long>()
+        val events = invoke(server, sleep = { waits += it })
+        assertIs<ModelEvent.Completed>(events.last(), "Stream events: $events")
+        assertEquals(listOf(60_000L), waits)
+        assertEquals(ModelEvent.Retrying("RATE_LIMITED", 60_000, 2, 3), events.filterIsInstance<ModelEvent.Retrying>().single())
+        assertEquals(2, requests.get())
+    }
+
+    @Test fun retryAfterBeyondTheCapEndsTheTurnWithTheServersFigure() = runBlocking {
+        val (server, requests) = sequenceServer(listOf(429), mapOf("Retry-After" to "600")) { _, _ -> }
+        val waits = mutableListOf<Long>()
+        val events = invoke(server, sleep = { waits += it })
+        val failure = assertIs<ModelEvent.Failed>(events.last(), "Stream events: $events")
+        assertEquals("RATE_LIMITED", failure.code)
+        assertTrue("600 s" in failure.message, failure.message)
+        assertEquals(1, requests.get())
+        assertTrue(waits.isEmpty())
+    }
+
+    @Test fun shortBackoffsAreNotAnnounced() = runBlocking {
+        val (server, _) = sequenceServer(listOf(500, 200)) { exchange, _ ->
+            sendSse(exchange, sse("""{"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}""", "[DONE]"))
+        }
+        val events = invoke(server, retryDelaysMs = listOf(500))
+        assertIs<ModelEvent.Completed>(events.last())
+        assertTrue(events.none { it is ModelEvent.Retrying })
+    }
+
     @Test fun serverErrorsRetryThreeTimesThenFail() = runBlocking {
         val (server, requests) = sequenceServer(listOf(500, 500, 500)) { _, _ -> }
         val events = invoke(server)
@@ -432,6 +474,7 @@ class ChatCompletionsProviderTest {
         thinking: Boolean = false,
         retryDelaysMs: List<Long> = emptyList(),
         stopServer: Boolean = true,
+        sleep: suspend (Long) -> Unit = {},
     ): List<ModelEvent> {
         val client = HttpClient(CIO)
         try {
@@ -439,6 +482,7 @@ class ChatCompletionsProviderTest {
                 client,
                 ChatCompletionsProfile("test", "http://127.0.0.1:${server.address.port}", "test", reasoningField = "reasoning_content"),
                 retryDelaysMs,
+                sleep,
             ) { "test-secret" }
             return provider.stream(ModelRequest("test", messages, thinking = thinking)).toList()
         } finally { client.close(); if (stopServer) server.stop(0) }
@@ -467,6 +511,7 @@ class ChatCompletionsProviderTest {
     /** Serves one status per request, repeating the last status, and counts requests. */
     private fun sequenceServer(
         statuses: List<Int>,
+        errorHeaders: Map<String, String> = emptyMap(),
         handler: (com.sun.net.httpserver.HttpExchange, Int) -> Unit,
     ): Pair<HttpServer, AtomicInteger> {
         val requests = AtomicInteger(0)
@@ -475,7 +520,7 @@ class ChatCompletionsProviderTest {
             val attempt = requests.getAndIncrement()
             val status = statuses.getOrElse(attempt) { statuses.last() }
             if (status == 200) handler(exchange, attempt)
-            else { exchange.sendResponseHeaders(status, -1); exchange.close() }
+            else { errorHeaders.forEach { (k, v) -> exchange.responseHeaders.add(k, v) }; exchange.sendResponseHeaders(status, -1); exchange.close() }
         }
         server.start()
         return server to requests

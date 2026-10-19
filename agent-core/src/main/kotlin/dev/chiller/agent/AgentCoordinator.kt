@@ -381,12 +381,14 @@ class AgentCoordinator(
             val request = ModelRequest(model, selection.messages + listOfNotNull(truncationNotice), enabled, thinking, reserve)
             var truncatedCall = false
             var truncatedText = false
+            var retryShown = false
             try {
                 provider.stream(request).collect { event ->
                     check(!terminated) { "Provider emitted after terminal event" }
                     when (event) {
-                        is ModelEvent.TextDelta -> _state.update { it.copy(streamingText = it.streamingText + event.text) }
-                        is ModelEvent.ReasoningDelta -> _state.update { it.copy(reasoning = (it.reasoning + event.text).takeLast(48_000)) }
+                        is ModelEvent.TextDelta -> _state.update { it.copy(streamingText = it.streamingText + event.text, recoveryNotice = if (retryShown) null else it.recoveryNotice) }.also { retryShown = false }
+                        is ModelEvent.ReasoningDelta -> _state.update { it.copy(reasoning = (it.reasoning + event.text).takeLast(48_000), recoveryNotice = if (retryShown) null else it.recoveryNotice) }.also { retryShown = false }
+                        is ModelEvent.Retrying -> { retryShown = true; _state.update { it.copy(recoveryNotice = retryNotice(event)) } }
                         is ModelEvent.Usage -> {
                             roundUsage = roundUsage + event.usage
                             _state.update { it.copy(usage = it.usage + event.usage, contextReportedTokens = roundUsage.promptTokens) }
@@ -521,6 +523,13 @@ class AgentCoordinator(
 
 private const val MAX_TRUNCATION_RECOVERIES = 2
 /** The cut-off note names the actual limit and a concrete way to append, which small models need to recover. */
+/** What the user sees while a failed model request waits to be resent. */
+internal fun retryNotice(event: ModelEvent.Retrying): String {
+    val seconds = (event.delayMs + 999) / 1000
+    val reason = if (event.code == "RATE_LIMITED") "Провайдер ограничил частоту запросов" else "Провайдер временно недоступен (${event.code})"
+    return "$reason. Повтор через $seconds с (попытка ${event.attempt}/${event.maxAttempts})."
+}
+
 internal fun truncatedCallNotice(replyTokens: Int): String {
     val partChars = (replyTokens.toLong() * 3 / 2).coerceIn(1_000, 200_000)
     return "[Chiller] Your previous reply reached the output token limit and its tool call was cut off. Nothing was executed and that call is discarded. " +

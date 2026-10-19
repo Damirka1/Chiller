@@ -66,6 +66,8 @@ sealed interface ModelEvent {
 
     /** Reported at most once per request, before the terminal [Completed] or [Failed] event. */
     data class Usage(val usage: TokenUsage) : ModelEvent
+    /** Non-terminal: the stateless request failed before any delta and is resent after [delayMs]. */
+    data class Retrying(val code: String, val delayMs: Long, val attempt: Int, val maxAttempts: Int) : ModelEvent
     data class Completed(val message: AgentMessage, val finishReason: String) : ModelEvent
     data class Failed(val code: String, val message: String) : ModelEvent
 }
