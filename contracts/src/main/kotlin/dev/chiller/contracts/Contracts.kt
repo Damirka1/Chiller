@@ -87,6 +87,10 @@ data class ProviderModel(
     val displayName: String? = null,
     val contextWindow: Int? = null,
     val maxOutputTokens: Int? = null,
+    /** Accepts image input, as the listing states it (input modalities or capabilities); null when it does not say. */
+    val vision: Boolean? = null,
+    /** Can produce reasoning, as the listing's capabilities state it; null when it does not say. */
+    val reasoning: Boolean? = null,
 )
 
 @Serializable

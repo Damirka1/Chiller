@@ -359,7 +359,8 @@ private fun VerifyCard(data: SettingsData, actions: SettingsActions) {
 private fun ProfileCard(data: SettingsData, actions: SettingsActions) {
     val c = LocalChillerPalette.current
     val a = data.agent
-    val resolved = effectiveProfile(a, data.model)
+    val listed = data.catalog.entry(data.model)
+    val resolved = effectiveProfile(a, data.model, listed)
     Card {
         SectionTitle("Профиль модели", "Маленьким моделям проще с коротким списком инструментов и пошаговым промптом. Применяется со следующего сообщения.")
         Row(Modifier.clip(RoundedCornerShape(8.dp)).background(c.sidebar).padding(2.dp), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -371,7 +372,7 @@ private fun ProfileCard(data: SettingsData, actions: SettingsActions) {
             Box(Modifier.size(7.dp).clip(CircleShape).background(c.accent)); Spacer(Modifier.width(8.dp))
             Text(buildString {
                 append("Для ${data.model.ifBlank { "модели" }}: ${resolved.name.lowercase()}")
-                if (a.profile == "auto") append(" (выбран автоматически по ID)")
+                if (a.profile == "auto") append(if (listed?.displayName != null) " (выбран автоматически по ID и названию «${listed.displayName}»)" else " (выбран автоматически по ID)")
             }, color = c.text, fontSize = 12.sp)
         }
         Text(resolved.description, color = c.faint, fontSize = 11.sp, lineHeight = 16.sp)
@@ -381,7 +382,7 @@ private fun ProfileCard(data: SettingsData, actions: SettingsActions) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text("Изображения", color = c.text, fontSize = 13.sp)
-                Text(if (visionEnabled(a, data.model)) "Вложенные картинки отправляются модели как изображения" else "Модель получает только имя и размер картинки",
+                Text(if (visionEnabled(a, data.model, listed)) "Вложенные картинки отправляются модели как изображения" else "Модель получает только имя и размер картинки",
                     color = c.faint, fontSize = 11.sp, lineHeight = 15.sp)
             }
             listOf("auto" to "Авто", "on" to "Вкл", "off" to "Выкл").forEach { (id, label) ->

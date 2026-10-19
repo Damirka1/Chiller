@@ -41,6 +41,32 @@ class ModelCatalogTest {
         }
     }
 
+    @Test fun gatewayAndVllmMetadataGiveWindowVisionAndReasoning() = runBlocking {
+        Fixture { exchange, _ ->
+            sendJson(exchange, """
+                {"object":"list","data":[
+                  {"id":"quasar","name":"Gemma 4 26B A4B","capabilities":["chat_completions","vision","tools","reasoning"],
+                   "input_modalities":["text","image"],"output_modalities":["text"],"context_length":131072,"max_model_len":131072},
+                  {"id":"gemma-4-26b-a4b-it","object":"model","owned_by":"vllm","max_model_len":32768},
+                  {"id":"coder","capabilities":["chat_completions","vision"],"input_modalities":["text"]},
+                  {"id":"seer","capabilities":["Vision"]}
+                ]}
+            """.trimIndent())
+        }.use { fixture ->
+            val (quasar, vllm, coder, seer) = fixture.discover().models
+            assertEquals(131072, quasar.contextWindow)
+            assertEquals("Gemma 4 26B A4B", quasar.displayName)
+            assertEquals(true, quasar.vision)
+            assertEquals(true, quasar.reasoning)
+            assertNull(quasar.maxOutputTokens, "an absent output limit stays unknown")
+            assertEquals(32768, vllm.contextWindow)
+            assertNull(vllm.vision); assertNull(vllm.reasoning)
+            assertEquals(false, coder.vision, "input modalities outrank capabilities")
+            assertEquals(false, coder.reasoning)
+            assertEquals(true, seer.vision)
+        }
+    }
+
     @Test fun baseWithoutVersionRequestsModelsAndVersionedBaseRequestsV1Models() = runBlocking {
         Fixture { exchange, _ -> sendJson(exchange, """{"data":[]}""") }.use { fixture ->
             fixture.discover()

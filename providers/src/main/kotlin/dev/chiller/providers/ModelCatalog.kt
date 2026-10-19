@@ -82,11 +82,17 @@ class KtorModelCatalogClient(private val client: HttpClient) : ModelCatalogClien
                 return failure("MALFORMED_RESPONSE", "Provider returned a malformed model list")
             }
             if (models.size >= MAX_MODELS || id in models) continue
+            // Input modalities are the precise statement about images; capabilities are the fallback.
+            val capabilities = names(entry["capabilities"])
+            val inputs = names(entry["input_modalities"]) ?: names((entry["architecture"] as? JsonObject)?.get("input_modalities"))
             models[id] = ProviderModel(
                 id = id,
                 displayName = displayName(entry["name"]),
-                contextWindow = positiveInt(entry["context_window"]) ?: positiveInt(entry["context_length"]),
+                // vLLM itself reports max_model_len; gateways use context_window or context_length.
+                contextWindow = positiveInt(entry["context_window"]) ?: positiveInt(entry["context_length"]) ?: positiveInt(entry["max_model_len"]),
                 maxOutputTokens = positiveInt(entry["max_output_tokens"]),
+                vision = inputs?.let { "image" in it } ?: capabilities?.let { "vision" in it },
+                reasoning = capabilities?.let { "reasoning" in it },
             )
         }
         return ModelCatalogResult(models = models.values.toList())
@@ -111,6 +117,12 @@ private suspend fun readBounded(channel: ByteReadChannel): String? {
 /** Optional metadata is cosmetic: unusable values stay null instead of being guessed. */
 private fun displayName(node: JsonElement?): String? =
     (node as? JsonPrimitive)?.takeIf { it.isString }?.content?.trim()?.take(MAX_NAME_CHARS)?.ifBlank { null }
+
+/** A bounded set of lowercase names from a JSON string array; null when the field is absent or not such an array. */
+private fun names(node: JsonElement?): Set<String>? {
+    val array = node as? JsonArray ?: return null
+    return array.take(MAX_NAMES).mapNotNull { (it as? JsonPrimitive)?.takeIf { p -> p.isString }?.content?.trim()?.lowercase()?.take(MAX_NAME_CHARS) }.toSet()
+}
 
 private fun positiveInt(node: JsonElement?): Int? {
     val primitive = node as? JsonPrimitive ?: return null
@@ -143,3 +155,4 @@ private const val MAX_RESPONSE_BYTES = 1_048_576
 private const val MAX_MODELS = 500
 private const val MAX_ID_CHARS = 200
 private const val MAX_NAME_CHARS = 200
+private const val MAX_NAMES = 64

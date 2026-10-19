@@ -107,6 +107,10 @@ class AttachmentRepositoryTest {
         assertTrue(!visionEnabled(AgentOptions(), "qwen2.5-coder-7b"))
         assertTrue(visionEnabled(AgentOptions(vision = "on"), "qwen2.5-coder-7b"))
         assertTrue(!visionEnabled(AgentOptions(vision = "off"), "gpt-4o"))
+        // A gateway alias is decided by what its catalog entry states, not by the id.
+        assertTrue(visionEnabled(AgentOptions(), "quasar", dev.chiller.contracts.ProviderModel("quasar", vision = true)))
+        assertTrue(!visionEnabled(AgentOptions(), "gemma-4-26b-a4b", dev.chiller.contracts.ProviderModel("gemma-4-26b-a4b", vision = false)))
+        assertTrue(!visionEnabled(AgentOptions(), "quasar", dev.chiller.contracts.ProviderModel("quasar")))
         assertEquals("auto", AgentOptions(vision = "maybe").sanitized().vision)
     }
 }

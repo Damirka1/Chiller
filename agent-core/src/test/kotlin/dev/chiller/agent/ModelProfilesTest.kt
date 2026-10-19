@@ -20,6 +20,11 @@ class ModelProfilesTest {
         assertEquals("full", ModelProfiles.resolve("auto", "deepseek-flash").id)
         assertEquals("compact", ModelProfiles.resolve("compact", "deepseek-flash").id)
         assertEquals("full", ModelProfiles.resolve("unknown", "gemma-4-26b-a4b").id)
+        // A gateway alias says nothing about size; the catalog name decides, the id wins when it does say.
+        assertEquals("compact", ModelProfiles.resolve("auto", "quasar", "Gemma 4 26B A4B").id)
+        assertEquals("compact", ModelProfiles.resolve("auto", "nebula", "Qwen 3.6 35B A3B").id)
+        assertEquals("full", ModelProfiles.resolve("auto", "quasar", null).id)
+        assertEquals("full", ModelProfiles.resolve("auto", "qwen3-235b-a22b", "Tiny 7B").id)
         assertFalse("spawn_agent" in ModelProfiles.COMPACT.tools!!, "compact profile has no helpers")
         assertTrue(ModelProfiles.COMPACT.tools!!.containsAll(setOf("read_artifact", "show_file", "find_symbols")), "compact keeps attachments and results usable")
     }

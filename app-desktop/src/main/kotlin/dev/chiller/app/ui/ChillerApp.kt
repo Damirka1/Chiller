@@ -77,6 +77,7 @@ import androidx.compose.ui.window.PopupProperties
 import dev.chiller.app.di.UiPreferences
 import dev.chiller.app.di.AgentOptions
 import dev.chiller.app.di.visionEnabled
+import dev.chiller.app.di.entry
 import dev.chiller.app.di.SendReceipt
 import dev.chiller.app.di.ConnectionState
 import dev.chiller.app.di.ModelCatalogState
@@ -452,7 +453,7 @@ fun ChillerApp(
                                                 scope.launch { onSelectModel(selected)?.let { id -> drafts.putIfAbsent(id, oldDraft) } }
                                             }, { composing = it }, pendingSend, contextNote, catalog, onRefreshModels, onCancelCatalogRefresh, allowProcesses, onAllowProcessesChange,
                                                 workspacePath, onChooseWorkspace, state.contextReportedTokens?.coerceAtMost(Int.MAX_VALUE.toLong())?.toInt() ?: state.contextEstimatedTokens, state.contextReportedTokens == null, state.contextWindowTokens, connectionSummary(connection, apiKeyConfigured).second,
-                                                attachments = draftAttachments, attachmentOwnerKey = draftKey, vision = visionEnabled(settingsData?.agent ?: AgentOptions(), providerModel),
+                                                attachments = draftAttachments, attachmentOwnerKey = draftKey, vision = visionEnabled(settingsData?.agent ?: AgentOptions(), providerModel, catalog.entry(providerModel)),
                                                 importing = (pendingImportsBySession[draftKey] ?: 0) > 0,
                                                 onAppendAttachments = appendAttachments,
                                                 onRemoveAttachment = removeAttachment,

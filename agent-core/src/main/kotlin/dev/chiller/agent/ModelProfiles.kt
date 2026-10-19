@@ -44,22 +44,28 @@ object ModelProfiles {
 
     val all = listOf(FULL, COMPACT)
 
-    /** "auto" picks by model id; unknown ids get the full profile. */
-    fun resolve(id: String, modelId: String): ModelProfile = when (id) {
-        "auto" -> if (isSmall(modelId)) COMPACT else FULL
+    /**
+     * "auto" picks by model id, then by the catalog's display name when the id says nothing about size (a gateway
+     * alias like "quasar" named "Gemma 4 26B A4B"); unknown models get the full profile.
+     */
+    fun resolve(id: String, modelId: String, displayName: String? = null): ModelProfile = when (id) {
+        "auto" -> if (sizeHint(modelId) ?: displayName?.let(::sizeHint) ?: false) COMPACT else FULL
         else -> all.firstOrNull { it.id == id } ?: FULL
     }
 
+    fun isSmall(modelId: String): Boolean = sizeHint(modelId) ?: false
+
     /**
-     * Heuristic from the model id only: an active-parameter tag like "a4b", a size tag of 14B or less
-     * ("7b", "8b", "e4b"), or a known small family. It never inspects the endpoint.
+     * Heuristic from a model id or name: an active-parameter tag like "a4b", a size tag of 14B or less
+     * ("7b", "8b", "e4b"), or a known small family. Null when the text says nothing about size. It never inspects the endpoint.
      */
-    fun isSmall(modelId: String): Boolean {
-        val id = modelId.lowercase()
+    private fun sizeHint(text: String): Boolean? {
+        // Names use spaces ("Gemma 4 26B A4B"); ids use dashes. Both become token boundaries.
+        val id = text.lowercase().replace(' ', '-')
         Regex("""(?<![a-z0-9])a(\d+(?:\.\d+)?)b(?![a-z0-9])""").find(id)?.let { return it.groupValues[1].toDouble() <= 14 }
         if (Regex("""(?<![a-z0-9])e\d+(?:\.\d+)?b(?![a-z0-9])""").containsMatchIn(id)) return true
         Regex("""(?<![a-z0-9.])(\d+(?:\.\d+)?)b(?![a-z0-9])""").findAll(id).map { it.groupValues[1].toDouble() }.lastOrNull()?.let { return it <= 14 }
-        return listOf("phi-", "phi3", "phi4", "smollm", "tinyllama", "gemma-2b", "gemma-3n").any { it in id }
+        return if (listOf("phi-", "phi3", "phi4", "smollm", "tinyllama", "gemma-2b", "gemma-3n").any { it in id }) true else null
     }
 }
 

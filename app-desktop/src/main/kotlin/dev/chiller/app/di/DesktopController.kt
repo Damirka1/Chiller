@@ -874,9 +874,10 @@ class DesktopController(
         val baseProfile = if (java.net.URI(s.settings.baseUrl).host == "api.deepseek.com")
             ChatCompletionsProfile.deepSeekFlash(s.settings.baseUrl, s.settings.model)
         else ChatCompletionsProfile("generic", s.settings.baseUrl, s.settings.model, requiresApiKey = !keyless(s.settings.baseUrl))
-        val modelProfile = effectiveProfile(options, modelOverride ?: s.settings.model)
+        val listed = s.catalog.entry(modelOverride ?: s.settings.model)
+        val modelProfile = effectiveProfile(options, modelOverride ?: s.settings.model, listed)
         val engineSession = s.sessionId
-        val vision = if (visionEnabled(options, modelOverride ?: s.settings.model)) ImageInput { id -> inputAttachments.modelImage(engineSession, id) } else null
+        val vision = if (visionEnabled(options, modelOverride ?: s.settings.model, listed)) ImageInput { id -> inputAttachments.modelImage(engineSession, id) } else null
         val profile = baseProfile.withExtras(requestExtrasFor(modelProfile, options)).copy(imageInput = vision)
         // The engine's provider is bound to its own endpoint's key, read at request time.
         val engineOrigin = originOf(s.settings.baseUrl)
