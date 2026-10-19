@@ -167,7 +167,7 @@ private fun chillerApplication() = application {
             ),
             settingsActions = dev.chiller.app.ui.SettingsActions(
                 saveCredential = { scope.launch { controller.saveCredential() } },
-                saveCustomProvider = { provider, done -> scope.launch { done(controller.saveCustomProvider(provider)) } },
+                saveCustomProvider = { provider, key, done -> scope.launch { done(controller.saveCustomProvider(provider, key)) } },
                 deleteCustomProvider = { id -> scope.launch { controller.deleteCustomProvider(id) } },
                 deleteCredential = { scope.launch { controller.deleteCredential() } },
                 agent = { options -> scope.launch { controller.updateAgentOptions(options) } },

@@ -67,8 +67,8 @@ class SettingsActions(
     val openComparison: (() -> Unit)? = null, val close: () -> Unit = {},
     val setVerifyCommand: (root: String, command: String) -> Unit = { _, _ -> },
     val saveCredential: () -> Unit = {}, val deleteCredential: () -> Unit = {},
-    /** Saves a custom provider; the callback gets why it was refused, or null. Unwired, it refuses instead of pretending. */
-    val saveCustomProvider: (CustomProvider, (String?) -> Unit) -> Unit = { _, done -> done("Сохранение недоступно") },
+    /** Saves a custom provider with an optional typed key; the callback gets why it was refused, or null. Unwired, it refuses instead of pretending. */
+    val saveCustomProvider: (CustomProvider, String?, (String?) -> Unit) -> Unit = { _, _, done -> done("Сохранение недоступно") },
     val deleteCustomProvider: (String) -> Unit = {},
     val refreshCaptureTargets: () -> Unit = {}, val selectCaptureTarget: (String) -> Unit = {},
 )
@@ -248,6 +248,7 @@ internal fun CustomProviderCard(data: SettingsData, actions: SettingsActions, ed
     var thinking by remember(base) { mutableStateOf(base.thinking) }
     var profile by remember(base) { mutableStateOf(base.profile) }
     var message by remember(base) { mutableStateOf<String?>(null) }
+    var apiKey by remember(base) { mutableStateOf("") }
     val draft = CustomProvider(base.id, name, address, keyVariable, defaultModel, thinking, profile).normalized()
     // Folded until asked for or a custom provider is chosen, so the connection form stays near the presets.
     var open by remember(editing) { mutableStateOf(editing != null) }
@@ -262,10 +263,15 @@ internal fun CustomProviderCard(data: SettingsData, actions: SettingsActions, ed
     }
     Card {
         SectionTitle(if (editing == null) "Свой провайдер" else "Свой провайдер · ${editing.name}",
-            "Например, шлюз компании. Хранится только в настройках этого компьютера и не попадает в репозиторий. Ключ читается из переменной окружения или .env.")
+            "Например, шлюз компании. Хранится только в настройках этого компьютера и не попадает в репозиторий.")
         ChillerField(name, { name = it }, "Название", "Qarmet")
         ChillerField(address, { address = it }, "Адрес API", "https://gateway.example.com/v1")
-        ChillerField(keyVariable, { keyVariable = it }, "Переменная с ключом (необязательно)", "QARMET_API_KEY")
+        ChillerField(apiKey, { apiKey = it }, "API-ключ", when {
+            data.keySources[originOf(address.trim())] == "keychain" -> "Ключ сохранён. Пустое поле оставляет его"
+            data.keySources[originOf(address.trim())] != null -> "Ключ задан. Пустое поле оставляет его"
+            else -> "Вставьте ключ"
+        }, secret = true)
+        ChillerField(keyVariable, { keyVariable = it }, "или переменная с ключом из .env (необязательно)", "QARMET_API_KEY")
         ChillerField(defaultModel, { defaultModel = it }, "Модель по умолчанию (необязательно)", "quasar")
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             Text("Рассуждения", color = c.text, fontSize = 12.sp, modifier = Modifier.width(110.dp))
@@ -283,7 +289,7 @@ internal fun CustomProviderCard(data: SettingsData, actions: SettingsActions, ed
             ChillerControl(if (editing == null) "Добавить и подключить" else "Сохранить и подключить", {
                 val problem = draft.problem()
                 if (problem != null) message = problem
-                else actions.saveCustomProvider(draft) { refused -> message = refused ?: "Сохранено"; if (refused == null) { onEdit(draft); onUse(draft) } }
+                else actions.saveCustomProvider(draft, apiKey.takeIf { it.isNotBlank() }) { refused -> apiKey = ""; message = refused ?: "Сохранено"; if (refused == null) { onEdit(draft); onUse(draft) } }
             }, style = ControlStyle.PRIMARY, enabled = name.isNotBlank() && address.isNotBlank())
             if (editing != null) {
                 ChillerControl("Удалить", { actions.deleteCustomProvider(editing.id); onEdit(null) }, style = ControlStyle.OUTLINE)
@@ -291,7 +297,8 @@ internal fun CustomProviderCard(data: SettingsData, actions: SettingsActions, ed
             ChillerControl("Свернуть", { if (editing != null) onEdit(null) else open = false })
         }
         message?.let { Text(it, color = if (it == "Сохранено") c.positive else c.negative, fontSize = 11.sp) }
-        if (draft.keyVariable != null) Text("Ключ берётся из ${draft.keyVariable} при запуске и при сохранении; уходит только на ${originOf(draft.baseUrl) ?: "этот адрес"}.", color = c.faint, fontSize = 11.sp, lineHeight = 15.sp)
+        Text(if (data.secureStorageSupported) "Ключ сохранится в «${data.secureStorageName}» и уходит только на ${originOf(draft.baseUrl) ?: "этот адрес"}. Переменная из .env нужна, только если ключ не вставлен."
+            else "Ключ действует до выхода и уходит только на ${originOf(draft.baseUrl) ?: "этот адрес"}; чтобы он сохранялся, укажите переменную из .env.", color = c.faint, fontSize = 11.sp, lineHeight = 15.sp)
     }
 }
 

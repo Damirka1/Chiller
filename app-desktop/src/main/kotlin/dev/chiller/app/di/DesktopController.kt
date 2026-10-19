@@ -1005,13 +1005,28 @@ class DesktopController(
     }
 
     /** Adds or replaces (by id) a custom provider; returns why it was refused, or null. */
-    suspend fun saveCustomProvider(provider: CustomProvider): String? = commands.withLock {
+    /**
+     * Adds or replaces (by id) a custom provider; returns why it was refused, or null. A [key] typed with it becomes
+     * its origin's key and is remembered in the OS store when there is one, so it is entered once.
+     */
+    suspend fun saveCustomProvider(provider: CustomProvider, key: String? = null): String? = commands.withLock {
         val clean = provider.normalized()
         clean.problem()?.let { return@withLock it }
         val current = _state.value.settings.customProviders
         if (current.none { it.id == clean.id } && current.size >= MAX_CUSTOM_PROVIDERS) return@withLock "Не больше $MAX_CUSTOM_PROVIDERS своих провайдеров"
-        val settings = _state.value.settings.copy(customProviders = current.filterNot { it.id == clean.id } + clean)
-        adoptKey(clean)
+        var settings = _state.value.settings.copy(customProviders = current.filterNot { it.id == clean.id } + clean)
+        val origin = originOf(clean.baseUrl)
+        val typed = key?.trim()?.takeIf { it.isNotEmpty() }
+        if (typed != null && origin != null) {
+            credentials[origin] = typed; envOrigins.remove(origin); secureOrigins.remove(origin)
+            if (credentialStore.supported) {
+                try {
+                    withContext(Dispatchers.IO) { credentialStore.save(origin, typed) }
+                    secureOrigins += origin
+                    settings = settings.copy(credentialOrigins = (settings.credentialOrigins + origin).distinct().takeLast(32))
+                } catch (_: Exception) { /* The key still works until exit; the settings page says where it lives. */ }
+            }
+        } else adoptKey(clean)
         _state.update { it.copy(settings = settings, apiKeyConfigured = ready(), connection = if (ready() && it.connection.status == "missing") connectionForUnverified() else it.connection) }
         saveSettings(settings)
         null

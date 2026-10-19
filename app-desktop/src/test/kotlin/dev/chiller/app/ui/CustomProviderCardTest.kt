@@ -16,7 +16,7 @@ import kotlin.test.assertEquals
 class CustomProviderCardTest {
     @Test fun typedValuesStayAndAreSaved() = runComposeUiTest {
         val saved = mutableListOf<CustomProvider>()
-        val actions = SettingsActions(saveCustomProvider = { provider, done -> saved += provider; done(null) })
+        val actions = SettingsActions(saveCustomProvider = { provider, _, done -> saved += provider; done(null) })
         setContent {
             ChillerTheme(darkTheme = false, reducedMotion = true) {
                 CustomProviderCard(SettingsData("https://api.deepseek.com", "deepseek-flash", false, false), actions, editing = null, onEdit = {}, onUse = {})
@@ -26,7 +26,7 @@ class CustomProviderCardTest {
         // Each character recomposes the card; the draft must survive it.
         onNodeWithContentDescription("Название").performTextInput("Qarmet")
         onNodeWithContentDescription("Адрес API").performTextInput("https://gateway.example.com/v1")
-        onNodeWithContentDescription("Переменная с ключом (необязательно)").performTextInput("QARMET_API_KEY")
+        onNodeWithContentDescription("или переменная с ключом из .env (необязательно)").performTextInput("QARMET_API_KEY")
         onNodeWithContentDescription("Название").assertTextEquals("Qarmet", includeEditableText = true)
         onNodeWithText("Полный").performClick()
         onNodeWithText("Добавить и подключить").performClick()
