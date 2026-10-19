@@ -1162,9 +1162,11 @@ private fun Conversation(state: RunState, reduced: Boolean, onAnswer: (String) -
     Box(modifier, contentAlignment = Alignment.TopCenter) {
         LazyColumn(state = scroll, modifier = Modifier.widthIn(max = 816.dp).fillMaxSize(), contentPadding = PaddingValues(horizontal = 28.dp, vertical = 28.dp), verticalArrangement = Arrangement.spacedBy(if (LocalChillerCompact.current) 14.dp else 18.dp)) {
             // LazyColumn fades items in only when they are added after the first layout, and slides neighbours into place.
+            // No fade-out: a removed status line ("Модель пишет…") fading while the list auto-scrolls to the new
+            // summary could stay drawn over it.
             @Suppress("UNUSED_PARAMETER")
             fun LazyItemScope.entryModifier(key: String): Modifier =
-                if (reduced) Modifier else Modifier.animateItem(fadeInSpec = tween(220), placementSpec = spring(stiffness = 500f, dampingRatio = .9f), fadeOutSpec = tween(120))
+                if (reduced) Modifier else Modifier.animateItem(fadeInSpec = tween(220), placementSpec = spring(stiffness = 500f, dampingRatio = .9f), fadeOutSpec = null)
             projection.entries.forEachIndexed { position, entry ->
                 val key = "message-${entry.index}"
                 item(key = key) {
