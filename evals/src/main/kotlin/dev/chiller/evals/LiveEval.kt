@@ -12,6 +12,7 @@ import dev.chiller.tools.SubagentTools
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import dev.chiller.contracts.ImageService
+import dev.chiller.contracts.plus
 import dev.chiller.contracts.InteractionBroker
 import dev.chiller.contracts.UserQuestion
 import dev.chiller.providers.ChatCompletionsProfile
@@ -166,18 +167,39 @@ internal suspend fun runTask(task: EvalTask, attempt: Int, provider: ChatComplet
         val delegating: ToolExecutor = if (helpersAllowed) SubagentTools(builtin, supervisor) else builtin
         val tools: ToolExecutor = modelProfile.tools?.let { ProfiledTools(delegating, it) } ?: delegating
         val output = ModelProfiles.replyTokens(modelProfile.maxOutputTokens?.let { minOf(it, maxOutput) } ?: maxOutput, thinking)
-        val engine = AgentCoordinator(budget, tools, store, processes, session, model, thinking, maxRounds = maxRounds, maxOutputTokens = output,
+        // A fresh engine over the same journal and workspace; after a "restart" it restores the conversation from disk.
+        suspend fun newEngine() = AgentCoordinator(budget, tools, store, processes, session, model, thinking, maxRounds = maxRounds, maxOutputTokens = output,
             projectInstructions = ProjectInstructions.load(project)?.text, traces = RunTraceSink { traceFile.append(it) }, subagents = supervisor.takeIf { helpersAllowed },
-            systemPrompt = modelProfile.systemPrompt, projectMap = if (modelProfile.projectMap) code.projectMap() else null, scope = this, contextWindowTokens = contextWindowTokens)
-        try {
-            withTimeout(5 * 60_000L) { engine.send(task.prompt, task.mode, task.allowProcesses).join() }
-        } catch (_: kotlinx.coroutines.TimeoutCancellationException) { failure = "timeout after 5 min"; engine.stop() }
-        catch (error: Exception) { failure = error.javaClass.simpleName }
+            systemPrompt = modelProfile.systemPrompt, projectMap = if (modelProfile.projectMap) code.projectMap() else null, scope = this,
+            contextWindowTokens = task.contextWindowTokens ?: contextWindowTokens)
+        var engine = newEngine()
+        // Turns run in one session; totals add up over them, and the first failing turn ends the attempt.
+        var rounds = 0; var toolCalls = 0; var failedToolCalls = 0
+        var usage = dev.chiller.contracts.TokenUsage()
+        val turns = task.turns
+        var verdict = Verdict(false, "not run")
+        for ((index, turn) in turns.withIndex()) {
+            turn.before(project)
+            if (turn.restartBefore && index > 0) { engine = newEngine(); engine.restore() }
+            try {
+                withTimeout(5 * 60_000L) { engine.send(turn.prompt, turn.mode ?: task.mode, turn.allowProcesses ?: task.allowProcesses).join() }
+            } catch (_: kotlinx.coroutines.TimeoutCancellationException) { failure = "timeout after 5 min in turn ${index + 1}"; engine.stop() }
+            catch (error: Exception) { failure = error.javaClass.simpleName }
+            val turnState = engine.state.value
+            rounds += turnState.modelRounds; toolCalls += turnState.toolCalls; failedToolCalls += turnState.failedToolCalls; usage = usage + turnState.usage
+            val turnAnswer = turnState.messages.lastOrNull { it.role == "assistant" && !it.content.isNullOrBlank() }?.content.orEmpty()
+            val checked = runCatching { turn.check(project, turnAnswer) }.getOrElse { Verdict(false, "check crashed: ${it.message}") }
+            val label = if (turns.size > 1) "turn ${index + 1}/${turns.size}: " else ""
+            verdict = Verdict(checked.passed && turnState.status == "completed", label + checked.detail)
+            if (!verdict.passed || failure != null) break
+        }
         val state = engine.state.value
         val answer = state.messages.lastOrNull { it.role == "assistant" && !it.content.isNullOrBlank() }?.content.orEmpty()
-        val checked = runCatching { task.check(project, answer) }.getOrElse { Verdict(false, "check crashed: ${it.message}") }
         val openSteps = dev.chiller.agent.openPlanSteps(state.messages).size
-        val verdict = if (task.requireClosedPlan && openSteps > 0) Verdict(false, "${checked.detail}; plan left $openSteps step(s) open") else checked
+        if (verdict.passed && task.requireClosedPlan && openSteps > 0) verdict = Verdict(false, "${verdict.detail}; plan left $openSteps step(s) open")
+        // A memory scenario that never compacted did not test memory: it cannot pass.
+        if (verdict.passed && task.requireContextCompaction && store.read(session).none { it.type == "context.summary" })
+            verdict = Verdict(false, "${verdict.detail}; the context was never compacted, so memory was not exercised")
         val errors = state.activities.filter { it.status == "failed" }.mapNotNull { activity ->
             runCatching { Json.parseToJsonElement(activity.output).jsonObject["error"]?.jsonObject?.get("code")?.jsonPrimitive?.content }.getOrNull()?.let { "${activity.name}:$it" }
         }.groupingBy { it }.eachCount()
@@ -187,8 +209,8 @@ internal suspend fun runTask(task: EvalTask, attempt: Int, provider: ChatComplet
         val error = failure ?: state.error?.take(300)
         EvalResult(
             task.id, attempt, verdict.passed && state.status == "completed", verdict.detail, state.status, error,
-            state.modelRounds, state.toolCalls, state.failedToolCalls, errors, state.activities.map { it.name }.distinct(),
-            (System.nanoTime() - started) / 1_000_000, state.usage.promptTokens, state.usage.completionTokens, state.usage.cachedPromptTokens, answer.take(1500),
+            rounds, toolCalls, failedToolCalls, errors, state.activities.map { it.name }.distinct(),
+            (System.nanoTime() - started) / 1_000_000, usage.promptTokens, usage.completionTokens, usage.cachedPromptTokens, answer.take(1500),
             subagents = helpers.size, subagentsCompleted = helpers.count { it.status == dev.chiller.contracts.SubagentStatus.COMPLETED },
             loss = lossMetrics(state.messages, state.activities),
             infrastructure = state.status != "completed" && error?.substringBefore(':')?.trim() in INFRASTRUCTURE_CODES,

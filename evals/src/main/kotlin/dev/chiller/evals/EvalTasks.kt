@@ -12,6 +12,17 @@ import java.util.concurrent.ExecutionException
 /** Independent verdict on a task; the model's own claim is never evidence. */
 data class Verdict(val passed: Boolean, val detail: String)
 
+/** A subsequent user request in the same journal and workspace. Only the fixture may intervene. */
+data class EvalTurn(
+    val prompt: String,
+    val check: (Path, String) -> Verdict,
+    val reference: (Path) -> String,
+    val before: (Path) -> Unit = {},
+    val restartBefore: Boolean = false,
+    val mode: ExecutionMode? = null,
+    val allowProcesses: Boolean? = null,
+)
+
 /**
  * One reproducible task: files written into a fresh folder, a prompt, the permissions the agent gets,
  * an independent [check], and a [reference] solution used offline to prove the check can pass and fail.
@@ -30,8 +41,15 @@ class EvalTask(
     val requiredTools: Set<String> = emptySet(),
     /** The attempt passes only if the model's last update_plan of the turn has every step done or skipped. */
     val requireClosedPlan: Boolean = false,
+    val followUps: List<EvalTurn> = emptyList(),
+    /** A deliberately smaller window makes context-pressure scenarios reproducible across models. */
+    val contextWindowTokens: Int? = null,
+    val requireContextCompaction: Boolean = false,
 ) {
     val check: (Path, String) -> Verdict = protectOracle(files, check)
+    val turns: List<EvalTurn> get() = listOf(EvalTurn(prompt, this.check, reference)) + followUps.map {
+        it.copy(check = protectOracle(files, it.check))
+    }
 
     fun materialize(project: Path) {
         files.forEach { (path, content) ->
@@ -43,7 +61,7 @@ class EvalTask(
 }
 
 /** Model-visible test files are examples, but changing them must never make the verdict pass. */
-private fun oracleFiles(files: Map<String, String>) = files.filterKeys { path ->
+internal fun oracleFiles(files: Map<String, String>) = files.filterKeys { path ->
     val name = path.substringAfterLast('/')
     name == "checks.py" || (name.startsWith("test_") && name.endsWith(".py"))
 }
@@ -388,7 +406,7 @@ val EVAL_TASKS: List<EvalTask> = listOf(
         },
         reference = { "The page contains no temperatures (they are loaded by a script), so weather.json was not written." },
     ),
-)
+ ) + LONG_EVAL_TASKS
 
 /**
  * Proves every check is meaningful: it fails on the untouched task and passes after the reference
@@ -397,19 +415,24 @@ val EVAL_TASKS: List<EvalTask> = listOf(
 fun verifyEvalChecks(workDir: Path): List<String> = EVAL_TASKS.mapNotNull { task ->
     val project = Files.createTempDirectory(workDir, task.id)
     task.materialize(project)
-    val before = task.check(project, "")
-    val answer = task.reference(project)
-    val after = task.check(project, answer)
-    val alteredOracleAccepted = oracleFiles(task.files).keys.firstOrNull()?.let { file ->
-        Files.writeString(project.resolve(file), "print('forged success')\n")
-        task.check(project, answer).passed
-    } ?: false
-    when {
-        alteredOracleAccepted -> "${task.id}: altered verification file was accepted"
-        before.passed -> "${task.id}: check passes before solving (${before.detail})"
-        !after.passed -> "${task.id}: reference fails (${after.detail})"
-        else -> null
-    }
+    task.turns.mapIndexedNotNull { index, turn ->
+        turn.before(project)
+        val before = turn.check(project, "")
+        val answer = turn.reference(project)
+        val after = turn.check(project, answer)
+        val alteredOracleAccepted = oracleFiles(task.files).entries.firstOrNull()?.let { (file, original) ->
+            Files.writeString(project.resolve(file), "print('forged success')\n")
+            val accepted = turn.check(project, answer).passed
+            Files.writeString(project.resolve(file), original)
+            accepted
+        } ?: false
+        when {
+            alteredOracleAccepted -> "turn ${index + 1}: altered verification file was accepted"
+            before.passed -> "turn ${index + 1}: check passes before solving (${before.detail})"
+            !after.passed -> "turn ${index + 1}: reference fails (${after.detail})"
+            else -> null
+        }
+    }.takeIf { it.isNotEmpty() }?.joinToString("; ", prefix = "${task.id}: ")
 }
 
 /** A PNG signature and IHDR for 512x512: enough for the generate-image check's type and size test. */
