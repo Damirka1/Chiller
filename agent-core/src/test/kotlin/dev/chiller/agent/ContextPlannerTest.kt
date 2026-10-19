@@ -2,7 +2,11 @@ package dev.chiller.agent
 
 import dev.chiller.contracts.AgentMessage
 import dev.chiller.contracts.ToolCall
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -184,6 +188,27 @@ class ContextPlannerTest {
         assertTrue(memory.contains("Plan: Skywise"))
         assertTrue(memory.contains("extractive_reference"))
         assertTrue(!conversationMemory(source.drop(2)).contains("Skywise"))
+    }
+
+    @Test fun earlyConstraintsAndTheOpenPlanOutliveLongConversations() {
+        val early = "Fix pricing. Do not change the public API of quote_total. Retries должно быть 2."
+        val source = listOf(AgentMessage("user", early), AgentMessage("assistant", null, listOf(ToolCall("p", "update_plan",
+            """{"steps":[{"step":"Fix subtotal","status":"done"},{"step":"Clamp discount","status":"pending"}]}""")))) +
+            (1..30).flatMap { listOf(AgentMessage("user", "Review batch $it: all samples returned 200."), AgentMessage("assistant", "Reviewed batch $it.")) }
+        val memory = Json.parseToJsonElement(conversationMemory(source, maxCharacters = 2_000)).jsonObject
+        val constraints = memory.getValue("constraints").jsonArray.map { it.jsonObject.getValue("text").jsonPrimitive.content }
+        assertTrue("Do not change the public API of quote_total." in constraints, constraints.toString())
+        assertTrue("Retries должно быть 2." in constraints, constraints.toString())
+        assertEquals("user message 1", memory.getValue("constraints").jsonArray.first().jsonObject.getValue("source").jsonPrimitive.content)
+        assertTrue(conversationMemory(source, maxCharacters = 2_000).length <= 2_000, "lower-priority excerpts give way to the budget")
+    }
+
+    @Test fun constraintsAreDedupedAndKeepTheEarliestWhenMany() {
+        val requests = (1..30).map { "Rule $it: never touch file$it.txt." } + "rule 1: never touch file1.txt."
+        val found = userConstraints(requests)
+        assertEquals(16, found.size)
+        assertEquals(1, found.first().first, "the earliest rules stay")
+        assertEquals("Rule 30: never touch file30.txt.", found.last().second)
     }
 
 }

@@ -37,15 +37,7 @@ class ContextPlanner(
 
     fun select(history: List<AgentMessage>): ContextSelection {
         val budget = (maxCharacters - outputReserveCharacters).toLong()
-        // Compact before fitting whole turns: a long active tool loop must have the same
-        // opportunity to shed old results as completed history. Pairing/replay stay intact.
-        val candidates = history.indices.filter {
-            history[it].role == "tool" && (history[it].content?.length ?: 0) > pruneAboveCharacters
-        }.dropLast(keepToolResults)
-        val prune = if (history.sumOf(::messageCharacters) > budget * pruneThreshold) candidates.toSet() else emptySet()
-        val messages = history.mapIndexed { index, message ->
-            if (index in prune) message.copy(content = prunedResult(message.content)) else message
-        }
+        val (messages, prune) = compactResults(history)
         val fixedCost = messages.filter { it.role == "system" }.sumOf(::messageCharacters)
         if (fixedCost > budget) {
             throw ContextLimitException("System messages exceed the available context character budget")
@@ -61,18 +53,9 @@ class ContextPlanner(
             }
             var currentCost = current.indices.sumOf { messageCharacters(messages[it]) }
             if (used + currentCost > budget) {
-                // Remove whole old exchanges, never half a call/result pair. Keep the original user request,
-                // the newest exchange, and any unknown outcome requiring human review.
-                val exchanges = mutableListOf<MutableList<Int>>()
-                current.indices.forEach { i ->
-                    if (messages[i].role == "assistant" || exchanges.isEmpty()) exchanges.add(mutableListOf())
-                    exchanges.last().add(i)
-                }
                 val retained = current.indices.toMutableSet()
-                for (exchange in exchanges.dropLast(1)) {
+                for (exchange in removableExchanges(current, messages)) {
                     if (used + currentCost <= budget) break
-                    if (exchange.any { messages[it].role == "user" || messages[it].content.orEmpty().contains("OUTCOME_UNKNOWN") }) continue
-                    if (!hasCompleteToolPairs(exchange.map(messages::get))) continue
                     exchange.forEach { retained.remove(it) }
                     currentCost -= exchange.sumOf { messageCharacters(messages[it]) }
                 }
@@ -96,13 +79,49 @@ class ContextPlanner(
 
         val keepIndices = HashSet<Int>()
         groups.forEachIndexed { index, group -> if (keep[index]) keepIndices.addAll(group.indices) }
-        var selected = messages.filterIndexed { index, message -> message.role == "system" || keepIndices.contains(index) }
+        val selected = messages.filterIndexed { index, message -> message.role == "system" || keepIndices.contains(index) }
         val dropped = messages.size - selected.size
-
         val pruned = keepIndices.count { it in prune }
-
         val estimatedTokens = ((selected.sumOf(::messageCharacters) + 3L) / 4L).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
         return ContextSelection(selected, dropped, estimatedTokens, prunedResults = pruned)
+    }
+
+    /** Space a reference can use without evicting the current request, newest exchange or unknown outcomes. */
+    internal fun referenceAllowance(history: List<AgentMessage>, limit: Int): Int {
+        val (messages, _) = compactResults(history)
+        val current = splitIntoGroups(messages).lastOrNull()
+        val removable = current?.let { removableExchanges(it, messages).flatten().toSet() }.orEmpty()
+        val required = messages.filter { it.role == "system" }.sumOf(::messageCharacters) +
+            current?.indices.orEmpty().filterNot { it in removable }.sumOf { messageCharacters(messages[it]) }
+        return (maxCharacters.toLong() - outputReserveCharacters - required).coerceIn(0, limit.coerceAtLeast(0).toLong()).toInt()
+    }
+
+    private fun compactResults(history: List<AgentMessage>): Pair<List<AgentMessage>, Set<Int>> {
+        val budget = (maxCharacters - outputReserveCharacters).toLong()
+        // Compact before fitting whole turns: a long active tool loop must have the same
+        // opportunity to shed old results as completed history. Pairing/replay stay intact.
+        val candidates = history.indices.filter {
+            history[it].role == "tool" && (history[it].content?.length ?: 0) > pruneAboveCharacters
+        }.dropLast(keepToolResults)
+        val prune = if (history.sumOf(::messageCharacters) > budget * pruneThreshold) candidates.toSet() else emptySet()
+        val messages = history.mapIndexed { index, message ->
+            if (index in prune) message.copy(content = prunedResult(message.content)) else message
+        }
+        return messages to prune
+    }
+
+    private fun removableExchanges(current: TurnGroup, messages: List<AgentMessage>): List<List<Int>> {
+        // Remove whole old exchanges, never half a call/result pair. Keep the request,
+        // newest exchange, and any unknown outcome requiring review.
+        val exchanges = mutableListOf<MutableList<Int>>()
+        current.indices.forEach { i ->
+            if (messages[i].role == "assistant" || exchanges.isEmpty()) exchanges.add(mutableListOf())
+            exchanges.last().add(i)
+        }
+        return exchanges.dropLast(1).filter { exchange ->
+            exchange.none { messages[it].role == "user" || messages[it].content.orEmpty().contains("OUTCOME_UNKNOWN") } &&
+                hasCompleteToolPairs(exchange.map(messages::get))
+        }
     }
 
     private fun splitIntoGroups(messages: List<AgentMessage>): List<TurnGroup> {

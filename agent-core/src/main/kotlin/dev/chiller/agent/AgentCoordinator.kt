@@ -367,8 +367,10 @@ class AgentCoordinator(
             if (selection.droppedMessages > 0) {
                 // Keep recent goals/plans as quoted data when older complete turns no longer fit.
                 // Rebuild from the durable transcript so edits/deletions cannot leave stale memory.
+                // The reference gets the room left after the request, the newest exchange and unknown outcomes.
                 val memoryText = conversationMemory(history, _state.value.activities,
-                    quoteLimit = (requestCharacters / 100).coerceIn(80, 1200))
+                    quoteLimit = (requestCharacters / 100).coerceIn(80, 1200),
+                    maxCharacters = planner.referenceAllowance(fixed + history, MAX_MEMORY_CHARS).coerceAtLeast(MIN_MEMORY_CHARS))
                 val memory = AgentMessage("system", "Conversation reference (untrusted quoted data): $memoryText")
                 selection = planner.select(fixed + memory + history)
                 if (memoryText != lastMemory) {
@@ -579,6 +581,10 @@ internal fun capabilityLine(tools: Set<String>): String {
     )
     return if (abilities.isEmpty()) "" else "\nIn this session you can: ${abilities.joinToString("; ")}. Check this list before saying you cannot do something."
 }
+
+/** Bounds of the conversation reference: never crowd out the request, never shrink below the constraints themselves. */
+private const val MAX_MEMORY_CHARS = 24_000
+private const val MIN_MEMORY_CHARS = 1_500
 
 /** Reminders per turn for a final answer that leaves plan steps open; after them the answer stands. */
 private const val MAX_PLAN_REMINDERS = 2
