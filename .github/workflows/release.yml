@@ -75,9 +75,16 @@ jobs:
             exit 1
           fi
           echo "version=${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"
+      # JetBrains Runtime is pinned and downloaded directly: setup-java's jetbrains lookup goes through the GitHub API
+      # without a token and failed on the runner's shared rate limit.
+      - name: Download JetBrains Runtime 21.0.11
+        if: matrix.jdk == 'jetbrains'
+        shell: bash
+        run: curl -fsSL --retry 3 -o "$RUNNER_TEMP/jbrsdk.tar.gz" "https://cache-redirector.jetbrains.com/intellij-jbr/jbrsdk-21.0.11-windows-x64-b1163.116.tar.gz"
       - uses: actions/setup-java@v4
         with:
-          distribution: ${{ matrix.jdk }}
+          distribution: ${{ matrix.jdk == 'jetbrains' && 'jdkfile' || matrix.jdk }}
+          jdkFile: ${{ matrix.jdk == 'jetbrains' && format('{0}/jbrsdk.tar.gz', runner.temp) || '' }}
           java-version: "21"
       - name: Installer JDK is the JetBrains Runtime
         if: matrix.jdk == 'jetbrains'
