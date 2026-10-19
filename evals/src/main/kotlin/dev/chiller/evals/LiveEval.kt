@@ -182,8 +182,8 @@ internal suspend fun runTask(task: EvalTask, attempt: Int, provider: ChatComplet
             turn.before(project)
             if (turn.restartBefore && index > 0) { engine = newEngine(); engine.restore() }
             try {
-                withTimeout(5 * 60_000L) { engine.send(turn.prompt, turn.mode ?: task.mode, turn.allowProcesses ?: task.allowProcesses).join() }
-            } catch (_: kotlinx.coroutines.TimeoutCancellationException) { failure = "timeout after 5 min in turn ${index + 1}"; engine.stop() }
+                withTimeout(TURN_TIMEOUT_MS) { engine.send(turn.prompt, turn.mode ?: task.mode, turn.allowProcesses ?: task.allowProcesses).join() }
+            } catch (_: kotlinx.coroutines.TimeoutCancellationException) { failure = "timeout after ${TURN_TIMEOUT_MS / 60_000} min in turn ${index + 1}"; engine.stop() }
             catch (error: Exception) { failure = error.javaClass.simpleName }
             val turnState = engine.state.value
             rounds += turnState.modelRounds; toolCalls += turnState.toolCalls; failedToolCalls += turnState.failedToolCalls; usage = usage + turnState.usage
@@ -260,3 +260,6 @@ internal fun renderMarkdown(report: EvalReport): String = buildString {
     results.filter { !it.passed && it.error != null }.forEach { appendLine(); appendLine("- ${it.task} #${it.attempt}: status ${it.status}, ${it.error}") }
     if (report.skipped.isNotEmpty()) { appendLine(); appendLine("Skipped (a required tool is not available in the ${report.profile} profile or on the endpoint): ${report.skipped.joinToString()}") }
 }
+
+/** The app gives a task ten minutes; with thinking a turn of slow reasoning rounds needs the same here. */
+private const val TURN_TIMEOUT_MS = 10 * 60_000L
