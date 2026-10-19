@@ -177,6 +177,8 @@ interface WorkspaceService {
         if (cursor == null) search(query, path, glob, regex, limit, context) else ToolResult.failure("UNSUPPORTED", "Search continuation is unavailable; narrow the query")
     suspend fun edit(request: EditFileRequest): FileChange
     suspend fun create(path: String, content: String): FileChange
+    /** Creates a new binary file (a generated image); never overwrites. Undoable like [create]. */
+    suspend fun createBinary(path: String, bytes: ByteArray): FileChange = throw ToolException("UNSUPPORTED", "Binary files cannot be created in this workspace")
     suspend fun createDirectory(path: String): ToolResult = ToolResult.failure("UNSUPPORTED", "Directory creation is unavailable")
     suspend fun describeFile(path: String): FilePresentation = throw ToolException("UNSUPPORTED", "File presentation is unavailable")
     suspend fun move(path: String, snapshotId: String, destination: String): FileChange

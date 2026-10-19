@@ -56,6 +56,18 @@ class LocalWorkspaceTest {
         assertEquals("someone else's file\n", Files.readString(root.resolve("notes.txt")))
     }
 
+    @Test fun binaryFileIsCreatedNeverOverwrittenAndUndone() = workspace { root, ws ->
+        val png = byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D)
+        val created = ws.createBinary("images/cube.png", png)
+        assertTrue(png.contentEquals(Files.readAllBytes(root.resolve("images/cube.png"))))
+        assertTrue("Binary files differ (0 → 12 bytes)" in created.diff, created.diff)
+        expectError("ALREADY_EXISTS") { ws.createBinary("images/cube.png", png) }
+        expectError("PATH_OUTSIDE_ROOT") { ws.createBinary("../escape.png", png) }
+        val undone = ws.undo(created.id)
+        assertFalse(Files.exists(root.resolve("images/cube.png")))
+        assertTrue("Binary files differ (12 → 0 bytes)" in undone.diff, undone.diff)
+    }
+
     @Test fun rejectsStaleSnapshotWithoutWriting() = workspace { root, ws ->
         Files.writeString(root.resolve("a.txt"), "old\n")
         val snapshot = ws.read(ReadFileRequest("a.txt"))

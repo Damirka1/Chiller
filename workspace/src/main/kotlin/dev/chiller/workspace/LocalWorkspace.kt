@@ -341,12 +341,18 @@ class LocalWorkspace(
         return edit(EditFileRequest(path, snapshotId, edits))
     }
 
-    override suspend fun create(path: String, content: String): FileChange = withContext(Dispatchers.IO) { lock.withLock {
+    override suspend fun create(path: String, content: String): FileChange = createNew(path, content.toByteArray(StandardCharsets.UTF_8))
+
+    override suspend fun createBinary(path: String, bytes: ByteArray): FileChange {
+        if (bytes.size > MAX_BINARY_CREATE_BYTES) throw ToolException("TOO_LARGE", "Binary file exceeds ${MAX_BINARY_CREATE_BYTES / 1_048_576} MiB")
+        return createNew(path, bytes)
+    }
+
+    private suspend fun createNew(path: String, bytes: ByteArray): FileChange = withContext(Dispatchers.IO) { lock.withLock {
         val file = resolve(path, false)
         if (Files.exists(file, LinkOption.NOFOLLOW_LINKS)) fail("ALREADY_EXISTS", "Destination already exists")
         val parent = file.parent ?: fail("INVALID_PATH", "A parent directory is required")
         val plannedDirectories = planDirectories(parent)
-        val bytes = content.toByteArray(StandardCharsets.UTF_8)
         val id = UUID.randomUUID().toString()
         durablePrepare(id, file, null, bytes, operation = "create", plannedDirectories = plannedDirectories)
         val createdDirectories = createDirectoriesSafely(plannedDirectories)
@@ -657,6 +663,11 @@ class LocalWorkspace(
     }
 
     private fun unifiedDiff(path: Path, before: ByteArray?, after: ByteArray?): String {
+        // A binary side (a generated image) gets git's one-line summary instead of a text diff.
+        if (listOfNotNull(before, after).any { runCatching { decode(it) }.isFailure }) {
+            return "--- ${if (before == null) "/dev/null" else "a/${relative(path)}"}\n+++ ${if (after == null) "/dev/null" else "b/${relative(path)}"}\n" +
+                "Binary files differ (${before?.size ?: 0} → ${after?.size ?: 0} bytes)\n"
+        }
         val old = before?.let(::decode)
         val new = after?.let(::decode)
         val oldLines = old?.lines.orEmpty()
@@ -908,3 +919,6 @@ class LocalWorkspace(
     private fun requireSnapshot(id: String, path: Path): Snapshot = (snapshots[id] ?: fail("UNKNOWN_SNAPSHOT", "Snapshot expired or unknown")).also { if (it.path != path) fail("SNAPSHOT_PATH_MISMATCH", "Snapshot belongs to another path") }
     private fun fail(code: String, message: String): Nothing = throw ToolException(code, message)
 }
+
+/** A generated image is a few megabytes; anything far larger is a bug or an abuse of the write path. */
+private const val MAX_BINARY_CREATE_BYTES = 32 * 1_048_576
