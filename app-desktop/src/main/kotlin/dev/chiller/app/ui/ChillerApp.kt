@@ -315,7 +315,7 @@ fun ChillerApp(
     val sidebarSearch = remember { FocusRequester() }
     LaunchedEffect(Unit) { rootFocus.requestFocus() }
     LaunchedEffect(dark, titleBar) { titleBar?.onDark?.invoke(dark) }
-    // Provider-given model names (an optional extension of /models) replace raw ids wherever a model is shown.
+    // Provider-given model names (an optional extension of /models), for the composer's model button.
     val modelNames = remember(catalog.models) { catalog.models.mapNotNull { m -> m.displayName?.takeIf { it.isNotBlank() }?.let { m.id to it } }.toMap() }
     ChillerTheme(darkTheme = dark, reducedMotion = reducedMotion, compact = compactDensity) { CompositionLocalProvider(LocalModelNames provides modelNames) {
         val c = LocalChillerPalette.current
