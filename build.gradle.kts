@@ -7,6 +7,12 @@ plugins {
     id("org.jetbrains.compose") version "1.10.3" apply false
 }
 
+// Kotlin emits JVM 21 bytecode on any Gradle JVM, so an older JDK compiles and only fails when tests, the app or an
+// eval start (UnsupportedClassVersionError). Say so up front.
+require(JavaVersion.current().isCompatibleWith(JavaVersion.VERSION_21)) {
+    "Chiller needs JDK 21 or newer to run Gradle; this build runs on Java ${JavaVersion.current()}. Point JAVA_HOME at JDK 21+."
+}
+
 // One version for the app, jars and installers. CI release builds pass -PchillerVersion from the git tag.
 val chillerVersion = providers.gradleProperty("chillerVersion").get()
 require(Regex("""^[1-9]\d*\.\d+\.\d+$""").matches(chillerVersion)) { "chillerVersion must be MAJOR.MINOR.PATCH with MAJOR > 0 (installer rule): $chillerVersion" }
