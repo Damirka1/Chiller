@@ -3,6 +3,7 @@ package dev.chiller.evals
 import dev.chiller.agent.ModelProfiles
 import dev.chiller.contracts.ProviderModel
 import dev.chiller.providers.KtorModelCatalogClient
+import dev.chiller.providers.OpenAiImageService
 import dev.chiller.providers.ChatCompletionsProfile
 import dev.chiller.providers.ChatCompletionsProvider
 import dev.chiller.providers.useSystemTrust
@@ -37,6 +38,8 @@ data class SuiteSpec(
     val projectMap: Boolean? = null,
     /** The endpoint's catalog entry for [model]: name for the auto profile, context window, reasoning switch. */
     val listed: ProviderModel? = null,
+    /** The endpoint's image model for generate_image; null skips tasks that need it. */
+    val imageModel: ProviderModel? = null,
 ) {
     companion object {
         const val DEFAULT_MAX_ROUNDS = 14
@@ -52,7 +55,9 @@ suspend fun runEvalSuite(spec: SuiteSpec, onResult: suspend (EvalResult) -> Unit
     val tasks = EVAL_TASKS.filter { spec.taskIds == null || it.id in spec.taskIds }
     require(tasks.isNotEmpty()) { "No tasks selected; known: ${EVAL_TASKS.joinToString { it.id }}" }
     val modelProfile = ModelProfiles.resolve(spec.profileId, spec.model, spec.listed?.displayName).let { p -> spec.projectMap?.let { p.copy(projectMap = it) } ?: p }
-    val (supported, skipped) = tasks.partition { task -> modelProfile.tools == null || modelProfile.tools!!.containsAll(task.requiredTools) }
+    val (supported, skipped) = tasks.partition { task ->
+        task.requiredTools.all { tool -> (modelProfile.tools == null || tool in modelProfile.tools!!) && (tool != "generate_image" || spec.imageModel != null) }
+    }
     val host = runCatching { URI(spec.baseUrl).host }.getOrNull().orEmpty()
     val loopback = host in setOf("localhost", "127.0.0.1", "::1")
     val extras = buildJsonObject {
@@ -71,12 +76,13 @@ suspend fun runEvalSuite(spec: SuiteSpec, onResult: suspend (EvalResult) -> Unit
         install(HttpTimeout) { connectTimeoutMillis = 20_000; socketTimeoutMillis = 180_000; requestTimeoutMillis = 300_000 }
     }
     val provider = ChatCompletionsProvider(http, profile, spec.key)
+    val images = spec.imageModel?.let { OpenAiImageService(http, spec.baseUrl, it.id, it.imageEditing != false, apiKey = spec.key) }
     val results = mutableListOf<EvalResult>()
     val startedAt = java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss"))
     try {
         for (task in supported) for (attempt in 1..spec.repeats.coerceIn(1, 5)) {
             currentCoroutineContext().ensureActive()
-            val result = runTask(task, attempt, provider, spec.model, spec.thinking, spec.maxRounds, spec.maxOutputTokens, spec.outDir, modelProfile, spec.listed?.contextWindow)
+            val result = runTask(task, attempt, provider, spec.model, spec.thinking, spec.maxRounds, spec.maxOutputTokens, spec.outDir, modelProfile, spec.listed?.contextWindow, images)
             results += result
             onResult(result)
         }
@@ -103,10 +109,10 @@ fun summarize(results: List<EvalResult>): List<EvalSummary> = results.groupBy { 
     )
 }
 
-/** The endpoint's catalog entry for a model, or null when the listing fails or omits it; never fatal for an eval. */
-suspend fun listedModel(baseUrl: String, key: String?, model: String): ProviderModel? {
+/** The endpoint's model listing, empty when it fails; never fatal for an eval. */
+suspend fun listedModels(baseUrl: String, key: String?): List<ProviderModel> {
     val http = HttpClient(CIO) { engine { useSystemTrust() }; followRedirects = false }
-    return try { KtorModelCatalogClient(http).discover(baseUrl, key).models.firstOrNull { it.id == model } } finally { http.close() }
+    return try { KtorModelCatalogClient(http).discover(baseUrl, key).models } finally { http.close() }
 }
 
 /** Task ids and titles for pickers. */

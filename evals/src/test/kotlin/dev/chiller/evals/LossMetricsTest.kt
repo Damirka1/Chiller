@@ -46,7 +46,7 @@ class LossMetricsTest {
         val md = renderMarkdown(EvalReport("m", "e", "s", 14, 2048, 1, listOf(down, wrong), summarize(listOf(down, wrong)), profile = "compact", skipped = listOf("delegate-research")))
         assertTrue("**Passed 0/2** (provider errors 1)" in md, md)
         assertTrue("| t | 1 | ERROR |" in md && "| u | 1 | FAIL |" in md, md)
-        assertTrue("Skipped (a required tool is not in the compact profile): delegate-research" in md, md)
+        assertTrue("Skipped (a required tool is not available in the compact profile or on the endpoint): delegate-research" in md, md)
     }
 
     @Test fun `only the delegation task needs helpers`() {

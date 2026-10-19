@@ -11,6 +11,7 @@ import dev.chiller.tools.ProfiledTools
 import dev.chiller.tools.SubagentTools
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import dev.chiller.contracts.ImageService
 import dev.chiller.contracts.InteractionBroker
 import dev.chiller.contracts.UserQuestion
 import dev.chiller.providers.ChatCompletionsProfile
@@ -102,19 +103,21 @@ fun main() = runBlocking {
     val thinking = env["CHILLER_EVAL_THINKING"] == "true"
 
     val profileId = env["CHILLER_EVAL_PROFILE"]?.trim()?.ifEmpty { null } ?: "auto"
-    val listed = listedModel(baseUrl, key, model)
+    val catalog = listedModels(baseUrl, key)
+    val listed = catalog.firstOrNull { it.id == model }
+    val imageModel = catalog.firstOrNull { it.imageGeneration == true }
     val resolved = ModelProfiles.resolve(profileId, model, listed?.displayName)
     val stamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss"))
     val outDir = Path.of("reports/local/evals/$stamp-${model.replace(Regex("[^A-Za-z0-9._-]"), "_")}-${resolved.id}").toAbsolutePath()
     println("=== CHILLER LIVE EVAL · $model${listed?.displayName?.let { " ($it)" } ?: ""} · profile ${resolved.id} · ${tasks.size} task(s) × $repeats · maxRounds=$maxRounds maxOutput=$maxOutput thinking=$thinking" +
-        " · context ${listed?.contextWindow ?: "unknown"} ===")
+        " · context ${listed?.contextWindow ?: "unknown"} · images ${imageModel?.id ?: "none"} ===")
     val report = runEvalSuite(SuiteSpec(baseUrl, model, { key }, profileId, tasks.map { it.id }.toSet(), repeats, maxRounds, maxOutput, thinking, outDir = outDir,
-        projectMap = env["CHILLER_EVAL_PROJECT_MAP"]?.toBooleanStrictOrNull(), listed = listed)) { result ->
+        projectMap = env["CHILLER_EVAL_PROJECT_MAP"]?.toBooleanStrictOrNull(), listed = listed, imageModel = imageModel)) { result ->
         println("%-20s #%d %s  rounds=%-2d tools=%-2d errors=%-2d reread=%-2d badEdits=%-2d out=%4dk %5.1fs  %s".format(result.task, result.attempt, outcomeLabel(result),
             result.rounds, result.toolCalls, result.failedToolCalls, result.loss.repeatedReads, result.loss.failedEdits, result.loss.toolOutputChars / 1000, result.durationMs / 1000.0,
             (if (result.infrastructure) result.error.orEmpty() else result.verdict).take(80)))
     }
-    report.skipped.forEach { println("%-20s    SKIP  a required tool is not in the ${report.profile} profile".format(it)) }
+    report.skipped.forEach { println("%-20s    SKIP  a required tool is not available (${report.profile} profile, images ${imageModel?.id ?: "none"})".format(it)) }
     val passed = report.results.count { it.passed }
     val infrastructure = report.results.count { it.infrastructure }
     println("PASSED $passed/${report.results.size} (${if (report.results.isEmpty()) 0 else passed * 100 / report.results.size}%)" +
@@ -138,7 +141,7 @@ fun dotenvKey(names: List<String>, start: Path = Path.of("").toAbsolutePath()): 
 }
 
 internal suspend fun runTask(task: EvalTask, attempt: Int, provider: ChatCompletionsProvider, model: String, thinking: Boolean, maxRounds: Int, maxOutput: Int, outDir: Path, modelProfile: ModelProfile = ModelProfiles.FULL,
-    contextWindowTokens: Int? = null): EvalResult {
+    contextWindowTokens: Int? = null, images: ImageService? = null): EvalResult {
     val root = Files.createTempDirectory("chiller-eval-${task.id}-")
     val project = root.resolve("project").also { Files.createDirectories(it) }
     task.materialize(project)
@@ -149,7 +152,7 @@ internal suspend fun runTask(task: EvalTask, attempt: Int, provider: ChatComplet
     val code = LocalReadOnlyCodeService(project.toString())
     val builtin = BuiltinTools(LocalWorkspace(project, store, artifacts, session), processes, artifacts, object : InteractionBroker {
         override suspend fun ask(question: UserQuestion) = "No answer is available in an unattended evaluation. Make a reasonable assumption and state it."
-    }, code = code)
+    }, code = code, images = images)
     val budget = RunBudgetProvider(provider, maxRequests = 48, maxOutputTokens = 32768)
     val traceFile = TraceFile(outDir.resolve("traces/$session.jsonl"))
     val started = System.nanoTime()
@@ -227,5 +230,5 @@ internal fun renderMarkdown(report: EvalReport): String = buildString {
         appendLine("Tool errors: " + errors.entries.sortedByDescending { it.value }.joinToString(", ") { "${it.key} ×${it.value}" })
     }
     results.filter { !it.passed && it.error != null }.forEach { appendLine(); appendLine("- ${it.task} #${it.attempt}: status ${it.status}, ${it.error}") }
-    if (report.skipped.isNotEmpty()) { appendLine(); appendLine("Skipped (a required tool is not in the ${report.profile} profile): ${report.skipped.joinToString()}") }
+    if (report.skipped.isNotEmpty()) { appendLine(); appendLine("Skipped (a required tool is not available in the ${report.profile} profile or on the endpoint): ${report.skipped.joinToString()}") }
 }

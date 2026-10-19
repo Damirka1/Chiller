@@ -1,5 +1,7 @@
 package dev.chiller.evals
 
+import dev.chiller.contracts.pngSize
+
 import dev.chiller.contracts.ExecutionMode
 import java.nio.file.Files
 import java.nio.file.Path
@@ -325,6 +327,29 @@ val EVAL_TASKS: List<EvalTask> = listOf(
         },
         reference = { "app/cache/policy.py, function ttl_for: session: keys get 900 seconds; other keys get 60." },
     ),
+    EvalTask(
+        id = "generate-image",
+        title = "Нарисовать картинку моделью изображений",
+        prompt = "Create a logo for this project with the image model: a blue circle with a white letter C in the middle, flat style, plain background. Save it as assets/logo.png and tell me the path.",
+        files = mapOf("README.md" to "# Demo project\n\nNeeds a logo in assets/logo.png.\n"),
+        check = { project, _ ->
+            val file = project.resolve("assets/logo.png")
+            val bytes = if (Files.isRegularFile(file)) Files.readAllBytes(file) else null
+            val size = bytes?.let(::pngSize)
+            when {
+                bytes == null -> Verdict(false, "assets/logo.png missing")
+                size == null -> Verdict(false, "assets/logo.png is not a PNG")
+                size.first < 256 || size.second < 256 -> Verdict(false, "logo is only ${size.first}x${size.second}")
+                else -> Verdict(true, "assets/logo.png ${size.first}x${size.second}, ${bytes.size / 1024} KiB")
+            }
+        },
+        reference = { project ->
+            Files.createDirectories(project.resolve("assets"))
+            Files.write(project.resolve("assets/logo.png"), REFERENCE_PNG)
+            "Saved the logo as assets/logo.png."
+        },
+        requiredTools = setOf("generate_image"),
+    ),
 )
 
 /**
@@ -348,3 +373,6 @@ fun verifyEvalChecks(workDir: Path): List<String> = EVAL_TASKS.mapNotNull { task
         else -> null
     }
 }
+
+/** A PNG signature and IHDR for 512x512: enough for the generate-image check's type and size test. */
+private val REFERENCE_PNG = byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0x0D, 0x49, 0x48, 0x44, 0x52, 0, 0, 0x02, 0, 0, 0, 0x02, 0)

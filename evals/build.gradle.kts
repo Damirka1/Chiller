@@ -37,3 +37,10 @@ tasks.register<JavaExec>("liveEval") {
     mainClass.set("dev.chiller.evals.LiveEvalKt")
     workingDir = rootProject.projectDir
 }
+tasks.register<JavaExec>("liveImageSmoke") {
+    group = "verification"
+    description = "Opt-in: one 1024x1024 generation and one edit through the endpoint's image model. Needs a key; never part of check."
+    classpath = sourceSets["main"].runtimeClasspath
+    mainClass.set("dev.chiller.evals.LiveImageSmokeKt")
+    workingDir = rootProject.projectDir
+}
