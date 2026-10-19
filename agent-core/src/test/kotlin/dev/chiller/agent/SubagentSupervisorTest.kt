@@ -24,7 +24,9 @@ class SubagentSupervisorTest {
     /** Read tools over an in-memory tree; records every path it was asked for. */
     private class Files : ToolExecutor {
         val calls = mutableListOf<String>()
-        override val specs = listOf("list_files", "search_text", "read_file", "edit_file").map { ToolSpec(it, it, buildJsonObject { put("type", "object") }, if (it == "edit_file") ToolEffect.FILE_WRITE else ToolEffect.READ) }
+        override val specs = listOf("list_files", "search_text", "read_file", "edit_file", "web_search").map {
+            ToolSpec(it, it, buildJsonObject { put("type", "object") }, when (it) { "edit_file" -> ToolEffect.FILE_WRITE; "web_search" -> ToolEffect.NETWORK; else -> ToolEffect.READ })
+        }
         override suspend fun execute(call: ToolCall, context: ToolContext): ToolResult {
             synchronized(calls) { calls += "${call.name}:${Json.parseToJsonElement(call.arguments).jsonObject["path"]?.jsonPrimitive?.content}" }
             return ToolResult(true, buildJsonObject { put("content", "1 | fun main() = Unit") })
@@ -42,6 +44,7 @@ class SubagentSupervisorTest {
                 "outside" in goal && tools == 0 -> emit(call("read_file", """{"path":"src2/secret.kt"}"""))
                 "dotdot" in goal && tools == 0 -> emit(call("read_file", """{"path":"src/../etc"}"""))
                 "write" in goal && tools == 0 -> emit(call("edit_file", """{"path":"src/a.kt"}"""))
+                "web" in goal && tools == 0 -> emit(call("web_search", """{"query":"weather Temirtau"}"""))
                 "slow" in goal && inbox.isEmpty() -> { delay(200); emit(call("search_text", """{"query":"x","path":"src"}""")) }
                 tools == 0 -> emit(call("read_file", """{"path":"src/App.kt"}"""))
                 else -> { emit(ModelEvent.Usage(TokenUsage(promptTokens = 100, completionTokens = 10))); emit(ModelEvent.Completed(AgentMessage("assistant", "Report for: ${goal.lineSequence().first()} · inbox=${inbox.size}"), "stop")) }
@@ -81,6 +84,29 @@ class SubagentSupervisorTest {
         assertTrue(sup.list(ctx).agents.all { it.failedToolCalls == 1 && it.status == SubagentStatus.COMPLETED })
         assertTrue(SubagentSupervisor.inScope("src/a.kt", "src") && !SubagentSupervisor.inScope("src2/a.kt", "src"))
         assertFailsWith<ToolException> { SubagentSupervisor.normalizeScope("/etc") }
+        sup.finish("run-1")
+    }
+
+    @Test fun `helpers search the web only when the lead's run may`() = runBlocking {
+        for (network in listOf(true, false)) {
+            val files = Files()
+            val sup = supervisor(this, files = files)
+            val run = ctx.copy(allowNetwork = network)
+            sup.begin("run-1")
+            val child = sup.spawn(run, SubagentRequest("w", "web lookup", allowedPaths = listOf("src")))
+            withTimeout(5_000) { var cursor = 0L; while (sup.state.value.any { !it.status.isTerminal }) cursor = sup.wait(run, cursor, 1_000).cursor }
+            assertEquals(if (network) listOf("web_search:null") else emptyList(), files.calls, "network=$network")
+            assertEquals(if (network) 0 else 1, sup.result(run, child.id).failedToolCalls)
+            sup.finish("run-1")
+        }
+    }
+
+    @Test fun `wait returns when a helper finishes, not on its progress`() = runBlocking {
+        val sup = supervisor(this)
+        sup.begin("run-1")
+        sup.spawn(ctx, SubagentRequest("s", "slow scan", allowedPaths = listOf("src")))
+        val page = withTimeout(5_000) { sup.wait(ctx, 0, 5_000) }
+        assertTrue(page.agents.single().status.isTerminal, "one wait covers the helper's rounds: ${page.agents.single().status}")
         sup.finish("run-1")
     }
 

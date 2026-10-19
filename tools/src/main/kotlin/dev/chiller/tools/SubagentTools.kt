@@ -12,12 +12,14 @@ class SubagentTools(private val base: ToolExecutor, private val service: Subagen
     private val json = Json { encodeDefaults = true }
 
     override val specs: List<ToolSpec> = base.specs + listOf(
-        spec("spawn_agent", "Start a read-only helper agent for an independent investigation (search, read, summarize). It runs in parallel; at most 3 per task. Give a self-contained goal and the folders it may read. Use wait_agents to collect results.",
+        spec("spawn_agent", "Start a read-only helper for an independent investigation. It can list, search and read project files, and use web_search/web_fetch when web permission is on. " +
+            "It cannot create or edit files, run commands or ask the user: do those yourself. Start one helper per independent target (e.g. one per city or per module); they run in parallel, at most 3 per task. " +
+            "Give a self-contained goal and the folders it may read. Then call wait_agents, which returns when a helper finishes.",
             mapOf("task_id" to str("Your short unique id for this job, e.g. 'auth-review'"), "goal" to str("What to find out and what to report"),
                 "context" to str("Facts the helper needs; it cannot see this conversation"), "paths" to arr(str("Workspace-relative folder or file")),
                 "max_rounds" to int("1–6, default 4")), "task_id", "goal"),
         spec("list_agents", "List helper agents of this task with status and progress.", emptyMap()),
-        spec("wait_agents", "Wait until any helper changes state after cursor (or all are finished). Returns their status; pass the returned cursor next time.",
+        spec("wait_agents", "Wait until a helper finishes after cursor (or all are finished), up to timeout_ms. Returns their status; pass the returned cursor next time. Read reports with agent_result.",
             mapOf("after_cursor" to int("cursor from the previous call, 0 at first"), "timeout_ms" to int("up to 60000, default 30000"))),
         spec("agent_result", "Read a helper's full report and status.", mapOf("agent_id" to str("id from spawn_agent")), "agent_id"),
         spec("message_agent", "Send a running helper an extra instruction; it reads it before its next round.",
