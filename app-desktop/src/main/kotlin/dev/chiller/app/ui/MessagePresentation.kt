@@ -8,6 +8,14 @@ fun modelLabel(id: String): String = when (id) {
     else -> id.substringAfterLast('/').ifBlank { id }
 }
 
+/** Model names the provider gave in its listing (`name` is an extension of the OpenAI /models format), by id. */
+val LocalModelNames = androidx.compose.runtime.staticCompositionLocalOf<Map<String, String>> { emptyMap() }
+
+/** The provider's name for a model when it gave one, else a known label or the id. */
+@androidx.compose.runtime.Composable
+@androidx.compose.runtime.ReadOnlyComposable
+fun modelName(id: String): String = LocalModelNames.current[id] ?: modelLabel(id)
+
 fun authorLabel(message: AgentMessage): String = when {
     message.role == "user" -> "Вы"
     message.role != "assistant" -> "Chiller"

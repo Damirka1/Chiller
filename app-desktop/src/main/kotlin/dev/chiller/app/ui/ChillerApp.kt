@@ -315,7 +315,9 @@ fun ChillerApp(
     val sidebarSearch = remember { FocusRequester() }
     LaunchedEffect(Unit) { rootFocus.requestFocus() }
     LaunchedEffect(dark, titleBar) { titleBar?.onDark?.invoke(dark) }
-    ChillerTheme(darkTheme = dark, reducedMotion = reducedMotion, compact = compactDensity) {
+    // Provider-given model names (an optional extension of /models) replace raw ids wherever a model is shown.
+    val modelNames = remember(catalog.models) { catalog.models.mapNotNull { m -> m.displayName?.takeIf { it.isNotBlank() }?.let { m.id to it } }.toMap() }
+    ChillerTheme(darkTheme = dark, reducedMotion = reducedMotion, compact = compactDensity) { CompositionLocalProvider(LocalModelNames provides modelNames) {
         val c = LocalChillerPalette.current
         val menu = titleBar?.menu
         BoxWithConstraints(Modifier.fillMaxSize().then(titleBar?.hitTest ?: Modifier).background(c.canvas).focusRequester(rootFocus).chillerKeyboardFocusTracking().onPreviewKeyEvent {
@@ -561,7 +563,7 @@ fun ChillerApp(
             },
         ) }
         if (exportPreview != null) ExportPreview(exportPreview, exportFormat, onDismissExport, onSaveExport)
-    }
+    } }
 }
 
 @Composable
@@ -1076,7 +1078,8 @@ private fun ComposerToolbar(
                     }
                 }
                 Box {
-                    ChillerControl(friendlyModel(model), onToggleModel, enabled = !running, trailing = "⌄", inlineTrailing = true, style = if (modelMenuOpen) ControlStyle.SELECTED else ControlStyle.QUIET, dot = connectionDot)
+                    // The provider's name when its listing gives one; the menu keeps showing name and id.
+                    ChillerControl(modelName(model).ifBlank { "Выбрать модель" }, onToggleModel, enabled = !running, trailing = "⌄", inlineTrailing = true, style = if (modelMenuOpen) ControlStyle.SELECTED else ControlStyle.QUIET, dot = connectionDot)
                     if (modelMenuOpen) modelPopover()
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
