@@ -115,6 +115,15 @@ tasks.register<JavaExec>("keychainSmoke") {
     jvmArgs("--enable-native-access=ALL-UNNAMED")
 }
 
+tasks.register<JavaExec>("windowsCredentialSmoke") {
+    group = "verification"
+    description = "Opt-in Windows Credential Manager create/reopen/update/delete with one disposable synthetic credential."
+    dependsOn(tasks.named("testClasses"))
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass.set("dev.chiller.app.di.WindowsCredentialSmokeKt")
+    jvmArgs("--enable-native-access=ALL-UNNAMED")
+}
+
 // Explicit UI acceptance fixture; excluded from default checks and all provider integrations.
 tasks.register<JavaExec>("richResultsPreview") {
     group = "verification"

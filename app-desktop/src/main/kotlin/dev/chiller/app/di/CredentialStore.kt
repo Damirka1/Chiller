@@ -10,9 +10,11 @@ import java.nio.charset.CodingErrorAction
 import java.nio.charset.StandardCharsets
 import java.util.Locale
 
-/** OS-backed storage for provider credentials. Origins are used as Keychain account names. */
+/** OS-backed storage for provider credentials, one entry per endpoint origin. */
 interface CredentialStore {
     val supported: Boolean
+    /** What the user sees: "macOS Keychain", "Диспетчер учётных данных Windows". */
+    val name: String get() = ""
     fun load(origin: String): String?
     fun save(origin: String, key: String)
     fun delete(origin: String)
@@ -26,9 +28,11 @@ interface CredentialStore {
             override fun delete(origin: String) = Unit
         }
 
-        fun system(): CredentialStore = if (MacKeychainCredentialStore.isMacOs()) {
-            try { MacKeychainCredentialStore() } catch (_: CredentialStoreException) { None }
-        } else None
+        fun system(): CredentialStore = when {
+            MacKeychainCredentialStore.isMacOs() -> try { MacKeychainCredentialStore() } catch (_: CredentialStoreException) { None }
+            WindowsCredentialStore.isWindows() -> try { WindowsCredentialStore() } catch (_: CredentialStoreException) { None }
+            else -> None
+        }
     }
 }
 
@@ -37,6 +41,7 @@ class MacKeychainCredentialStore internal constructor(private val native: Keycha
     constructor() : this(if (isMacOs()) JnaKeychainNative() else null)
 
     override val supported: Boolean get() = native != null
+    override val name: String get() = "macOS Keychain"
 
     override fun load(origin: String): String? {
         val api = requireSupported()

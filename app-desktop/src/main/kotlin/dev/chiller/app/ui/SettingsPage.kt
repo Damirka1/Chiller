@@ -47,7 +47,7 @@ import kotlinx.coroutines.launch
 /** Everything the settings page shows. Keys themselves are never part of it — only where they came from. */
 data class SettingsData(
     val baseUrl: String, val model: String, val thinking: Boolean, val keyConfigured: Boolean,
-    val keySources: Map<String, String> = emptyMap(), val secureStorageSupported: Boolean = false,
+    val keySources: Map<String, String> = emptyMap(), val secureStorageSupported: Boolean = false, val secureStorageName: String = "",
     val connection: ConnectionState = ConnectionState(), val catalog: ModelCatalogState = ModelCatalogState(),
     val preferences: UiPreferences = UiPreferences(), val allowProcesses: Boolean = false, val agent: AgentOptions = AgentOptions(),
     val customProviders: List<CustomProvider> = emptyList(),
@@ -161,7 +161,7 @@ private fun ConnectionSection(data: SettingsData, actions: SettingsActions) {
                     val status = when {
                         p.keyless -> "без ключа" to c.muted
                         data.keySources[origin] == "env" -> "ключ из .env" to c.positive
-                        data.keySources[origin] == "keychain" -> "сохранён в Keychain" to c.positive
+                        data.keySources[origin] == "keychain" -> "ключ сохранён" to c.positive
                         data.keySources[origin] == "ui" -> "ключ задан" to c.positive
                         else -> "нужен ключ" to c.faint
                     }
@@ -195,18 +195,18 @@ private fun ConnectionSection(data: SettingsData, actions: SettingsActions) {
         val keyHint = when {
             preset?.keyless == true || isLoopback(url) -> "Локальный сервер: ключ не нужен"
             data.keySources[formOrigin] == "env" -> "Ключ загружен из .env или переменной окружения. Новый заменит его до выхода"
-            data.keySources[formOrigin] == "keychain" -> "Ключ сохранён в macOS Keychain. Новый заменит его только после сохранения"
+            data.keySources[formOrigin] == "keychain" -> "Ключ сохранён: ${data.secureStorageName}. Новый заменит его только после сохранения"
             data.keySources[formOrigin] == "ui" -> "Ключ задан. Пустое поле оставляет его"
             else -> "Введите ключ" + (preset?.keyVariables?.firstOrNull()?.let { " или задайте $it в .env" } ?: "")
         }
         ChillerField(key, { key = it }, "API-ключ", keyHint, secret = true)
         if (originOf(data.baseUrl) == formOrigin && data.keyConfigured && !isLoopback(url)) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (data.secureStorageSupported) ChillerControl("Сохранить текущий ключ в Keychain", actions.saveCredential, enabled = !changed)
+                if (data.secureStorageSupported) ChillerControl("Запомнить ключ (${data.secureStorageName})", actions.saveCredential, enabled = !changed)
                 ChillerControl("Удалить текущий ключ", actions.deleteCredential, enabled = !changed)
             }
         }
-        Text(if (data.secureStorageSupported) "Применить — использовать до выхода. Для постоянного хранения нажмите «Сохранить текущий ключ в Keychain»." else "На этой платформе ключ из поля действует до выхода. Для запуска используйте переменную окружения или .env.", color = c.faint, fontSize = 11.sp)
+        Text(if (data.secureStorageSupported) "Применить — использовать до выхода. Чтобы ключ остался после перезапуска, нажмите «Запомнить ключ» — он попадёт в ${data.secureStorageName}." else "На этой платформе ключ из поля действует до выхода. Для запуска используйте переменную окружения или .env.", color = c.faint, fontSize = 11.sp)
         preset?.keysUrl?.let { link -> ChillerControl("Где взять ключ: ${link.removePrefix("https://")}", { actions.openUrl(link) }, icon = Icons.AutoMirrored.Outlined.OpenInNew) }
         SettingToggle("Рассуждения модели", "Если провайдер поддерживает режим thinking", thinking) { thinking = it }
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -223,7 +223,7 @@ private fun ConnectionSection(data: SettingsData, actions: SettingsActions) {
             Text(if (changed) "Изменения не применены" else data.connection.message.ifBlank { line }, color = if (data.connection.status == "failed" && !changed) c.negative else c.muted, fontSize = 12.sp)
         }
         Text("Ключ: ${if (data.keyConfigured) "настроен" else "не задан"} · каталог: ${if (data.catalog.models.isEmpty()) "не загружен" else "${data.catalog.models.size} моделей"}. Проверка генерации — отдельный запрос.", color = c.faint, fontSize = 11.sp, lineHeight = 17.sp)
-        Text("Применение начинает новый диалог. Проверка отправляет один короткий запрос без файлов и инструментов. Ключ действует до выхода, если не сохранён явно в Keychain; из .env и переменных окружения читается при запуске. Вживую в Chiller проверен только DeepSeek.", color = c.faint, fontSize = 11.sp, lineHeight = 17.sp)
+        Text("Применение начинает новый диалог. Проверка отправляет один короткий запрос без файлов и инструментов. Ключ действует до выхода, если не сохранён явно в системное хранилище (Keychain или Диспетчер учётных данных Windows); из .env и переменных окружения читается при запуске. Вживую в Chiller проверен только DeepSeek.", color = c.faint, fontSize = 11.sp, lineHeight = 17.sp)
     }
 }
 

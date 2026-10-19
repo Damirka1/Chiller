@@ -152,6 +152,8 @@ class DesktopController(
     private val envOrigins = java.util.concurrent.ConcurrentHashMap.newKeySet<String>().apply { addAll(credentials.keys) }
     private val secureOrigins = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
     val secureStorageSupported: Boolean get() = credentialStore.supported
+    /** The OS store's name for settings text: macOS Keychain or Windows Credential Manager. */
+    val secureStorageName: String get() = credentialStore.name
     private var credential: String?
         get() = originOf(currentBaseUrl())?.let { credentials[it] }
         set(value) { originOf(currentBaseUrl())?.let { origin -> if (value.isNullOrBlank()) credentials.remove(origin) else credentials[origin] = value } }
@@ -1078,10 +1080,10 @@ class DesktopController(
             val next = _state.value.settings.copy(credentialOrigins = (_state.value.settings.credentialOrigins + origin).distinct().takeLast(32))
             saveSettings(next)
             secureOrigins += origin
-            _state.update { it.copy(settings = next, connection = it.connection.copy(message = "Ключ сохранён в macOS Keychain")) }
+            _state.update { it.copy(settings = next, connection = it.connection.copy(message = "Ключ сохранён: ${credentialStore.name}")) }
             true
         } catch (_: Exception) {
-            _state.update { it.copy(connection = it.connection.copy(message = "Не удалось сохранить ключ в Keychain; он доступен до выхода")) }
+            _state.update { it.copy(connection = it.connection.copy(message = "Не удалось сохранить ключ (${credentialStore.name}); он доступен до выхода")) }
             false
         }
     }
@@ -1099,7 +1101,7 @@ class DesktopController(
             _state.update { it.copy(settings = next, apiKeyConfigured = ready(), connection = connectionForUnverified()) }
             true
         } catch (_: Exception) {
-            _state.update { it.copy(connection = it.connection.copy(message = "Не удалось удалить ключ из Keychain")) }; false
+            _state.update { it.copy(connection = it.connection.copy(message = "Не удалось удалить ключ (${credentialStore.name})")) }; false
         }
     }
 

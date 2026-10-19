@@ -146,7 +146,7 @@ private fun chillerApplication() = application {
             subagents = state.subagents, onCancelSubagent = { id -> scope.launch { controller.cancelSubagent(id) } },
             settingsData = dev.chiller.app.ui.SettingsData(
                 state.settings.baseUrl, state.settings.model, state.settings.thinking, state.apiKeyConfigured,
-                secureStorageSupported = controller.secureStorageSupported, keySources = controller.keySources(), connection = state.connection, catalog = state.catalog, allowProcesses = state.allowProcesses,
+                secureStorageSupported = controller.secureStorageSupported, secureStorageName = controller.secureStorageName, keySources = controller.keySources(), connection = state.connection, catalog = state.catalog, allowProcesses = state.allowProcesses,
                 captureTargets = state.captureTargets, selectedCaptureTarget = state.selectedCaptureTarget, screenshotSupported = controller.screenshotSupported,
                 workspace = state.settings.workspace, verifyCommand = state.settings.workspace?.let { state.settings.verifyCommands[it] }.orEmpty(),
                 suggestedVerifyCommand = state.settings.workspace?.let { root -> runCatching { dev.chiller.app.di.suggestVerifyCommand(java.nio.file.Path.of(root)) }.getOrNull() },
