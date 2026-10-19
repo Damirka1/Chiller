@@ -205,15 +205,6 @@ private fun ConnectionSection(data: SettingsData, actions: SettingsActions) {
             })
         if (isCustom) ChillerField(name, { name = it }, "Название", "Qarmet")
         ChillerField(url, { url = it }, "Адрес API", "https://api.example.com/v1")
-        ChillerField(model, { model = it }, "Модель", preset?.defaultModel ?: "ID модели у провайдера")
-        // Discovered models of the applied endpoint, one click to use.
-        if (!creating && originOf(data.baseUrl) == formOrigin) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(catalogLine(data.catalog, data.keyConfigured), color = c.faint, fontSize = 11.sp, modifier = Modifier.weight(1f))
-                ChillerControl("Загрузить список моделей", actions.refreshModels, icon = Icons.Outlined.Refresh, enabled = data.catalog.status != "loading")
-            }
-            if (data.catalog.chatModels.isNotEmpty()) ChipFlow(data.catalog.chatModels.map { it.id }.take(24), model, data.catalog.chatModels.associate { it.id to (it.displayName?.let { name -> "$name · ${it.id}" } ?: it.id) }) { model = it }
-        } else Text("Примените адрес и ключ, затем загрузите список моделей. ID заранее знать не нужно.", color = c.faint, fontSize = 11.sp)
         val keyHint = when {
             preset?.keyless == true || isLoopback(url) -> "Локальный сервер: ключ не нужен"
             data.keySources[formOrigin] == "env" -> "Ключ загружен из .env или переменной окружения. Новый заменит его"
@@ -224,6 +215,22 @@ private fun ConnectionSection(data: SettingsData, actions: SettingsActions) {
         ChillerField(key, { key = it }, "API-ключ", keyHint, secret = true)
         Text(if (data.secureStorageSupported) "При «Применить» ключ сохраняется в «${data.secureStorageName}» и уходит только на этот адрес."
             else "Ключ действует до выхода и уходит только на этот адрес; для постоянного ключа используйте переменную окружения или .env.", color = c.faint, fontSize = 11.sp)
+        // Models come from the provider's list once connected; typing an id is only a fallback for servers without one.
+        val connected = !creating && originOf(data.baseUrl) == formOrigin
+        val listed = if (connected) data.catalog.chatModels else emptyList()
+        val otherChanges = url.trimEnd('/') != data.baseUrl || thinking != data.thinking || key.isNotEmpty() || customChanged
+        if (connected) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Модель · " + catalogLine(data.catalog, data.keyConfigured), color = c.text, fontSize = 13.sp, modifier = Modifier.weight(1f))
+                ChillerControl("Обновить список", actions.refreshModels, icon = Icons.Outlined.Refresh, enabled = data.catalog.status != "loading")
+            }
+            if (listed.isNotEmpty()) ChipFlow(listed.map { it.id }.take(24), model, listed.associate { it.id to (it.displayName?.let { name -> "$name · ${it.id}" } ?: it.id) }) { picked ->
+                model = picked
+                // With nothing else pending, a picked model takes effect at once.
+                if (!otherChanges) actions.applyConnection(data.baseUrl, picked, data.thinking, null)
+            }
+            else if (data.catalog.status in setOf("ready", "failed")) ChillerField(model, { model = it }, "Модель (провайдер не отдал список)", "ID модели у провайдера")
+        } else Text("Модель выбирается из списка провайдера после «Применить».", color = c.faint, fontSize = 11.sp)
         preset?.keysUrl?.let { link -> ChillerControl("Где взять ключ: ${link.removePrefix("https://")}", { actions.openUrl(link) }, icon = Icons.AutoMirrored.Outlined.OpenInNew) }
         SettingToggle("Рассуждения модели", "Если провайдер поддерживает режим thinking", thinking) { thinking = it }
         if (isCustom) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {

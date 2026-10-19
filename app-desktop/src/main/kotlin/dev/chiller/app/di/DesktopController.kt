@@ -271,7 +271,10 @@ class DesktopController(
                     cache.remove(endpoint)
                     cache[endpoint] = CachedModelCatalog(result.models.take(500), Instant.now().toString())
                     while (cache.size > 16) cache.remove(cache.keys.first())
-                    val settings = _state.value.settings.copy(modelCatalogs = cache)
+                    var settings = _state.value.settings.copy(modelCatalogs = cache)
+                    // A provider connected without a model gets its first chat model; the list is where models are picked.
+                    val picked = if (settings.model.isBlank()) result.models.firstOrNull { it.chat != false }?.id else null
+                    if (picked != null) { settings = rememberModel(settings.copy(model = picked), settings.baseUrl, picked); resetEngine() }
                     try { saveSettings(settings) }
                     catch (cancelled: CancellationException) { throw cancelled }
                     catch (_: Exception) { /* Discovery still works when the optional disk cache cannot be saved. */ }
