@@ -506,6 +506,52 @@ class AgentCoordinatorTest {
         assertEquals(4, effects)
     }
 
+    @Test fun failuresAreJudgedPerCallNotPerErrorCode() = runTest {
+        val tools = object : ToolExecutor {
+            override val specs = listOf(ToolSpec("read", "read", JsonObject(emptyMap()), ToolEffect.READ))
+            override suspend fun execute(call: ToolCall, context: ToolContext) = ToolResult.failure("NOT_FOUND", "missing")
+        }
+        fun run(paths: List<String>): String = run {
+            var round = 0
+            val provider = ScriptedProvider { flow {
+                val path = paths.getOrNull(round++)
+                if (path == null) emit(ModelEvent.Completed(AgentMessage("assistant", "done"), "stop"))
+                else emit(ModelEvent.Completed(AgentMessage("assistant", null, listOf(ToolCall("c$round", "read", """{"path":"$path"}"""))), "tool_calls"))
+            } }
+            val f = fixture(provider, tools, dispatcher = StandardTestDispatcher(testScheduler))
+            f.coordinator.send("read", ExecutionMode.PLAN)
+            advanceUntilIdle()
+            f.coordinator.state.value.status
+        }
+        assertEquals("completed", run(listOf("a.txt", "b.txt", "c.txt", "d.txt")), "different files failing the same way are not a loop")
+        assertEquals("failed", run(listOf("a.txt", "b.txt", "a.txt", "b.txt", "a.txt")), "alternating failures still repeat a call")
+    }
+
+    @Test fun theSameResultAgainGetsAReminderThenEndsTheTurn() = runTest {
+        val requests = mutableListOf<ModelRequest>()
+        val provider = ScriptedProvider { request -> flow {
+            requests += request
+            emit(ModelEvent.Completed(AgentMessage("assistant", null, listOf(ToolCall("c${requests.size}", "read", """{"path":"."}"""))), "tool_calls"))
+        } }
+        val events = MemoryEvents()
+        val f = fixture(provider, RecordingTools(), eventStore = events, dispatcher = StandardTestDispatcher(testScheduler))
+        f.coordinator.send("list", ExecutionMode.PLAN)
+        advanceUntilIdle()
+        assertEquals("failed", f.coordinator.state.value.status)
+        assertEquals(5, requests.size, "stopped at the fifth identical result")
+        assertTrue("[Chiller] You have called read with the same arguments 3 times" in requests[3].messages.last().content.orEmpty())
+        assertEquals(1, events.records.count { it.type == "run.no_progress" })
+    }
+
+    @Test fun identifiersThatChangeOnEveryCallDoNotHideARepeat() {
+        val first = ToolResult(true, buildJsonObject { put("snapshot_id", "s1"); put("content", "1 | x") })
+        val again = ToolResult(true, buildJsonObject { put("snapshot_id", "s2"); put("content", "1 | x") })
+        val changed = ToolResult(true, buildJsonObject { put("snapshot_id", "s3"); put("content", "1 | y") })
+        assertEquals(resultFingerprint(first), resultFingerprint(again))
+        assertTrue(resultFingerprint(first) != resultFingerprint(changed))
+        assertEquals(canonicalJson("""{"b":1,"a":2}"""), canonicalJson("""{"a":2,"b":1}"""))
+    }
+
     @Test fun stoppingDuringAToolSettlesActivityWithoutInventingAResult() = runTest {
         val entered = CompletableDeferred<Unit>()
         val tools = RecordingTools().apply { onExecute = { entered.complete(Unit); awaitCancellation() } }
