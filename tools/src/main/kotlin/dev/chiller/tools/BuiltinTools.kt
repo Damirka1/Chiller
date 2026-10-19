@@ -50,10 +50,11 @@ class BuiltinTools(
         spec("stop_process", "Stop a process by its opaque id.", ToolEffect.PROCESS, mapOf("process_id" to string()), "process_id"),
         spec("read_artifact", "Read a large saved result or attachment: offset/limit for a part (limit up to 65536; next_offset says there is more). With query, find matching lines instead (literal, case-insensitive) with their offsets, then read around a match.",
             ToolEffect.READ, mapOf("artifact_id" to string(), "offset" to integer(), "limit" to integer(), "query" to string()), "artifact_id"),
-        spec("update_plan", "Keep a short checklist for a multi-step task. Send the whole list each time; at most one step in_progress. Does not change the project.", ToolEffect.READ,
+        spec("update_plan", "Keep a short checklist for a multi-step task. Send the whole list each time; at most one step in_progress. Mark a step done as soon as it is finished; " +
+            "mark a step you cannot or will not do as skipped and say why in its text. Before the final answer every step must be done or skipped. Does not change the project.", ToolEffect.READ,
             mapOf("steps" to buildJsonObject { put("type", "array"); put("maxItems", 20); put("items", buildJsonObject {
                 put("type", "object"); put("additionalProperties", false)
-                put("properties", buildJsonObject { put("step", string()); put("status", buildJsonObject { put("type", "string"); put("enum", JsonArray(listOf("pending", "in_progress", "done").map(::JsonPrimitive))) }) })
+                put("properties", buildJsonObject { put("step", string()); put("status", buildJsonObject { put("type", "string"); put("enum", JsonArray(listOf("pending", "in_progress", "done", "skipped").map(::JsonPrimitive))) }) })
                 put("required", JsonArray(listOf(JsonPrimitive("step"), JsonPrimitive("status"))))
             }) }), "steps"),
         spec("ask_user", "Ask the user a necessary question, optionally with choices.", ToolEffect.USER_INTERACTION, mapOf("question" to string(), "options" to array(string())), "question"),
@@ -133,8 +134,8 @@ class BuiltinTools(
                     if (steps.isEmpty() || steps.any { it.first.isEmpty() }) throw ToolException("INVALID_ARGUMENTS", "Provide 1–20 non-empty steps")
                     if (steps.count { it.second == "in_progress" } > 1) throw ToolException("INVALID_ARGUMENTS", "At most one step can be in_progress", "Mark finished steps done and keep one in_progress")
                     ToolResult(true, buildJsonObject {
-                        put("done", steps.count { it.second == "done" }); put("total", steps.size)
-                        put("next", steps.firstOrNull { it.second != "done" }?.first ?: "all steps done")
+                        put("done", steps.count { it.second == "done" }); put("skipped", steps.count { it.second == "skipped" }); put("total", steps.size)
+                        put("next", steps.firstOrNull { it.second !in setOf("done", "skipped") }?.first ?: "all steps closed")
                     })
                 }
                 "create_file" -> success(workspace.create(args.str("path"), args.str("content")))

@@ -114,7 +114,8 @@ object DemoScenario {
                 10 -> calls("Остался вопрос, который решаете вы.",
                     "ask_user" to args("question" to "Добавить в README раздел о том, как запускать проверки?", "options" to listOf("Да, добавь", "Нет, не нужно")))
                 11 -> if (answer?.startsWith("Да") == true) calls("Добавляю раздел в README.", "read_file" to args("path" to "README.md"))
-                    else finish(answer, exitCode)
+                    // Without the README section the last step is still done: close the plan before the answer.
+                    else calls("Закрываю план.", plan("Осмотреть проект" to "done", "Починить приветствие" to "done", "Добавить модуль stats" to "done", "Проверить и прибраться" to "done"))
                 12 -> if (answer?.startsWith("Да") == true && snapshot("README.md") != null) calls("Дописываю раздел.",
                     "replace_text" to args("path" to "README.md", "snapshot_id" to snapshot("README.md")!!, "old_text" to "A tiny project for the Chiller tool demo.", "new_text" to "A tiny project for the Chiller tool demo.\n\n## Checks\n\n```sh\npython3 checks.py\n```"),
                     plan("Осмотреть проект" to "done", "Починить приветствие" to "done", "Добавить модуль stats" to "done", "Проверить и прибраться" to "done"))

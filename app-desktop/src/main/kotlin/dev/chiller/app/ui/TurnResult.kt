@@ -125,6 +125,11 @@ fun turnResult(state: RunState, undone: Set<String> = emptySet()): TurnResult {
             a.name in FILE_CHANGE_TOOLS && a.status == "failed" &&
                 activities.drop(index + 1).none { it.name in FILE_CHANGE_TOOLS && it.status == "completed" && it.target == a.target }
         }.map { it.value.target }.distinct().forEach { add("Правка «$it» не применилась") }
+        // A plan left with open steps after the turn: the answer may present unfinished work as done.
+        if (state.status in setOf("completed", "failed", "cancelled", "interrupted"))
+            currentTurnPlan(state.messages)?.filter { it.status !in setOf("done", "skipped") }?.takeIf { it.isNotEmpty() }?.let { open ->
+                add("План не закрыт: " + open.joinToString("; ") { "«${it.title}»" })
+            }
 
     }
     return TurnResult(files.values.toList(), commands, presented, issues)

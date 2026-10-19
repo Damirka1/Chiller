@@ -346,6 +346,9 @@ class AgentCoordinator(
         // model is told what happened on the next round only (the note is not part of the saved conversation).
         var truncations = 0
         var truncationNotice: AgentMessage? = null
+        // A final answer while the plan still has open steps gets a bounded reminder instead of ending the turn.
+        var planNotice: AgentMessage? = null
+        var planReminders = 0
         repeat(maxRounds) { round ->
             currentCoroutineContext().ensureActive()
             stats.rounds = round + 1
@@ -383,7 +386,7 @@ class AgentCoordinator(
             var roundUsage = TokenUsage()
             var finishReason: String? = null
             val roundStarted = System.nanoTime()
-            val request = ModelRequest(model, selection.messages + listOfNotNull(truncationNotice), enabled, thinking, reserve)
+            val request = ModelRequest(model, selection.messages + listOfNotNull(truncationNotice, planNotice), enabled, thinking, reserve)
             var truncatedCall = false
             var truncatedText = false
             var retryShown = false
@@ -433,6 +436,7 @@ class AgentCoordinator(
                 return@repeat
             }
             truncationNotice = null
+            planNotice = null
             // Recoveries are limited per streak: a model that makes progress between cut-offs keeps going.
             truncations = 0
             _state.update { it.copy(recoveryNotice = null) }
@@ -440,6 +444,16 @@ class AgentCoordinator(
             appendMessage(response.copy(origin = MessageOrigin(MessageOriginKind.MODEL, model)))
             _state.update { it.copy(streamingText = "") }
             if (response.toolCalls.isEmpty()) {
+                val open = openPlanSteps(_state.value.messages)
+                if (open.isNotEmpty() && planReminders < MAX_PLAN_REMINDERS && round < maxRounds - 1) {
+                    planReminders++
+                    planNotice = AgentMessage("user", openPlanNotice(open))
+                    events.append(sessionId, "run.plan_open", buildJsonObject {
+                        put("runId", id); put("round", round + 1); put("openSteps", open.size); put("reminder", planReminders)
+                    })
+                    _state.update { it.copy(recoveryNotice = "План не закрыт: ${open.size} шаг(а). Агент доделывает или закрывает их ($planReminders/$MAX_PLAN_REMINDERS).") }
+                    return@repeat
+                }
                 events.append(sessionId, "run.completed", buildJsonObject { put("runId", id) })
                 _state.update { it.copy(status = "completed", activeModelId = null) }
                 return
@@ -544,6 +558,26 @@ internal fun truncatedCallNotice(replyTokens: Int): String {
 }
 private const val TRUNCATED_TEXT_NOTICE = "[Chiller] Your previous message reached the output token limit and was cut off. Continue exactly where it stopped, without repeating what you already wrote."
 
+/** Reminders per turn for a final answer that leaves plan steps open; after them the answer stands. */
+private const val MAX_PLAN_REMINDERS = 2
+
+/** Steps of this turn's latest update_plan that are neither done nor skipped; empty without a plan. */
+internal fun openPlanSteps(messages: List<AgentMessage>): List<String> {
+    val lastUser = messages.indexOfLast { it.role == "user" }
+    val call = messages.drop(lastUser + 1).asReversed().asSequence()
+        .flatMap { it.toolCalls.asReversed().asSequence() }.firstOrNull { it.name == "update_plan" } ?: return emptyList()
+    return runCatching {
+        Json.parseToJsonElement(call.arguments).jsonObject.getValue("steps").jsonArray.map { it.jsonObject }
+            .filter { it["status"]?.jsonPrimitive?.contentOrNull !in setOf("done", "skipped") }
+            .map { it["step"]?.jsonPrimitive?.contentOrNull.orEmpty() }
+    }.getOrDefault(emptyList())
+}
+
+internal fun openPlanNotice(open: List<String>): String =
+    "[Chiller] You are about to finish, but your plan still has open steps:\n" + open.joinToString("\n") { "- $it" } +
+        "\nDo them now if you can. Otherwise call update_plan marking each one done or skipped (put the reason in the step text), " +
+        "then give your final answer and say plainly what was not done."
+
 /** Date only, with weekday and UTC offset: it changes once a day, so the provider's prompt cache survives the day. */
 internal fun todayLine(clock: java.time.Clock): String {
     val now = java.time.ZonedDateTime.now(clock)
@@ -576,7 +610,7 @@ private const val SYSTEM_PROMPT = """You are Chiller, a precise coding assistant
 - Background processes belong to this run and stop when it ends. Save important output before finishing; never repeat a side-effecting command merely to recover expired output.
 - The user may point to files as @path (workspace-relative); read them before relying on their content.
 - read_file returns snapshot_id. For small changes use replace_text with old_text copied exactly (no line-number prefix); for larger ones edit_file by line number. Both return snapshotId: reuse it for the next edit of that file without re-reading.
-- For tasks with several steps, keep a short checklist with update_plan.
+- For tasks with several steps, keep a short checklist with update_plan and update it as you go: mark a step done right after finishing it, or skipped with the reason. Close every step before the final answer.
 - Never invent tool results. Do not claim checks passed unless a process you ran reported it; quote the command and exit code.
 - Facts and numbers you write into files or answers must come from tool results in this conversation. If a search was empty or a page lacked the data, say so plainly and stop or ask; never fill in plausible values. Placeholder data only when the user asks for it, labeled as placeholder. Your final answer reports what failed or was not done.
 - On a tool error, follow its recovery hint instead of repeating the same call. OUTCOME_UNKNOWN never means failure: inspect current state and ask the user before repeating a side-effecting process.

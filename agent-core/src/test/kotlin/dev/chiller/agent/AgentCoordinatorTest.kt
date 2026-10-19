@@ -65,6 +65,48 @@ class AgentCoordinatorTest {
         assertEquals(1, events.records.count { it.type == "run.truncated" })
     }
 
+    @Test fun finalAnswerWithAnOpenPlanGetsARemindedRoundFirst() = runTest {
+        val requests = mutableListOf<ModelRequest>()
+        fun plan(status: String) = ToolCall("p${requests.size}", "update_plan", """{"steps":[{"step":"Find weather","status":"done"},{"step":"Draw chart","status":"$status"}]}""")
+        val provider = ScriptedProvider { request -> flow {
+            requests += request
+            when (requests.size) {
+                1 -> emit(ModelEvent.Completed(AgentMessage("assistant", null, listOf(plan("pending"))), "tool_calls"))
+                2 -> emit(ModelEvent.Completed(AgentMessage("assistant", "All done!"), "stop"))
+                3 -> emit(ModelEvent.Completed(AgentMessage("assistant", null, listOf(plan("skipped"))), "tool_calls"))
+                else -> emit(ModelEvent.Completed(AgentMessage("assistant", "Chart skipped: no data."), "stop"))
+            }
+        } }
+        val events = MemoryEvents()
+        val fixture = fixture(provider, PlanTools(), eventStore = events, dispatcher = StandardTestDispatcher(testScheduler))
+        fixture.coordinator.send("weather and chart", ExecutionMode.WORKSPACE_EDIT)
+        advanceUntilIdle()
+        assertEquals("completed", fixture.coordinator.state.value.status)
+        assertEquals(4, requests.size)
+        assertTrue("- Draw chart" in requests[2].messages.last().content.orEmpty(), "the reminder names the open step")
+        assertTrue(requests[3].messages.none { "[Chiller]" in it.content.orEmpty() }, "the reminder is not kept in the conversation")
+        assertEquals(1, events.records.count { it.type == "run.plan_open" })
+    }
+
+    @Test fun planRemindersAreBoundedAndTheAnswerThenStands() = runTest {
+        var calls = 0
+        val provider = ScriptedProvider { _ -> flow {
+            calls++
+            if (calls == 1) emit(ModelEvent.Completed(AgentMessage("assistant", null, listOf(ToolCall("p", "update_plan", """{"steps":[{"step":"A","status":"in_progress"}]}"""))), "tool_calls"))
+            else emit(ModelEvent.Completed(AgentMessage("assistant", "Done."), "stop"))
+        } }
+        val fixture = fixture(provider, PlanTools(), dispatcher = StandardTestDispatcher(testScheduler))
+        fixture.coordinator.send("task", ExecutionMode.WORKSPACE_EDIT)
+        advanceUntilIdle()
+        assertEquals("completed", fixture.coordinator.state.value.status)
+        assertEquals(4, calls, "one plan round, then the answer, two reminders and the answer that stands")
+    }
+
+    private class PlanTools : ToolExecutor {
+        override val specs = listOf(ToolSpec("update_plan", "plan", JsonObject(emptyMap()), ToolEffect.READ))
+        override suspend fun execute(call: ToolCall, context: ToolContext) = ToolResult(true, buildJsonObject { put("ok", true) })
+    }
+
     @Test fun providerRetryWaitIsShownUntilTheModelAnswers() = runTest {
         val resend = CompletableDeferred<Unit>()
         val provider = ScriptedProvider { _ -> flow {

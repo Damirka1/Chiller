@@ -34,7 +34,7 @@ import dev.chiller.contracts.AgentMessage
 import dev.chiller.design.*
 import kotlinx.serialization.json.*
 
-/** One step of the model's checklist: done, in_progress or pending. */
+/** One step of the model's checklist: done, skipped (with the reason in its text), in_progress or pending. */
 data class PlanStep(val title: String, val status: String)
 
 /**
@@ -62,7 +62,10 @@ internal fun PlanChecklist(steps: List<PlanStep>, running: Boolean, modifier: Mo
     val c = LocalChillerPalette.current
     val reduced = LocalChillerReducedMotion.current
     val done = steps.count { it.status == "done" }
-    val finished = !running && done == steps.size
+    val closed = steps.count { it.status in setOf("done", "skipped") }
+    val finished = !running && closed == steps.size
+    // After the turn, open steps mean unfinished work; the list stays open and says so.
+    val unfinished = !running && closed < steps.size
     var open by remember(finished) { mutableStateOf(!finished) }
     val shape = RoundedCornerShape(12.dp)
     Column(modifier.fillMaxWidth().clip(shape).background(c.surface).border(1.dp, c.border, shape)) {
@@ -70,7 +73,8 @@ internal fun PlanChecklist(steps: List<PlanStep>, running: Boolean, modifier: Mo
             Modifier.fillMaxWidth().pointerHoverIcon(PointerIcon.Hand).clickable(role = Role.Button) { open = !open }.padding(horizontal = 14.dp, vertical = 9.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(if (finished) "План выполнен" else "План", color = c.text, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+            Text(when { unfinished -> "План не завершён"; finished && done == steps.size -> "План выполнен"; finished -> "План закрыт"; else -> "План" },
+                color = if (unfinished) c.negative else c.text, fontSize = 12.sp, fontWeight = FontWeight.Medium)
             Spacer(Modifier.width(8.dp))
             Text("$done/${steps.size}", color = c.faint, fontSize = 12.sp)
             Spacer(Modifier.width(10.dp))
@@ -93,15 +97,18 @@ internal fun PlanChecklist(steps: List<PlanStep>, running: Boolean, modifier: Mo
 private fun StepRow(step: PlanStep, running: Boolean) {
     val c = LocalChillerPalette.current
     val done = step.status == "done"
+    val skipped = step.status == "skipped"
     val active = step.status == "in_progress"
-    val textColor by animateColorAsState(if (done) c.muted else c.text, tween(if (LocalChillerReducedMotion.current) 0 else 200), label = "step")
+    val textColor by animateColorAsState(if (done || skipped) c.muted else c.text, tween(if (LocalChillerReducedMotion.current) 0 else 200), label = "step")
     Row(verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.size(16.dp), contentAlignment = Alignment.Center) {
             when {
                 done -> Box(Modifier.size(15.dp).clip(CircleShape).background(c.accent), contentAlignment = Alignment.Center) {
                     Icon(androidx.compose.material.icons.Icons.Outlined.Check, null, Modifier.size(11.dp), tint = c.canvas)
                 }
+                skipped -> Box(Modifier.size(11.dp, 1.5.dp).background(c.faint))
                 active && running -> Pulse(c.accent)
+                !running -> Box(Modifier.size(13.dp).clip(CircleShape).border(1.5.dp, c.negative.copy(alpha = .7f), CircleShape))
                 active -> Box(Modifier.size(13.dp).clip(CircleShape).border(1.5.dp, c.accent, CircleShape))
                 else -> Box(Modifier.size(13.dp).clip(CircleShape).border(1.5.dp, c.faint.copy(alpha = .6f), CircleShape))
             }
