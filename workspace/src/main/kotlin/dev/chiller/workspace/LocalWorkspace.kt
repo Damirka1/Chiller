@@ -19,6 +19,21 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.ConcurrentHashMap
 import java.util.LinkedHashMap
 
+/** How much one read_file shows: at most [lines] lines and [chars] characters (also the longest readable line). */
+data class ReadLimits(val lines: Int = 200, val chars: Int = 6_000) {
+    companion object {
+        /**
+         * One read may fill about 5% of the model's context window: 200 lines / 6,000 characters up to 32k tokens, about
+         * 740 lines / 23,600 characters at 128k. On Gemma 4 (128k) a 471-line file shown 200 lines at a time cost two
+         * rounds per edit, and the task ran out of rounds.
+         */
+        fun forContextWindow(tokens: Int?): ReadLimits {
+            val chars = ((tokens ?: 0) * 0.18).toInt().coerceIn(6_000, 40_000)
+            return ReadLimits(lines = maxOf(200, chars / 32), chars = chars)
+        }
+    }
+}
+
 /**
  * Local filesystem implementation. Path policy is not an OS sandbox against other processes.
  * Atomic replacement preserves POSIX mode bits where available; ACLs and extended attributes
@@ -29,6 +44,7 @@ class LocalWorkspace(
     private val events: EventStore? = null,
     private val artifacts: ArtifactStore? = null,
     private val sessionId: String = "workspace",
+    readLimits: ReadLimits = ReadLimits(),
 ) : WorkspaceService {
     private val base = rootPath.toRealPath()
     override val root: String = base.toString()
@@ -36,8 +52,8 @@ class LocalWorkspace(
     private val snapshots = ConcurrentHashMap<String, Snapshot>()
     private val changes = mutableMapOf<String, ChangeRecord>()
     private val maxReadBytes = 2 * 1024 * 1024
-    private val maxVisibleLines = 200
-    private val maxVisibleChars = 6_000
+    private val maxVisibleLines = readLimits.lines
+    private val maxVisibleChars = readLimits.chars
     private val searchTextLimit = 400
     private var loadedJournal = false
 
@@ -316,11 +332,13 @@ class LocalWorkspace(
 
     override suspend fun edit(request: EditFileRequest): FileChange = withContext(Dispatchers.IO) { lock.withLock {
         val file = resolve(request.path, true)
-        val snap = snapshots[request.snapshotId] ?: fail("UNKNOWN_SNAPSHOT", "Snapshot expired or unknown; read the file again")
-        if (snap.path != file) fail("SNAPSHOT_PATH_MISMATCH", "Snapshot belongs to another path")
+        val snap = requireSnapshot(request.snapshotId, file)
         val before = readBytes(file)
         if (sha(before) != snap.hash) fail("STALE_SNAPSHOT", "File changed after it was read; no edit was applied")
-        val applied = applyEdits(decode(before), request.edits, snap.observed)
+        // Lines read under any snapshot of these exact bytes were seen: a model that read the file in parts and edits
+        // with one part's snapshot_id is not sent back to read again.
+        val observed = snapshots.values.filter { it.path == file && it.hash == snap.hash }.flatMapTo(HashSet(snap.observed)) { it.observed }
+        val applied = applyEdits(decode(before), request.edits, observed)
         val nextBytes = encode(applied.file)
         val change = commit(file, before, nextBytes)
         // Lineage: the written bytes get their own snapshot so the next edit can chain without a re-read.
@@ -335,7 +353,8 @@ class LocalWorkspace(
             val snap = lock.withLock { requireSnapshot(snapshotId, file) }
             val bytes = readBytes(file)
             if (sha(bytes) != snap.hash) fail("STALE_SNAPSHOT", "File changed after it was read; no edit was applied")
-            replacementEdits(decode(bytes).lines, oldText, newText, expectedCount)
+            val text = decode(bytes)
+            replacementEdits(text.lines, text.finalNewline, oldText, newText, expectedCount)
         }
         // edit() re-checks the snapshot hash and observed lines under the lock, so a concurrent change still fails cleanly.
         return edit(EditFileRequest(path, snapshotId, edits))
@@ -349,7 +368,29 @@ class LocalWorkspace(
         bytes
     }
 
-    override suspend fun create(path: String, content: String): FileChange = createNew(path, content.toByteArray(StandardCharsets.UTF_8))
+    override suspend fun create(path: String, content: String): FileChange {
+        val bytes = content.toByteArray(StandardCharsets.UTF_8)
+        val change = createNew(path, bytes)
+        // The model wrote every line, so they all count as read: the next edit or append_file needs no read_file. Without a
+        // snapshot here, models passed the change id as snapshot_id.
+        val lines = runCatching { decode(bytes).lines.size }.getOrNull() ?: return change
+        val id = snapshotId()
+        lock.withLock { saveSnapshot(id, Snapshot(resolve(path, true), sha(bytes), (1..lines).toSet())) }
+        return change.copy(snapshotId = id)
+    }
+
+    override suspend fun append(path: String, snapshotId: String, content: String): FileChange {
+        if (content.isEmpty()) fail("INVALID_EDIT", "content must not be empty")
+        if ('\r' in content) fail("INVALID_EDIT", "Use LF line separators in content")
+        val lines = withContext(Dispatchers.IO) {
+            val file = resolve(path, true)
+            lock.withLock { requireSnapshot(snapshotId, file) }
+            decode(readBytes(file)).lines.size
+        }
+        // Whole lines after the last one; a final line break in content is implied by the line model, not an extra empty line.
+        // edit() re-checks the snapshot hash and that the last line was read, under the lock.
+        return edit(EditFileRequest(path, snapshotId, listOf(FileEdit("insert", beforeLine = lines + 1, content = content.removeSuffix("\n")))))
+    }
 
     override suspend fun createBinary(path: String, bytes: ByteArray): FileChange {
         if (bytes.size > MAX_BINARY_CREATE_BYTES) throw ToolException("TOO_LARGE", "Binary file exceeds ${MAX_BINARY_CREATE_BYTES / 1_048_576} MiB")
@@ -358,7 +399,8 @@ class LocalWorkspace(
 
     private suspend fun createNew(path: String, bytes: ByteArray): FileChange = withContext(Dispatchers.IO) { lock.withLock {
         val file = resolve(path, false)
-        if (Files.exists(file, LinkOption.NOFOLLOW_LINKS)) fail("ALREADY_EXISTS", "Destination already exists")
+        if (Files.exists(file, LinkOption.NOFOLLOW_LINKS)) throw ToolException("ALREADY_EXISTS", "Destination already exists",
+            "${relative(file)} exists. To change it, read it and use replace_text; to write it from scratch, delete_file it with its snapshot_id first")
         val parent = file.parent ?: fail("INVALID_PATH", "A parent directory is required")
         val plannedDirectories = planDirectories(parent)
         val id = UUID.randomUUID().toString()
@@ -395,7 +437,8 @@ class LocalWorkspace(
         if (sha(before) != snap.hash) fail("STALE_SNAPSHOT", "File changed after it was read")
         if (Files.exists(to, LinkOption.NOFOLLOW_LINKS)) fail("ALREADY_EXISTS", "Destination already exists")
         val destinationParent = to.parent ?: fail("INVALID_PATH", "A destination directory is required")
-        if (!Files.isDirectory(destinationParent, LinkOption.NOFOLLOW_LINKS)) fail("NOT_DIRECTORY", "Destination directory must already exist")
+        if (!Files.isDirectory(destinationParent, LinkOption.NOFOLLOW_LINKS)) throw ToolException("NOT_DIRECTORY", "Destination directory must already exist",
+            "Create it with create_directory (path=${relative(destinationParent)}), then move with the same snapshot_id")
         if (!Files.isRegularFile(from, LinkOption.NOFOLLOW_LINKS) || Files.isSymbolicLink(from)) fail("UNSUPPORTED_FILE", "Only regular files can be moved")
         val id = UUID.randomUUID().toString(); durablePrepare(id, from, before, before, operation = "move", destination = to)
         if (sha(readBytes(from)) != snap.hash || !sameIdentity(sourceIdentity, fileIdentity(from))) fail("STALE_SNAPSHOT", "File changed while preparing move")
@@ -596,14 +639,17 @@ class LocalWorkspace(
                 "replace", "delete" -> {
                     val s = e.startLine ?: fail("INVALID_EDIT", "startLine is required"); val end = e.endLine ?: s
                     if (s < 1 || end < s || end > f.lines.size) fail("INVALID_RANGE", "Edit range is outside the file")
-                    if ((s..end).any { it !in observed }) fail("UNOBSERVED_RANGE", "Read the lines before editing them")
+                    val unread = (s..end).filter { it !in observed }
+                    if (unread.isNotEmpty()) throw ToolException("UNOBSERVED_RANGE", "Lines ${unread.first()}-${unread.last()} were not read with this snapshot; read the lines before editing them",
+                        "Call read_file with start_line=${unread.first()} and end_line=${unread.last()}, then edit with the snapshot_id it returns")
                     EditOp(s - 1, end, if (e.op == "delete") emptyList() else contentLines(e.content))
                 }
                 "insert" -> {
                     val before = e.beforeLine ?: fail("INVALID_EDIT", "beforeLine is required")
                     if (before < 1 || before > f.lines.size + 1) fail("INVALID_RANGE", "Insert position is outside the file")
                     val boundary = if (before <= f.lines.size) before else f.lines.size
-                    if (boundary > 0 && boundary !in observed && boundary - 1 !in observed) fail("UNOBSERVED_RANGE", "Read a boundary line before inserting")
+                    if (boundary > 0 && boundary !in observed && boundary - 1 !in observed) throw ToolException("UNOBSERVED_RANGE", "Read a boundary line before inserting",
+                        "Call read_file with start_line=$boundary and end_line=$boundary, then retry with the snapshot_id it returns")
                     EditOp(before - 1, before - 1, contentLines(e.content))
                 }
                 else -> fail("INVALID_EDIT", "Unsupported operation '${e.op}'")
@@ -891,19 +937,28 @@ class LocalWorkspace(
         val bytes = file.body.toByteArray(StandardCharsets.UTF_8)
         return if (file.bom) byteArrayOf(0xef.toByte(), 0xbb.toByte(), 0xbf.toByte()) + bytes else bytes
     }
-    /** Exact, non-overlapping matches over the LF-joined lines, turned into whole-line replace/delete edits. */
-    private fun replacementEdits(lines: List<String>, oldText: String, newText: String, expectedCount: Int): List<FileEdit> {
+    /**
+     * Exact, non-overlapping matches over the LF-joined lines, turned into whole-line replace/delete edits. The file's
+     * final line break belongs to the text too, so old_text copied through the end of the file matches.
+     */
+    private fun replacementEdits(lines: List<String>, finalNewline: Boolean, oldText: String, newText: String, expectedCount: Int): List<FileEdit> {
         if (oldText.isEmpty()) fail("INVALID_EDIT", "old_text must not be empty")
         if ('\r' in oldText || '\r' in newText) fail("INVALID_EDIT", "Use LF line separators in old_text and new_text")
         if (expectedCount !in 1..50) fail("INVALID_EDIT", "expected_count must be between 1 and 50")
-        val joined = lines.joinToString("\n")
+        val body = lines.joinToString("\n")
+        val joined = if (finalNewline) body + "\n" else body
         val starts = mutableListOf<Int>()
         var from = 0
         while (true) { val at = joined.indexOf(oldText, from); if (at < 0) break; starts += at; from = at + oldText.length }
-        if (starts.isEmpty()) fail("NO_MATCH", "old_text was not found; copy it exactly from read_file output without line numbers, including whitespace")
-        if (starts.size != expectedCount) fail("MATCH_COUNT_MISMATCH", "old_text matches ${starts.size} times, expected $expectedCount; add surrounding lines to make it unique or set expected_count")
+        if (starts.isEmpty()) throw ToolException("NO_MATCH", "old_text was not found; copy it exactly from read_file output without line numbers, including whitespace", noMatchHint(lines, oldText))
         val lineStart = IntArray(lines.size + 1).also { for (i in lines.indices) it[i + 1] = it[i] + lines[i].length + 1 }
         fun lineOf(offset: Int) = (lineStart.indexOfLast { it <= offset }).coerceIn(0, lines.size - 1)
+        if (starts.size != expectedCount) throw ToolException("MATCH_COUNT_MISMATCH", "old_text matches ${starts.size} times, expected $expectedCount; nothing was changed",
+            if (starts.size == 1) "expected_count is how many times the whole old_text occurs, not the number of changes inside it. It occurs once (line ${lineOf(starts[0]) + 1}): omit expected_count."
+            else "It occurs at lines ${starts.take(10).joinToString { (lineOf(it) + 1).toString() }}. Add surrounding lines to make it unique, or set expected_count to ${starts.size} to replace every occurrence.")
+        // The final line break is kept by the line model, so a match through it replaces up to the end of the last line.
+        val throughEnd = starts.any { it + oldText.length > body.length }
+        if (throughEnd && !newText.endsWith("\n")) fail("INVALID_EDIT", "old_text ends with the file's final line break but new_text does not; end new_text with a line break too, or leave it out of both")
         // Group matches whose line ranges touch so each edit covers distinct lines of the original snapshot.
         val groups = mutableListOf<MutableList<Int>>()
         for (start in starts) {
@@ -915,18 +970,113 @@ class LocalWorkspace(
             val first = lineOf(group.first()); val last = lineOf(group.last() + oldText.length)
             val blockStart = lineStart[first]
             val block = StringBuilder(lines.subList(first, last + 1).joinToString("\n"))
-            group.reversed().forEach { at -> block.replace(at - blockStart, at - blockStart + oldText.length, newText) }
+            group.reversed().forEach { at ->
+                val atEnd = at + oldText.length > body.length
+                block.replace(at - blockStart, at - blockStart + oldText.length - (if (atEnd) 1 else 0), if (atEnd) newText.dropLast(1) else newText)
+            }
             FileEdit("replace", startLine = first + 1, endLine = last + 1, content = block.toString())
         }
+    }
+
+    /**
+     * Why old_text did not match, for the model's next attempt. Nothing is applied from it: the hint only points at the
+     * lines that match when whitespace is ignored and shows their exact text to copy.
+     */
+    private fun noMatchHint(lines: List<String>, oldText: String): String {
+        val wanted = oldText.split('\n').map { it.trim() }.filter { it.isNotEmpty() }
+        if (wanted.isEmpty()) return "old_text has only whitespace; include the text of the lines to change"
+        // Seen live on Gemma 4 after a successful edit: line breaks sent as a backslash and "n" because the JSON was escaped twice.
+        // A file with real backslash-n text (string escapes in code) gets this hint only when the unescaped text is there.
+        if ('\n' !in oldText && "\\n" in oldText) {
+            val text = lines.joinToString("\n")
+            if ("\\n" !in text || oldText.replace("\\n", "\n") in text) return "old_text contains the two characters \\n (a backslash and n) instead of line breaks, " +
+                "so the arguments were escaped twice. Write each line break in the JSON string as \\n once, not \\\\n, and check new_text for the same"
+        }
+        if (wanted.all { READ_PREFIX.containsMatchIn(it) }) return "old_text contains read_file line-number prefixes like \"12 | \"; remove them and keep the code exactly"
+        // old_text may start or end inside a line; inner lines must be whole lines.
+        fun fits(line: String, index: Int): Boolean {
+            val text = line.trim()
+            return when {
+                wanted.size == 1 -> text.contains(wanted[0])
+                index == 0 -> text.endsWith(wanted[0])
+                index == wanted.size - 1 -> text.startsWith(wanted[index])
+                else -> text == wanted[index]
+            }
+        }
+        val regions = lines.indices.filter { fits(lines[it], 0) }.mapNotNull { start ->
+            var line = start; var index = 0
+            while (line < lines.size && index < wanted.size) {
+                if (lines[line].isBlank()) { line++; continue }
+                if (!fits(lines[line], index)) return@mapNotNull null
+                line++; index++
+            }
+            if (index == wanted.size) start until line else null
+        }
+        if (regions.size == 1) {
+            val region = regions.single()
+            val regionLines = lines.subList(region.first, region.last + 1)
+            val exact = regionLines.joinToString("\n")
+            val copy = if (exact.length <= MAX_HINT_CHARS) "Their exact text:\n$exact" else "Read those lines again and copy them exactly"
+            // Live Gemma runs wrote one blank line where the file had two and resent the same text even when shown the exact one.
+            val oldLines = oldText.split('\n')
+            val onlyBlankLinesDiffer = regionLines.filter { it.isNotBlank() }.map { it.trimEnd() } == oldLines.filter { it.isNotBlank() }.map { it.trimEnd() }
+            val fileBlank = regionLines.count { it.isBlank() }
+            val oldBlank = oldLines.dropLastWhile { it.isEmpty() }.count { it.isBlank() }
+            val spacedBlank = regionLines.indices.filter { regionLines[it].isNotEmpty() && regionLines[it].isBlank() }.map { region.first + it + 1 }
+            val inParts = "Simplest fix: change the text in parts, one replace_text per part, each old_text without any blank line. $copy"
+            if (onlyBlankLinesDiffer && fileBlank != oldBlank) return "Only blank lines differ: lines ${region.first + 1}-${region.last + 1} have $fileBlank blank line(s), old_text has $oldBlank. $inParts"
+            // Same count, still no match: the file's blank lines hold indentation that old_text left out.
+            if (onlyBlankLinesDiffer && spacedBlank.isNotEmpty()) return "Only the spaces on blank lines differ: line(s) ${spacedBlank.take(5).joinToString()} contain only spaces. $inParts"
+            return "Lines ${region.first + 1}-${region.last + 1} match old_text when indentation, trailing spaces and blank lines are ignored, so the whitespace differs. $copy"
+        }
+        if (regions.size > 1) return "${regions.size} places match old_text when whitespace is ignored (lines ${regions.take(5).joinToString { "${it.first + 1}-${it.last + 1}" }}); copy one exactly, with surrounding lines to make it unique"
+        val firstLine = lines.indexOfFirst { fits(it, 0) }
+        if (firstLine < 0) return "No line of the file contains the first line of old_text (\"${wanted[0].take(80)}\"); find it with search_text or read the file again"
+        // Live Gemma runs resent a 100-line old_text four times after "read lines 1-116 again": name the first line that differs.
+        val given = oldText.split('\n')
+        fun agreeing(from: Int): Int {
+            var same = 1
+            while (same < given.size && from + same < lines.size && (lines[from + same] == given[same] || (same == given.size - 1 && lines[from + same].startsWith(given[same])))) same++
+            return same
+        }
+        // The occurrence of the first line that agrees longest is the place the model meant.
+        val start = if (given[0].isEmpty()) -1 else lines.indices.filter { lines[it].endsWith(given[0]) }.maxByOrNull(::agreeing) ?: -1
+        val same = if (start >= 0) agreeing(start) else 0
+        if (same in 2 until given.size && start + same < lines.size) return "old_text matches lines ${start + 1}-${start + same} of the file, then differs: line ${start + same + 1} " +
+            "of the file is \"${lines[start + same].take(120)}\" but old_text has \"${given[same].take(120)}\". Copy that line exactly, or end old_text before it " +
+            "and change the rest with another replace_text"
+        return "The first line of old_text is at line ${firstLine + 1}, but the following lines differ from the file; read lines ${firstLine + 1}-${minOf(lines.size, firstLine + wanted.size + 2)} again and copy them exactly"
     }
 
     private fun contentLines(s: String): List<String> { if (s.isEmpty()) return listOf(""); if ('\r' in s) fail("INVALID_EDIT", "Edit content must use LF line separators"); return s.split('\n') }
     private fun sha(bytes: ByteArray) = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
     private fun snapshotId() = UUID.randomUUID().toString().replace("-", "").take(12)
     private fun JsonObject.string(key: String): String? = this[key]?.jsonPrimitive?.contentOrNull
-    private fun requireSnapshot(id: String, path: Path): Snapshot = (snapshots[id] ?: fail("UNKNOWN_SNAPSHOT", "Snapshot expired or unknown")).also { if (it.path != path) fail("SNAPSHOT_PATH_MISMATCH", "Snapshot belongs to another path") }
+    private fun requireSnapshot(id: String, path: Path): Snapshot {
+        val snap = snapshots[id] ?: throw ToolException("UNKNOWN_SNAPSHOT", "Snapshot expired or unknown", snapshotRecovery(path, null))
+        if (snap.path != path) throw ToolException("SNAPSHOT_PATH_MISMATCH", "Snapshot belongs to another path", snapshotRecovery(path, snap.path))
+        return snap
+    }
+
+    /**
+     * Live Gemma runs passed a change's id or hash, or another file's snapshot, as snapshot_id. When a snapshot of the file's
+     * present bytes exists, the model has already been given it (by a read or its own change), so name it instead of
+     * sending the model to read again. Edits still need the lines it observed.
+     */
+    private fun snapshotRecovery(path: Path, belongsTo: Path?): String {
+        val current = runCatching { sha(readBytes(path)) }.getOrNull()
+        val known = current?.let { hash -> snapshots.entries.filter { it.value.path == path && it.value.hash == hash }.maxByOrNull { it.value.observed.size }?.key }
+        val owner = belongsTo?.let { "That snapshot_id is for ${relative(it)}. " }.orEmpty()
+        return owner + if (known != null) "The current snapshot_id of ${relative(path)} is $known; use it"
+            else "Read ${relative(path)} again and use the snapshot_id it returns"
+    }
     private fun fail(code: String, message: String): Nothing = throw ToolException(code, message)
 }
 
 /** A generated image is a few megabytes; anything far larger is a bug or an abuse of the write path. */
 private const val MAX_BINARY_CREATE_BYTES = 32 * 1_048_576
+
+/** read_file's "12 | " line prefix, which a model sometimes copies into old_text. */
+private val READ_PREFIX = Regex("""^\d+ \| ?""")
+/** The exact text of a near match is shown only when it is short enough to copy back. */
+private const val MAX_HINT_CHARS = 2_000

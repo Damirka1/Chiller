@@ -49,6 +49,14 @@ class BuiltinToolsTest {
             assertFalse(Files.exists(root.resolve("new.txt")))
             val invalid = tools.execute(ToolCall("4", "read_file", "{\"path\":42}"), plan)
             assertEquals("INVALID_ARGUMENTS", invalid.error?.code)
+            // The error names the argument and what was expected, so a small model can fix the call in one step.
+            assertEquals("Unknown argument overwrite", unknown.error?.message)
+            assertEquals("Allowed arguments: path, content", unknown.error?.recovery)
+            assertEquals("path must be a string, got 42", invalid.error?.message)
+            val quoted = tools.execute(ToolCall("5", "read_file", "{\"path\":\"a.txt\",\"start_line\":\"10\"}"), plan)
+            assertEquals("start_line must be an integer (a JSON number without quotes), got the string \"10\"", quoted.error?.message)
+            assertEquals("Missing required argument path", tools.execute(ToolCall("6", "read_file", "{}"), plan).error?.message)
+            assertEquals("Arguments are not valid JSON", tools.execute(ToolCall("7", "read_file", "{\"path\": \"a.txt\""), plan).error?.message)
         } finally { processes.close(); root.toFile().deleteRecursively() }
     }
 
@@ -69,7 +77,7 @@ class BuiltinToolsTest {
             val snapshot = read.data!!.jsonObject.getValue("snapshot_id").jsonPrimitive.content
             val first = tools.execute(ToolCall("2", "edit_file", """{"path":"a.txt","snapshot_id":"$snapshot","edits":[{"op":"replace","start_line":1,"content":"ONE"}]}"""), context)
             assertTrue(first.ok)
-            val chained = first.data!!.jsonObject.getValue("snapshotId").jsonPrimitive.content
+            val chained = first.data!!.jsonObject.getValue("snapshot_id").jsonPrimitive.content
             assertEquals("ONE\ntwo\n", Files.readString(root.resolve("a.txt")))
             val second = tools.execute(ToolCall("3", "edit_file", """{"path":"a.txt","snapshot_id":"$chained","edits":[{"op":"replace","start_line":2,"content":"TWO"}]}"""), context)
             assertTrue(second.ok)
@@ -79,6 +87,33 @@ class BuiltinToolsTest {
                 val search = tools.execute(ToolCall("4", "search_text", """{"query":"ONE","context":1,"limit":5}"""), context)
                 assertTrue(search.ok)
             }
+            // A new file is written in parts: create_file's snapshot_id feeds append_file without a read.
+            val created = tools.execute(ToolCall("5", "create_file", """{"path":"big.txt","content":"line 1\n"}"""), context)
+            var snapshotId = created.data!!.jsonObject.getValue("snapshot_id").jsonPrimitive.content
+            for (part in 0 until 3) {
+                val content = (2 + part * 100 until 102 + part * 100).joinToString("\\n") { "line $it" }
+                val appended = tools.execute(ToolCall("6-$part", "append_file", """{"path":"big.txt","snapshot_id":"$snapshotId","content":"$content"}"""), context)
+                assertTrue(appended.ok, appended.error?.message)
+                snapshotId = appended.data!!.jsonObject.getValue("snapshot_id").jsonPrimitive.content
+            }
+            assertEquals((1..301).joinToString("") { "line $it\n" }, Files.readString(root.resolve("big.txt")))
+            // The change result leads with snapshot_id and has no hashes to mistake for it; a change id passed as one gets
+            // the file's current snapshot back instead of a re-read.
+            val createdData = created.data!!.jsonObject
+            assertEquals("snapshot_id", createdData.keys.first())
+            assertFalse("afterHash" in createdData)
+            val wrong = tools.execute(ToolCall("6x", "append_file", """{"path":"big.txt","snapshot_id":"${createdData.getValue("id").jsonPrimitive.content}","content":"x"}"""), context)
+            assertEquals("UNKNOWN_SNAPSHOT", wrong.error?.code)
+            assertTrue(snapshotId in wrong.error?.recovery.orEmpty(), wrong.error?.recovery)
+            val other = tools.execute(ToolCall("6y", "append_file", """{"path":"a.txt","snapshot_id":"$snapshotId","content":"x"}"""), context)
+            assertEquals("SNAPSHOT_PATH_MISMATCH", other.error?.code)
+            assertTrue("big.txt" in other.error?.recovery.orEmpty(), other.error?.recovery)
+            // A cut read says which lines it showed and where to go on.
+            val page = tools.execute(ToolCall("7", "read_file", """{"path":"big.txt","start_line":50}"""), context).data!!.jsonObject
+            assertEquals("50-249", page.getValue("shown_lines").jsonPrimitive.content)
+            assertEquals(250, page.getValue("next_start_line").jsonPrimitive.int)
+            val whole = tools.execute(ToolCall("8", "read_file", """{"path":"a.txt"}"""), context).data!!.jsonObject
+            assertFalse("next_start_line" in whole, "a complete read has no continuation")
         } finally { processes.close(); root.toFile().deleteRecursively() }
     }
 
@@ -138,6 +173,38 @@ class BuiltinToolsTest {
         assertEquals(prefix.length + 40, part.getValue("next_offset").jsonPrimitive.int)
         val tail = tools.execute(ToolCall("3", "read_artifact", """{"artifact_id":"a","offset":${content.length - 10},"limit":100}"""), context).data!!.jsonObject
         assertEquals(true, tail.getValue("end").jsonPrimitive.boolean)
+        root.toFile().deleteRecursively()
+    }
+
+    @Test fun longFinishedProcessOutputShowsItsBeginningAndEnd() = runBlocking<Unit> {
+        // A test runner puts its summary last; the model got only the first page and ran the same command again.
+        val text = (0 until 3000).joinToString("") { if (it == 1500) "case 1500: FAILED, expected 15\n" else "case $it: ok\n" } + "1 failure: case 1500\n"
+        val processes = object : ProcessService {
+            fun page(cursor: Long): ProcessOutput {
+                val end = minOf(text.length.toLong(), cursor + 16_384)
+                return ProcessOutput("p", text.substring(cursor.toInt(), end.toInt()), end, "exited", 1, end < text.length)
+            }
+            override suspend fun start(request: StartProcessRequest, runId: String) = page(0)
+            override suspend fun read(processId: String, cursor: Long) = page(cursor)
+            override suspend fun stop(processId: String) = page(0)
+            override suspend fun stopRun(runId: String) {}
+            override suspend fun close() {}
+        }
+        val root = Files.createTempDirectory("chiller-process-tail")
+        val artifacts = object : ArtifactStore {
+            override suspend fun put(sessionId: String, content: String) = ArtifactRef("a", sessionId, content.length.toLong())
+            override suspend fun read(sessionId: String, artifactId: String, offset: Int, limit: Int) = ""
+        }
+        val tools = BuiltinTools(LocalWorkspace(root), processes, artifacts, object : InteractionBroker { override suspend fun ask(question: UserQuestion) = "" })
+        val result = tools.execute(ToolCall("1", "run_process", """{"argv":["python","checks.py"]}"""), ToolContext("s", "r", ExecutionMode.WORKSPACE_EDIT, allowProcesses = true))
+        val data = result.data!!.jsonObject
+        val output = data.getValue("output").jsonPrimitive.content
+        assertTrue(output.startsWith("case 0: ok") && output.endsWith("1 failure: case 1500\n"), output.takeLast(200))
+        assertTrue("characters omitted here; read_process with cursor=2000 reads them. The 1 omitted line(s) that mention failures or errors:]\ncase 1500: FAILED, expected 15\n" in output, output)
+        assertTrue(output.length < 8_500, "head and tail stay bounded: ${output.length}")
+        assertEquals(text.length.toLong(), data.getValue("cursor").jsonPrimitive.long)
+        assertEquals(false, data.getValue("truncated").jsonPrimitive.boolean)
+        assertEquals(1, data.getValue("exitCode").jsonPrimitive.int)
         root.toFile().deleteRecursively()
     }
 }

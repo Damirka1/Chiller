@@ -260,6 +260,12 @@ interface WorkspaceService {
      */
     suspend fun replaceText(path: String, snapshotId: String, oldText: String, newText: String, expectedCount: Int = 1): FileChange =
         throw ToolException("UNSUPPORTED", "Text replacement is not supported by this workspace")
+    /**
+     * Adds [content] as whole lines after the last line of the snapshot's file, which must be unchanged and whose last
+     * line must have been read (or written) in that snapshot. Existing lines are never changed.
+     */
+    suspend fun append(path: String, snapshotId: String, content: String): FileChange =
+        throw ToolException("UNSUPPORTED", "Appending is not supported by this workspace")
 }
 
 @Serializable

@@ -20,8 +20,10 @@ class BuiltinTools(
     private val json = Json { encodeDefaults = true }
     private val imagesPerRun = java.util.concurrent.ConcurrentHashMap<String, Int>()
     override val specs: List<ToolSpec> = listOf(
-        spec("list_files", "List project files respecting ignore rules. Results are bounded; copy returned nextCursor to cursor to continue.", ToolEffect.READ, mapOf("path" to string(), "glob" to string(), "limit" to integer(), "cursor" to string())),
-        spec("search_text", "Search text in project; literal by default. Optional context adds surrounding lines. Copy returned nextCursor to cursor, keeping the same query options.", ToolEffect.READ, mapOf("query" to string(), "path" to string(), "glob" to string(), "regex" to boolean(), "limit" to integer(), "context" to integer(), "cursor" to string()), "query"),
+        spec("list_files", "List project files respecting ignore rules. Results are bounded; copy returned nextCursor to cursor to continue.", ToolEffect.READ,
+            mapOf("path" to string(PATH_ARGUMENT), "glob" to string(GLOB_ARGUMENT), "limit" to integer(), "cursor" to string())),
+        spec("search_text", "Search text in project; literal by default. Optional context adds surrounding lines. Copy returned nextCursor to cursor, keeping the same query options.", ToolEffect.READ,
+            mapOf("query" to string(), "path" to string(PATH_ARGUMENT), "glob" to string(GLOB_ARGUMENT), "regex" to boolean(), "limit" to integer(), "context" to integer(), "cursor" to string()), "query"),
         spec("git_status", "Show bounded read-only Git status, including untracked and tracked changes.", ToolEffect.READ, emptyMap()),
         spec("git_diff", "Show a bounded read-only Git diff. No external diff or text conversion is used.", ToolEffect.READ, mapOf("staged" to boolean(), "path" to string())),
         spec("git_log", "Show up to 30 recent commits, optionally from a simple revision name.", ToolEffect.READ, mapOf("limit" to integer(), "revision" to string())),
@@ -31,20 +33,27 @@ class BuiltinTools(
         spec("find_symbols", "Find lexical class, function, and type declarations in supported source files; this is not semantic/LSP navigation.", ToolEffect.READ, mapOf("query" to string(), "path" to string(), "limit" to integer()), "query"),
         spec("read_symbol", "Read one complete block-bodied Kotlin class or function. For large files, pass start_line from find_symbols. Refuses ambiguity and expression-bodied declarations; lexical only, not a parser.", ToolEffect.READ, mapOf("path" to string(), "symbol" to string(), "start_line" to integer()), "path", "symbol"),
         spec("show_file", "Present an existing workspace file to the user, with an image preview when supported. This does not send image pixels to the model.", ToolEffect.READ, mapOf("path" to string()), "path"),
-        spec("read_file", "Read numbered lines and obtain snapshot_id. Copy snapshot_id exactly for edits.", ToolEffect.READ, mapOf("path" to string(), "start_line" to integer(), "end_line" to integer()), "path"),
-        spec("edit_file", "Edit read lines of the exact snapshot by line number. 1-based inclusive ranges. For small changes replace_text is simpler. All edits use the original snapshot. The returned snapshotId can be used for further edits without re-reading.", ToolEffect.FILE_WRITE,
+        spec("read_file", "Read numbered lines and obtain snapshot_id. Copy snapshot_id exactly for edits.", ToolEffect.READ,
+            mapOf("path" to string(), "start_line" to integer("First line to read, 1-based"), "end_line" to integer("Last line to read, inclusive")), "path"),
+        spec("edit_file", "Edit read lines of the exact snapshot by line number. 1-based inclusive ranges. For small changes replace_text is simpler. All edits use the original snapshot. The returned snapshot_id can be used for further edits without re-reading.", ToolEffect.FILE_WRITE,
             mapOf("path" to string(), "snapshot_id" to string(), "edits" to buildJsonObject { put("type", "array"); put("maxItems", 32); put("items", buildJsonObject {
                 put("type", "object"); put("additionalProperties", false)
                 put("properties", buildJsonObject { put("op", buildJsonObject { put("type", "string"); put("enum", JsonArray(listOf("replace", "insert", "delete").map(::JsonPrimitive))) }); put("start_line", integer()); put("end_line", integer()); put("before_line", integer()); put("content", string()) })
                 put("required", JsonArray(listOf(JsonPrimitive("op"))))
             }) }), "path", "snapshot_id", "edits"),
-        spec("replace_text", "Replace exact text in a file you have read. Copy old_text from read_file output without the line-number prefix, including indentation. Must match exactly expected_count times (default 1); otherwise nothing changes. Prefer this for small changes. Returns snapshotId for further edits.", ToolEffect.FILE_WRITE,
-            mapOf("path" to string(), "snapshot_id" to string(), "old_text" to string(), "new_text" to string(), "expected_count" to integer()), "path", "snapshot_id", "old_text", "new_text"),
-        spec("create_file", "Create a new UTF-8 file, safely creating missing parent directories. Never overwrites existing files.", ToolEffect.FILE_WRITE, mapOf("path" to string(), "content" to string()), "path", "content"),
+        spec("replace_text", "Replace exact text in a file you have read. Copy old_text from read_file output without the line-number prefix, including indentation. Must match exactly expected_count times (default 1); otherwise nothing changes. Prefer this for small changes. Returns snapshot_id for further edits.", ToolEffect.FILE_WRITE,
+            mapOf("path" to string(), "snapshot_id" to string("From read_file or from the last edit of this file"),
+                "old_text" to string("Exact current text copied from read_file, without the \"12 | \" prefixes"), "new_text" to string("Text that replaces old_text"),
+                "expected_count" to integer("How many times the whole old_text occurs in the file; omit it when old_text occurs once")), "path", "snapshot_id", "old_text", "new_text"),
+        spec("create_file", "Create a new UTF-8 file, safely creating missing parent directories. Never overwrites existing files. Returns snapshot_id for further edits.", ToolEffect.FILE_WRITE, mapOf("path" to string(), "content" to string()), "path", "content"),
+        spec("append_file", "Add lines to the end of a file, e.g. the next part of a long file written in parts. Existing lines are not changed. Returns snapshot_id for the next part.", ToolEffect.FILE_WRITE,
+            mapOf("path" to string(), "snapshot_id" to string("From create_file, read_file or the last edit of this file"), "content" to string("Lines that follow the current last line")), "path", "snapshot_id", "content"),
         spec("create_directory", "Create a directory and missing parents inside the workspace; succeeds if the directory already exists, refuses files and symlinks.", ToolEffect.FILE_WRITE, mapOf("path" to string()), "path"),
         spec("move_file", "Move one file without overwriting destination; snapshot required.", ToolEffect.FILE_WRITE, mapOf("path" to string(), "snapshot_id" to string(), "destination" to string()), "path", "snapshot_id", "destination"),
         spec("delete_file", "Delete one read file with a recoverable checkpoint; snapshot required.", ToolEffect.FILE_WRITE, mapOf("path" to string(), "snapshot_id" to string()), "path", "snapshot_id"),
-        spec("run_process", "Run an executable with argument array. Explicit process permission required. cwd is relative. Shell commands require explicit shell argv.", ToolEffect.PROCESS, mapOf("argv" to array(string()), "cwd" to string(), "timeout_ms" to integer(), "background" to boolean()), "argv"),
+        spec("run_process", "Run an executable with argument array. Explicit process permission required. cwd is relative. Shell commands require explicit shell argv.", ToolEffect.PROCESS,
+            mapOf("argv" to array(string(), "Program and its arguments as separate items, e.g. [\"python\", \"checks.py\"]"), "cwd" to string(), "timeout_ms" to integer(),
+                "background" to boolean("true only for servers and watchers that keep running; read their output with read_process")), "argv"),
         spec("read_process", "Read new process output using cursor; inspect exit code before claiming checks passed.", ToolEffect.READ, mapOf("process_id" to string(), "cursor" to integer()), "process_id"),
         spec("read_diagnostics", "Parse a bounded set of Kotlin, Java, and Python file/line diagnostics from new process output. Partial parser; inspect process state and exit_code separately.", ToolEffect.READ, mapOf("process_id" to string(), "cursor" to integer()), "process_id"),
         spec("stop_process", "Stop a process by its opaque id.", ToolEffect.PROCESS, mapOf("process_id" to string()), "process_id"),
@@ -82,7 +91,9 @@ class BuiltinTools(
             if (spec.effect == ToolEffect.NETWORK && !context.allowNetwork)
                 return ToolResult.failure("PERMISSION_DENIED", "Network access was not enabled by the user")
             if (call.arguments.length > 262_144) return ToolResult.failure("INVALID_ARGUMENTS", "Arguments exceed limit")
-            val args = json.parseToJsonElement(call.arguments).jsonObject
+            val args = try { json.parseToJsonElement(call.arguments) } catch (_: kotlinx.serialization.SerializationException) {
+                return ToolResult.failure("INVALID_ARGUMENTS", "Arguments are not valid JSON", recovery = "Send one JSON object; escape quotes as \\\" , backslashes as \\\\ and line breaks as \\n inside strings")
+            } as? JsonObject ?: return ToolResult.failure("INVALID_ARGUMENTS", "Arguments must be a JSON object with named arguments")
             validateObject(args, spec.parameters)
             val result = when (call.name) {
                 "list_files" -> workspace.listPage(args.str("path", "."), args.optionalString("glob"), args.int("limit", 200), args.optionalString("cursor"))
@@ -115,10 +126,17 @@ class BuiltinTools(
                 "list_capture_targets" -> ToolResult(true, buildJsonObject { put("targets", json.encodeToJsonElement(screens!!.targets())) })
                 "capture_window" -> ToolResult(true, buildJsonObject { put("file", json.encodeToJsonElement(screens!!.capture())); put("model_can_view", false) })
                 "read_file" -> {
-                    val r = workspace.read(ReadFileRequest(args.str("path"), args.int("start_line", 1), args.optionalInt("end_line")))
+                    val start = args.int("start_line", 1)
+                    val r = workspace.read(ReadFileRequest(args.str("path"), start, args.optionalInt("end_line")))
                     ToolResult(true, buildJsonObject {
                         put("path", r.path); put("snapshot_id", r.snapshotId); put("total_lines", r.totalLines); put("eol", r.eol)
-                        put("content", r.content.lineSequence().mapIndexed { i, line -> "${args.int("start_line", 1) + i} | $line" }.joinToString("\n"))
+                        put("content", r.content.lineSequence().mapIndexed { i, line -> "${start + i} | $line" }.joinToString("\n"))
+                        // A cut read says what was shown and how to go on; models paged big files by guessing ranges.
+                        if (r.truncated && r.content.isNotEmpty()) {
+                            val last = start + r.content.lineSequence().count() - 1
+                            put("shown_lines", "$start-$last"); put("next_start_line", last + 1)
+                            put("note", "One read shows a limited number of lines. To find a name or text in a big file use search_text, then read around the line it gives.")
+                        }
                     }, truncated = r.truncated)
                 }
                 "edit_file" -> {
@@ -126,9 +144,9 @@ class BuiltinTools(
                         FileEdit(it.str("op"), it.optionalInt("start_line"), it.optionalInt("end_line"), it.optionalInt("before_line"), it.str("content", ""))
                     } }
                     if (edits.isEmpty() || edits.size > 32) throw ToolException("INVALID_ARGUMENTS", "Provide 1–32 edits")
-                    success(workspace.edit(EditFileRequest(args.str("path"), args.str("snapshot_id"), edits)))
+                    changed(workspace.edit(EditFileRequest(args.str("path"), args.str("snapshot_id"), edits)))
                 }
-                "replace_text" -> success(workspace.replaceText(args.str("path"), args.str("snapshot_id"), args.str("old_text"), args.str("new_text"), args.int("expected_count", 1)))
+                "replace_text" -> changed(workspace.replaceText(args.str("path"), args.str("snapshot_id"), args.str("old_text"), args.str("new_text"), args.int("expected_count", 1)))
                 "update_plan" -> {
                     val steps = args.getValue("steps").jsonArray.map { it.jsonObject.str("step").trim().take(200) to it.jsonObject.str("status") }
                     if (steps.isEmpty() || steps.any { it.first.isEmpty() }) throw ToolException("INVALID_ARGUMENTS", "Provide 1–20 non-empty steps")
@@ -138,12 +156,13 @@ class BuiltinTools(
                         put("next", steps.firstOrNull { it.second !in setOf("done", "skipped") }?.first ?: "all steps closed")
                     })
                 }
-                "create_file" -> success(workspace.create(args.str("path"), args.str("content")))
+                "create_file" -> changed(workspace.create(args.str("path"), args.str("content")))
+                "append_file" -> changed(workspace.append(args.str("path"), args.str("snapshot_id"), args.str("content")))
                 "generate_image" -> generateImage(args, context)
                 "create_directory" -> workspace.createDirectory(args.str("path"))
-                "move_file" -> success(workspace.move(args.str("path"), args.str("snapshot_id"), args.str("destination")))
-                "delete_file" -> success(workspace.delete(args.str("path"), args.str("snapshot_id")))
-                "run_process" -> success(processes.start(StartProcessRequest(args.getValue("argv").jsonArray.map { it.jsonPrimitive.content }, args.str("cwd", "."), args.long("timeout_ms", 60_000), args.bool("background")), context.runId))
+                "move_file" -> changed(workspace.move(args.str("path"), args.str("snapshot_id"), args.str("destination")))
+                "delete_file" -> changed(workspace.delete(args.str("path"), args.str("snapshot_id")))
+                "run_process" -> success(headAndTail(processes.start(StartProcessRequest(args.getValue("argv").jsonArray.map { it.jsonPrimitive.content }, args.str("cwd", "."), args.long("timeout_ms", 60_000), args.bool("background")), context.runId)))
                 "read_process" -> success(processes.read(args.str("process_id"), args.long("cursor", 0)))
                 "read_diagnostics" -> {
                     val page = processes.read(args.str("process_id"), args.long("cursor", 0))
@@ -189,6 +208,43 @@ class BuiltinTools(
     }
 
     private inline fun <reified T> success(value: T) = ToolResult(true, json.encodeToJsonElement(value))
+
+    /**
+     * A file change as the model reads it: snapshot_id first, named like the argument it feeds. Live Gemma runs passed the
+     * change id or afterHash (both listed before a trailing snapshotId) as snapshot_id; the hashes are left out, the id
+     * stays for undo.
+     */
+    private fun changed(change: FileChange) = ToolResult(true, buildJsonObject {
+        change.snapshotId?.let { put("snapshot_id", it) }
+        put("path", change.path); put("id", change.id); put("diff", change.diff)
+    })
+
+    /**
+     * A finished process whose output is longer than one page: its beginning, the lines of the omitted middle that
+     * mention failures or errors, and its end, where test runners put the summary. Live Gemma runs got only the first
+     * page and started the same command again; given head and tail alone, they paged through the middle instead.
+     */
+    private suspend fun headAndTail(first: ProcessOutput): ProcessOutput {
+        if (first.exitCode == null || !first.truncated) return first
+        // The first page starts at cursor 0, so positions in this text are process output cursors.
+        val text = StringBuilder(first.output)
+        var page = first
+        var pages = 0
+        while (page.truncated && pages++ < MAX_TAIL_PAGES) {
+            val next = processes.read(first.processId, page.cursor)
+            if (next.output.isEmpty()) break
+            text.append(next.output); page = next
+        }
+        if (page === first) return first
+        val tailStart = maxOf(PROCESS_HEAD_CHARS, text.length - PROCESS_TAIL_CHARS)
+        val middle = text.substring(PROCESS_HEAD_CHARS, tailStart)
+        val notable = middle.lineSequence().filter { NOTABLE_OUTPUT.containsMatchIn(it) }.toList()
+        val marker = "[Chiller: ${middle.length} characters omitted here; read_process with cursor=$PROCESS_HEAD_CHARS reads them" +
+            if (notable.isEmpty()) "]" else ". The ${notable.size} omitted line(s) that mention failures or errors" +
+                (if (notable.size > MAX_NOTABLE_LINES) ", first $MAX_NOTABLE_LINES" else "") + ":]\n" +
+                notable.take(MAX_NOTABLE_LINES).joinToString("\n") { it.trim().take(200) } + "\n[Chiller: end of the omitted part]"
+        return page.copy(output = text.substring(0, PROCESS_HEAD_CHARS) + "\n" + marker + "\n" + text.substring(tailStart))
+    }
 
     /**
      * Generates (or edits) one image and stores it as a new workspace file through the undoable binary create.
@@ -267,25 +323,43 @@ class BuiltinTools(
         }, truncated = matches.size >= MAX_ARTIFACT_MATCHES)
     }
 
-    private fun validateObject(value: JsonObject, schema: JsonObject) {
+    /** Rejects arguments that do not fit the schema, naming the argument and what was expected so the model can fix the call. */
+    private fun validateObject(value: JsonObject, schema: JsonObject, prefix: String = "") {
         val properties = schema.getValue("properties").jsonObject
-        require(value.keys.all { it in properties })
-        schema["required"]?.jsonArray?.forEach { require(it.jsonPrimitive.content in value) }
-        value.forEach { (key, item) -> validateValue(item, properties.getValue(key).jsonObject) }
+        value.keys.firstOrNull { it !in properties }?.let { invalidArgument("Unknown argument $prefix$it", "Allowed arguments: ${properties.keys.joinToString { key -> "$prefix$key" }}") }
+        schema["required"]?.jsonArray?.map { it.jsonPrimitive.content }?.firstOrNull { it !in value }?.let { invalidArgument("Missing required argument $prefix$it") }
+        value.forEach { (key, item) -> validateValue(item, properties.getValue(key).jsonObject, prefix + key) }
     }
-    private fun validateValue(item: JsonElement, schema: JsonObject) {
+    private fun validateValue(item: JsonElement, schema: JsonObject, name: String) {
+        fun expect(valid: Boolean, what: String) { if (!valid) invalidArgument("$name must be $what, got ${describeJson(item)}") }
         when (schema["type"]?.jsonPrimitive?.content) {
-            "string" -> { require(item is JsonPrimitive && item.isString); schema["maxLength"]?.jsonPrimitive?.int?.let { require(item.content.length <= it) } }
-            "integer" -> {
-                require(item is JsonPrimitive && !item.isString && item.longOrNull != null)
-                schema["minimum"]?.jsonPrimitive?.long?.let { require(item.long >= it) }
-                schema["maximum"]?.jsonPrimitive?.long?.let { require(item.long <= it) }
+            "string" -> {
+                expect(item is JsonPrimitive && item.isString, "a string")
+                schema["maxLength"]?.jsonPrimitive?.int?.let { expect(item.jsonPrimitive.content.length <= it, "at most $it characters") }
             }
-            "boolean" -> require(item is JsonPrimitive && !item.isString && item.booleanOrNull != null)
-            "array" -> { require(item is JsonArray); require(item.size <= (schema["maxItems"]?.jsonPrimitive?.int ?: 64)); item.forEach { validateValue(it, schema.getValue("items").jsonObject) } }
-            "object" -> { require(item is JsonObject); validateObject(item, schema) }
+            "integer" -> {
+                expect(item is JsonPrimitive && !item.isString && item.longOrNull != null, "an integer (a JSON number without quotes)")
+                schema["minimum"]?.jsonPrimitive?.long?.let { expect(item.jsonPrimitive.long >= it, "at least $it") }
+                schema["maximum"]?.jsonPrimitive?.long?.let { expect(item.jsonPrimitive.long <= it, "at most $it") }
+            }
+            "boolean" -> expect(item is JsonPrimitive && !item.isString && item.booleanOrNull != null, "true or false without quotes")
+            "array" -> {
+                expect(item is JsonArray, "an array")
+                val maxItems = schema["maxItems"]?.jsonPrimitive?.int ?: 64
+                expect(item.jsonArray.size <= maxItems, "an array of at most $maxItems items")
+                item.jsonArray.forEachIndexed { index, element -> validateValue(element, schema.getValue("items").jsonObject, "$name[$index]") }
+            }
+            "object" -> { expect(item is JsonObject, "an object"); validateObject(item.jsonObject, schema, "$name.") }
         }
-        schema["enum"]?.jsonArray?.let { require(item in it) }
+        schema["enum"]?.jsonArray?.let { values -> expect(item in values, "one of ${values.joinToString()}") }
+    }
+    private fun invalidArgument(message: String, recovery: String? = null): Nothing = throw ToolException("INVALID_ARGUMENTS", message, recovery)
+    private fun describeJson(item: JsonElement): String = when {
+        item is JsonNull -> "null"
+        item is JsonPrimitive && item.isString -> "the string ${item.toString().take(60)}"
+        item is JsonArray -> "an array"
+        item is JsonObject -> "an object"
+        else -> item.toString().take(60)
     }
     private fun JsonObject.str(key: String, default: String? = null): String = this[key]?.jsonPrimitive?.content ?: default ?: throw ToolException("INVALID_ARGUMENTS", "Missing $key")
     private fun JsonObject.optionalString(key: String) = this[key]?.jsonPrimitive?.content
@@ -295,12 +369,13 @@ class BuiltinTools(
     private fun JsonObject.bool(key: String) = this[key]?.jsonPrimitive?.boolean ?: false
 
     companion object {
-        private fun string() = buildJsonObject { put("type", "string") }
+        // A description is added only where models were seen to misread an argument; each one costs prompt tokens every round.
+        private fun string(description: String? = null) = buildJsonObject { put("type", "string"); description?.let { put("description", it) } }
         private fun boundedString(maxLength: Int) = buildJsonObject { put("type", "string"); put("maxLength", maxLength) }
-        private fun integer() = buildJsonObject { put("type", "integer") }
+        private fun integer(description: String? = null) = buildJsonObject { put("type", "integer"); description?.let { put("description", it) } }
         private fun boundedInteger(minimum: Int, maximum: Int) = buildJsonObject { put("type", "integer"); put("minimum", minimum); put("maximum", maximum) }
-        private fun boolean() = buildJsonObject { put("type", "boolean") }
-        private fun array(item: JsonObject) = buildJsonObject { put("type", "array"); put("items", item); put("maxItems", 64) }
+        private fun boolean(description: String? = null) = buildJsonObject { put("type", "boolean"); description?.let { put("description", it) } }
+        private fun array(item: JsonObject, description: String? = null) = buildJsonObject { put("type", "array"); put("items", item); put("maxItems", 64); description?.let { put("description", it) } }
         private fun spec(name: String, description: String, effect: ToolEffect, props: Map<String, JsonObject>, vararg required: String) = ToolSpec(name, description, buildJsonObject {
             put("type", "object"); put("additionalProperties", false); put("properties", JsonObject(props)); put("required", JsonArray(required.map(::JsonPrimitive)))
         }, effect)
@@ -315,3 +390,12 @@ private val IMAGE_EXTENSIONS = linkedMapOf("png" to "image/png", "jpg" to "image
 private val ARTIFACT_ID = Regex("[0-9a-fA-F-]{16,64}")
 private val IMAGE_SIZE = Regex("[0-9]{2,4}x[0-9]{2,4}")
 private const val MAX_ARTIFACT_MATCHES = 40
+// A model searched with the glob src/*, which skips subfolders, and reported 3 of 5 matches.
+private const val PATH_ARGUMENT = "Folder or file, relative to the project; subfolders are included"
+private const val GLOB_ARGUMENT = "File name pattern such as *.py, applied in every subfolder. To limit to a folder use path, not a glob like src/*"
+private const val PROCESS_HEAD_CHARS = 2_000
+private const val PROCESS_TAIL_CHARS = 6_000
+/** Bounds the walk to the end of the output: 1 MiB of process output is 64 pages. */
+private const val MAX_TAIL_PAGES = 70
+private const val MAX_NOTABLE_LINES = 20
+private val NOTABLE_OUTPUT = Regex("fail|error|exception|traceback|assert|panic", RegexOption.IGNORE_CASE)
