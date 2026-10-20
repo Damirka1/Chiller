@@ -181,7 +181,7 @@ class ChatCompletionsProviderTest {
         } finally { client.close(); server.stop(0) }
     }
 
-    @Test fun vllmReasoningIsShownButNotReplayedAndThinkingGoesThroughTheChatTemplate() = runBlocking {
+    @Test fun vllmReasoningIsShownAndReplayedAndThinkingGoesThroughTheChatTemplate() = runBlocking {
         val bodies = mutableListOf<String>()
         val server = testServer { exchange ->
             bodies += exchange.requestBody.readBytes().toString(StandardCharsets.UTF_8)
@@ -190,16 +190,19 @@ class ChatCompletionsProviderTest {
         }
         val client = HttpClient(CIO)
         try {
-            val profile = ChatCompletionsProfile("generic", "http://127.0.0.1:${server.address.port}", "quasar", requiresApiKey = false,
-                thinkingOptions = ChatCompletionsProfile.chatTemplateThinking)
+            val profile = ChatCompletionsProfile("generic", "http://127.0.0.1:${server.address.port}", "quasar", requiresApiKey = false)
+                .withChatTemplateThinking()
             val provider = ChatCompletionsProvider(client, profile, emptyList()) { null }
             val events = provider.stream(ModelRequest("quasar", listOf(AgentMessage("user", "17*23")), thinking = true)).toList()
             assertEquals(listOf("weigh it"), events.filterIsInstance<ModelEvent.ReasoningDelta>().map { it.text })
             val message = assertIs<ModelEvent.Completed>(events.last()).message
-            assertTrue(message.replay.isEmpty(), "optional reasoning is not protocol replay")
+            assertEquals("weigh it", message.replay["reasoning_content"]?.jsonPrimitive?.content, "vLLM's \"reasoning\" is kept for the template")
             assertEquals("true", Json.parseToJsonElement(bodies[0]).jsonObject.getValue("chat_template_kwargs").jsonObject.getValue("enable_thinking").jsonPrimitive.content)
-            provider.stream(ModelRequest("quasar", listOf(AgentMessage("user", "x")), thinking = false)).toList()
-            assertEquals("false", Json.parseToJsonElement(bodies[1]).jsonObject.getValue("chat_template_kwargs").jsonObject.getValue("enable_thinking").jsonPrimitive.content)
+            // The template keeps it between tool calls of one turn and drops it for earlier turns, so it is always sent.
+            provider.stream(ModelRequest("quasar", listOf(AgentMessage("user", "17*23"), message, AgentMessage("user", "x")), thinking = false)).toList()
+            val second = Json.parseToJsonElement(bodies[1]).jsonObject
+            assertEquals("false", second.getValue("chat_template_kwargs").jsonObject.getValue("enable_thinking").jsonPrimitive.content)
+            assertEquals("weigh it", second.getValue("messages").jsonArray[1].jsonObject.getValue("reasoning_content").jsonPrimitive.content)
             // The user's own chat_template_kwargs wins over the switch.
             val custom = ChatCompletionsProvider(client, profile.withExtras(buildJsonObject { put("chat_template_kwargs", buildJsonObject { put("custom", 1) }) }), emptyList()) { null }
             custom.stream(ModelRequest("quasar", listOf(AgentMessage("user", "x")), thinking = true)).toList()

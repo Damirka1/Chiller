@@ -50,6 +50,14 @@ data class ChatCompletionsProfile(
     /** Same profile with extra request fields; later keys win, protocol fields stay protected. */
     fun withExtras(extras: JsonObject): ChatCompletionsProfile = copy(requestExtras = JsonObject(requestExtras + extras))
 
+    /**
+     * A listed reasoning model behind a chat template (Gemma 4, Qwen 3 on vLLM/SGLang): the thinking switch, and the
+     * model's reasoning sent back with its own assistant messages. Gemma 4 requires its thoughts to stay between the
+     * tool calls of one turn; both templates keep them only after the latest user message and drop earlier turns'.
+     * Without them the model lost what it had planned after every tool result.
+     */
+    fun withChatTemplateThinking(): ChatCompletionsProfile = copy(thinkingOptions = chatTemplateThinking, reasoningField = "reasoning_content")
+
     companion object {
         fun deepSeekFlash(
             baseUrl: String = "https://api.deepseek.com",
