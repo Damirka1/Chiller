@@ -31,7 +31,7 @@ data class TurnResult(
     val isEmpty: Boolean get() = files.isEmpty() && commands.isEmpty() && presented.isEmpty() && issues.isEmpty()
 }
 
-private val FILE_CHANGE_TOOLS = setOf("edit_file", "replace_text", "create_file", "move_file", "delete_file", "create_directory", "generate_image")
+private val FILE_CHANGE_TOOLS = setOf("edit_file", "replace_text", "append_file", "create_file", "move_file", "delete_file", "create_directory", "generate_image")
 
 /** Recognize explicit check invocations by executable/subcommand, never words in arbitrary arguments.
  * Unknown scripts stay ordinary commands. This describes what was run, not test coverage or correctness.

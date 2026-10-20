@@ -60,7 +60,7 @@ private val FAILED = setOf("failed", "error", "conflict")
 private val UNCERTAIN = setOf("interrupted", "cancelled")
 private val RUNNING = setOf("running", "executing", "preparing")
 private val SUCCESS = setOf("completed", "applied", "exited")
-private val FILE_EFFECTS = setOf("edit_file", "replace_text", "create_file", "move_file", "delete_file", "generate_image")
+private val FILE_EFFECTS = setOf("edit_file", "replace_text", "append_file", "create_file", "move_file", "delete_file", "generate_image")
 
 /** Short user-facing state for the current run, derived only from engine state. */
 internal fun runProgressLabel(state: RunState): String? = when {
@@ -377,7 +377,7 @@ private fun toolIcon(name: String): ImageVector = when (name) {
     "read_file", "read_artifact" -> Icons.Outlined.Description
     "list_files" -> Icons.Outlined.FolderOpen
     "search_text" -> Icons.Outlined.Search
-    "edit_file", "replace_text" -> Icons.Outlined.Edit
+    "edit_file", "replace_text", "append_file" -> Icons.Outlined.Edit
     "update_plan" -> Icons.Outlined.Checklist
     "spawn_agent", "list_agents", "agent_result" -> Icons.Outlined.SmartToy
     "wait_agents" -> Icons.Outlined.HourglassEmpty

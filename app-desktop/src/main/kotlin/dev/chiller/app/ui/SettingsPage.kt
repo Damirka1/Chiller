@@ -39,6 +39,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.chiller.agent.ModelProfiles
 import dev.chiller.app.di.*
 import dev.chiller.contracts.CaptureTarget
 import dev.chiller.contracts.CostBudgetSettings
@@ -514,9 +515,10 @@ private fun ProfileCard(data: SettingsData, actions: SettingsActions) {
         }
         Text("Температура", color = c.text, fontSize = 13.sp)
         Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            val options = listOf<Double?>(null, 0.0, 0.2, 0.5, 0.8)
+            val options = listOf<Double?>(null, 0.0, 0.2, 0.5, 0.8, 1.0)
+            val recommended = ModelProfiles.recommendedSampling(data.model, listed?.displayName) != null
             options.forEach { t ->
-                val label = t?.toString() ?: (resolved.temperature?.let { "профиль ($it)" } ?: "по умолчанию")
+                val label = t?.toString() ?: (defaultTemperature(resolved, data.model, listed)?.let { if (recommended) "рекомендуемая ($it)" else "профиль ($it)" } ?: "по умолчанию")
                 ChillerControl(label, { actions.agent(a.copy(temperature = t)) }, style = if (a.temperature == t) ControlStyle.SELECTED else ControlStyle.QUIET)
             }
         }

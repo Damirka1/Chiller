@@ -12,6 +12,7 @@ import dev.chiller.tools.BuiltinTools
 import dev.chiller.tools.SubagentTools
 import dev.chiller.tools.ProfiledTools
 import dev.chiller.workspace.LocalWorkspace
+import dev.chiller.workspace.ReadLimits
 import dev.chiller.workspace.ProjectInstructions
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.cio.CIO
@@ -893,7 +894,10 @@ class DesktopController(
         val s = _state.value
         val options = s.settings.agent.sanitized()
         val root = Path.of(s.settings.workspace ?: throw IllegalStateException("Choose workspace"))
-        val workspace = LocalWorkspace(root, events, artifacts, s.sessionId)
+        // Reads scale with the model's window; a cost budget caps the prompt at its input ceiling.
+        val listedWindow = s.catalog.models.firstOrNull { it.id == (modelOverride ?: s.settings.model) }?.contextWindow
+        val readWindow = if (s.settings.costBudget.enabled) minOf(listedWindow ?: 32_768, s.settings.costBudget.inputTokenCeiling) else listedWindow
+        val workspace = LocalWorkspace(root, events, artifacts, s.sessionId, ReadLimits.forContextWindow(readWindow))
         workspace.recoverPending()
         workspaceService = workspace
         val processes = processServiceFactory(root); processService = processes
@@ -918,8 +922,8 @@ class DesktopController(
         val engineSession = s.sessionId
         val vision = if (visionEnabled(options, modelOverride ?: s.settings.model, listed)) ImageInput { id -> inputAttachments.modelImage(engineSession, id) } else null
         // A listed reasoning model on a generic endpoint takes the thinking switch through its chat template.
-        val thinkingProfile = if (listed?.reasoning == true && baseProfile.id == "generic") baseProfile.copy(thinkingOptions = ChatCompletionsProfile.chatTemplateThinking) else baseProfile
-        val profile = thinkingProfile.withExtras(requestExtrasFor(modelProfile, options)).copy(imageInput = vision)
+        val thinkingProfile = if (listed?.reasoning == true && baseProfile.id == "generic") baseProfile.withChatTemplateThinking() else baseProfile
+        val profile = thinkingProfile.withExtras(requestExtrasFor(modelProfile, options, modelOverride ?: s.settings.model, listed)).copy(imageInput = vision)
         // The engine's provider is bound to its own endpoint's key, read at request time.
         val engineOrigin = originOf(s.settings.baseUrl)
         val provider = providerOverride ?: RunBudgetProvider(ChatCompletionsProvider(http, profile, cost) { engineOrigin?.let { credentials[it] } }, options.effectiveMaxRequests, options.effectiveTotalOutputTokens, cost)

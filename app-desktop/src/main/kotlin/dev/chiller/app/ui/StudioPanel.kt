@@ -50,7 +50,7 @@ data class FileChanges(val path: String, val changes: List<Activity>) {
     val stats: Pair<Int, Int> get() = changes.mapNotNull { it.diff }.map(::diffStats).fold(0 to 0) { a, b -> a.first + b.first to a.second + b.second }
 }
 
-private val FILE_TOOLS = setOf("edit_file", "replace_text", "create_file", "move_file", "delete_file", "generate_image")
+private val FILE_TOOLS = setOf("edit_file", "replace_text", "append_file", "create_file", "move_file", "delete_file", "generate_image")
 
 /** Successful file changes grouped by path (a move is listed under its new name), in first-touched order. */
 fun groupFileChanges(activities: List<Activity>): List<FileChanges> =

@@ -1567,7 +1567,7 @@ internal fun prettyOutput(output: String): String = runCatching {
 internal fun toolLabel(name: String) = when (name) {
     "web_search" -> "Поиск в интернете"; "web_fetch" -> "Веб-страница"; "create_directory" -> "Папка"; "show_file" -> "Файл"; "capture_window" -> "Снимок окна"; "list_capture_targets" -> "Окно для снимка"
     "git_status" -> "Состояние Git"; "git_diff" -> "Изменения Git"; "git_log" -> "История Git"; "git_show" -> "Файл из Git"; "find_symbols" -> "Объявления"; "read_symbol" -> "Функция"; "read_diagnostics" -> "Диагностика"
-    "read_file" -> "Чтение"; "list_files" -> "Файлы"; "search_text" -> "Поиск"; "edit_file" -> "Правка"; "replace_text" -> "Замена"; "update_plan" -> "План"; "spawn_agent" -> "Помощник"; "list_agents" -> "Помощники"; "wait_agents" -> "Ожидание"; "agent_result" -> "Отчёт"; "message_agent" -> "Сообщение"; "cancel_agent" -> "Стоп"; "create_file" -> "Создание"; "generate_image" -> "Картинка"
+    "read_file" -> "Чтение"; "list_files" -> "Файлы"; "search_text" -> "Поиск"; "edit_file" -> "Правка"; "replace_text" -> "Замена"; "append_file" -> "Дозапись"; "update_plan" -> "План"; "spawn_agent" -> "Помощник"; "list_agents" -> "Помощники"; "wait_agents" -> "Ожидание"; "agent_result" -> "Отчёт"; "message_agent" -> "Сообщение"; "cancel_agent" -> "Стоп"; "create_file" -> "Создание"; "generate_image" -> "Картинка"
     "move_file" -> "Перемещение"; "delete_file" -> "Удаление"; "run_process" -> "Команда"; "read_process" -> "Вывод"; "stop_process" -> "Остановка"
     "read_artifact" -> "Результат"; "ask_user" -> "Вопрос"; "undo" -> "Откат"; else -> name
 }

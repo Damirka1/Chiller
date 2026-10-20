@@ -32,15 +32,20 @@ fun imageModelFor(options: AgentOptions, catalog: ModelCatalogState): ProviderMo
 fun ModelCatalogState.entry(modelId: String): ProviderModel? = models.firstOrNull { it.id == modelId }
 
 /**
- * Extra request fields for the provider: the profile's defaults, then the user's temperature, then the
- * user's JSON extras. Invalid user JSON is ignored here; [validateRequestExtras] reports it in Settings.
+ * Extra request fields for the provider: the profile's and model family's defaults (Gemma's recommended sampling), then
+ * the user's temperature, then the user's JSON extras, where a null value removes a default the server does not accept.
+ * Invalid user JSON is ignored here; [validateRequestExtras] reports it in Settings.
  */
-fun requestExtrasFor(profile: ModelProfile, options: AgentOptions): JsonObject = buildJsonObject {
-    profile.temperature?.let { put("temperature", it) }
-    profile.parallelToolCalls?.let { put("parallel_tool_calls", it) }
-    options.temperature?.let { put("temperature", it) }
-    parseRequestExtras(options.requestExtras)?.forEach { (k, v) -> put(k, v) }
+fun requestExtrasFor(profile: ModelProfile, options: AgentOptions, modelId: String, listed: ProviderModel? = null): JsonObject {
+    val fields = LinkedHashMap<String, JsonElement>(ModelProfiles.requestDefaults(profile, modelId, listed?.displayName))
+    options.temperature?.let { fields["temperature"] = JsonPrimitive(it) }
+    parseRequestExtras(options.requestExtras)?.forEach { (k, v) -> if (v is JsonNull) fields.remove(k) else fields[k] = v }
+    return JsonObject(fields)
 }
+
+/** The temperature a request gets when the user has not chosen one: the model family's recommendation, else the profile's. */
+fun defaultTemperature(profile: ModelProfile, modelId: String, listed: ProviderModel? = null): Double? =
+    ModelProfiles.recommendedSampling(modelId, listed?.displayName)?.temperature ?: profile.temperature
 
 fun parseRequestExtras(text: String): JsonObject? =
     text.trim().takeIf { it.isNotEmpty() }?.let { runCatching { Json.parseToJsonElement(it) as? JsonObject }.getOrNull() }
