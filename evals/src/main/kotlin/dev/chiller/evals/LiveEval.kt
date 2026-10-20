@@ -24,6 +24,7 @@ import dev.chiller.sessions.TraceFile
 import dev.chiller.tools.LocalReadOnlyCodeService
 import dev.chiller.tools.BuiltinTools
 import dev.chiller.workspace.LocalWorkspace
+import dev.chiller.workspace.ReadLimits
 import dev.chiller.workspace.ProjectInstructions
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.cio.CIO
@@ -32,6 +33,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import java.net.URI
@@ -73,7 +75,9 @@ data class EvalSummary(
 @Serializable
 data class EvalReport(val model: String, val endpoint: String, val startedAt: String, val maxRounds: Int, val maxOutputTokens: Int, val repeats: Int, val results: List<EvalResult>, val summaries: List<EvalSummary>, val profile: String = "full",
     /** Tasks the profile cannot attempt (a required tool is not in its toolbox). */
-    val skipped: List<String> = emptyList())
+    val skipped: List<String> = emptyList(),
+    /** Extra request fields every model request carried: sampling and tool-call options. */
+    val requestFields: JsonObject = JsonObject(emptyMap()))
 
 /**
  * Opt-in live evaluation of the agent on [EVAL_TASKS]. Never part of `check`.
@@ -83,6 +87,7 @@ data class EvalReport(val model: String, val endpoint: String, val startedAt: St
  * - key: CHILLER_EVAL_API_KEY, DEEPSEEK_API_KEY or API_TOKEN; may be absent only for a loopback endpoint
  * - CHILLER_EVAL_TASKS (comma-separated ids), CHILLER_EVAL_REPEATS (1–5), CHILLER_EVAL_MAX_ROUNDS (≤ 20),
  *   CHILLER_EVAL_MAX_OUTPUT (≤ 4096), CHILLER_EVAL_THINKING (true/false), CHILLER_EVAL_PROJECT_MAP (true/false, A/B override)
+ * - CHILLER_EVAL_EXTRAS: a JSON object of request fields over the profile's defaults, e.g. {"temperature": 0.2}; null removes a default
  * Reports and per-task traces go to reports/local/evals/ (git-ignored).
  */
 fun main() = runBlocking {
@@ -115,7 +120,7 @@ fun main() = runBlocking {
     println("=== CHILLER LIVE EVAL · $model${listed?.displayName?.let { " ($it)" } ?: ""} · profile ${resolved.id} · ${tasks.size} task(s) × $repeats · maxRounds=$maxRounds maxOutput=$maxOutput thinking=$thinking" +
         " · context ${listed?.contextWindow ?: "unknown"} · images ${imageModel?.id ?: "none"} ===")
     val report = runEvalSuite(SuiteSpec(baseUrl, model, { key }, profileId, tasks.map { it.id }.toSet(), repeats, maxRounds, maxOutput, thinking, outDir = outDir,
-        projectMap = env["CHILLER_EVAL_PROJECT_MAP"]?.toBooleanStrictOrNull(), listed = listed, imageModel = imageModel)) { result ->
+        requestExtras = evalExtras(env["CHILLER_EVAL_EXTRAS"]), projectMap = env["CHILLER_EVAL_PROJECT_MAP"]?.toBooleanStrictOrNull(), listed = listed, imageModel = imageModel)) { result ->
         println("%-20s #%d %s  rounds=%-2d tools=%-2d errors=%-2d reread=%-2d badEdits=%-2d out=%4dk %5.1fs  %s".format(result.task, result.attempt, outcomeLabel(result),
             result.rounds, result.toolCalls, result.failedToolCalls, result.loss.repeatedReads, result.loss.failedEdits, result.loss.toolOutputChars / 1000, result.durationMs / 1000.0,
             (if (result.infrastructure) result.error.orEmpty() else result.verdict).take(80)))
@@ -126,6 +131,11 @@ fun main() = runBlocking {
     println("PASSED $passed/${report.results.size} (${if (report.results.isEmpty()) 0 else passed * 100 / report.results.size}%)" +
         (if (infrastructure > 0) " · provider errors $infrastructure (not model failures)" else "") + " · report: ${outDir.resolve("report.md")}")
 }
+
+/** CHILLER_EVAL_EXTRAS as a JSON object; anything else stops the run instead of silently testing the defaults. */
+internal fun evalExtras(text: String?): JsonObject = text?.takeIf { it.isNotBlank() }?.let {
+    requireNotNull(runCatching { Json.parseToJsonElement(it) }.getOrNull() as? JsonObject) { "CHILLER_EVAL_EXTRAS must be a JSON object" }
+} ?: JsonObject(emptyMap())
 
 /**
  * The first named key from the nearest `.env` in the working directory or its parents (up to 6 levels),
@@ -153,10 +163,14 @@ internal suspend fun runTask(task: EvalTask, attempt: Int, provider: ChatComplet
     val artifacts = LocalArtifactStore(root.resolve("artifacts"))
     val processes = LocalProcessService(project)
     val code = LocalReadOnlyCodeService(project.toString())
-    val builtin = BuiltinTools(LocalWorkspace(project, store, artifacts, session), processes, artifacts, object : InteractionBroker {
+    // Same read size as the app gives this window.
+    val readLimits = ReadLimits.forContextWindow(task.contextWindowTokens ?: contextWindowTokens)
+    val builtin = BuiltinTools(LocalWorkspace(project, store, artifacts, session, readLimits), processes, artifacts, object : InteractionBroker {
         override suspend fun ask(question: UserQuestion) = "No answer is available in an unattended evaluation. Make a reasonable assumption and state it."
     }, code = code, images = images)
-    val budget = RunBudgetProvider(provider, maxRequests = 48, maxOutputTokens = 32768)
+    val rounds = task.maxRounds ?: maxRounds
+    // Room for every round of a long task to use about 2k output tokens, reasoning included.
+    val budget = RunBudgetProvider(provider, maxRequests = maxOf(48, rounds * 2), maxOutputTokens = maxOf(32768, rounds * 2048))
     val traceFile = TraceFile(outDir.resolve("traces/$session.jsonl"))
     val started = System.nanoTime()
     var failure: String? = null
@@ -168,7 +182,7 @@ internal suspend fun runTask(task: EvalTask, attempt: Int, provider: ChatComplet
         val tools: ToolExecutor = modelProfile.tools?.let { ProfiledTools(delegating, it) } ?: delegating
         val output = ModelProfiles.replyTokens(modelProfile.maxOutputTokens?.let { minOf(it, maxOutput) } ?: maxOutput, thinking)
         // A fresh engine over the same journal and workspace; after a "restart" it restores the conversation from disk.
-        suspend fun newEngine() = AgentCoordinator(budget, tools, store, processes, session, model, thinking, maxRounds = maxRounds, maxOutputTokens = output,
+        suspend fun newEngine() = AgentCoordinator(budget, tools, store, processes, session, model, thinking, maxRounds = rounds, maxOutputTokens = output,
             projectInstructions = ProjectInstructions.load(project)?.text, traces = RunTraceSink { traceFile.append(it) }, subagents = supervisor.takeIf { helpersAllowed },
             systemPrompt = modelProfile.systemPrompt, projectMap = if (modelProfile.projectMap) code.projectMap() else null, scope = this,
             contextWindowTokens = task.contextWindowTokens ?: contextWindowTokens)
@@ -230,7 +244,8 @@ internal fun renderMarkdown(report: EvalReport): String = buildString {
     val passed = results.count { it.passed }
     appendLine("# Chiller eval · ${report.model}")
     appendLine()
-    appendLine("Endpoint `${report.endpoint}` · started ${report.startedAt} · repeats ${report.repeats} · maxRounds ${report.maxRounds} · maxOutput ${report.maxOutputTokens}")
+    appendLine("Endpoint `${report.endpoint}` · started ${report.startedAt} · repeats ${report.repeats} · maxRounds ${report.maxRounds} · maxOutput ${report.maxOutputTokens}" +
+        if (report.requestFields.isEmpty()) "" else " · request fields `${report.requestFields}`")
     appendLine()
     val infrastructure = results.count { it.infrastructure }
     appendLine("**Passed ${passed}/${results.size}**" + (if (infrastructure > 0) " (provider errors $infrastructure)" else "") + " · rounds ${results.sumOf { it.rounds }} · tool calls ${results.sumOf { it.toolCalls }} (failed ${results.sumOf { it.failedToolCalls }}) · " +

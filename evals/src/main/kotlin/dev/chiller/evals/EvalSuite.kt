@@ -13,6 +13,8 @@ import io.ktor.client.plugins.HttpTimeout
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -60,15 +62,14 @@ suspend fun runEvalSuite(spec: SuiteSpec, onResult: suspend (EvalResult) -> Unit
     }
     val host = runCatching { URI(spec.baseUrl).host }.getOrNull().orEmpty()
     val loopback = host in setOf("localhost", "127.0.0.1", "::1")
-    val extras = buildJsonObject {
-        modelProfile.temperature?.let { put("temperature", it) }
-        modelProfile.parallelToolCalls?.let { put("parallel_tool_calls", it) }
-        spec.requestExtras.forEach { (k, v) -> put(k, v) }
-    }
+    // Same defaults as the app (profile, then the family's recommended sampling); a null extra removes one.
+    val extras = JsonObject(LinkedHashMap<String, JsonElement>(ModelProfiles.requestDefaults(modelProfile, spec.model, spec.listed?.displayName)).apply {
+        spec.requestExtras.forEach { (k, v) -> if (v is JsonNull) remove(k) else put(k, v) }
+    })
     // Same wiring as the desktop app, including the chat-template thinking switch for listed reasoning models.
     val profile = (if (host == "api.deepseek.com") ChatCompletionsProfile.deepSeekFlash(spec.baseUrl, spec.model)
-        else ChatCompletionsProfile("generic", spec.baseUrl, spec.model, requiresApiKey = !loopback,
-            thinkingOptions = if (spec.listed?.reasoning == true) ChatCompletionsProfile.chatTemplateThinking else { _ -> JsonObject(emptyMap()) })).withExtras(extras)
+        else ChatCompletionsProfile("generic", spec.baseUrl, spec.model, requiresApiKey = !loopback)
+            .let { if (spec.listed?.reasoning == true) it.withChatTemplateThinking() else it }).withExtras(extras)
     Files.createDirectories(spec.outDir.resolve("traces"))
     val http = HttpClient(CIO) {
         engine { useSystemTrust() }
@@ -88,7 +89,7 @@ suspend fun runEvalSuite(spec: SuiteSpec, onResult: suspend (EvalResult) -> Unit
         }
     } finally { http.close() }
     val report = EvalReport(spec.model, spec.baseUrl, startedAt, spec.maxRounds, spec.maxOutputTokens, spec.repeats, results, summarize(results), profile = modelProfile.id,
-        skipped = skipped.map { it.id })
+        skipped = skipped.map { it.id }, requestFields = extras)
     val json = Json { prettyPrint = true; encodeDefaults = true }
     Files.writeString(spec.outDir.resolve("report.json"), json.encodeToString(EvalReport.serializer(), report))
     Files.writeString(spec.outDir.resolve("report.md"), renderMarkdown(report))

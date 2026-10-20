@@ -45,6 +45,8 @@ class EvalTask(
     /** A deliberately smaller window makes context-pressure scenarios reproducible across models. */
     val contextWindowTokens: Int? = null,
     val requireContextCompaction: Boolean = false,
+    /** Rounds per turn when the task needs more than the suite's limit; null keeps the suite's. */
+    val maxRounds: Int? = null,
 ) {
     val check: (Path, String) -> Verdict = protectOracle(files, check)
     val turns: List<EvalTurn> get() = listOf(EvalTurn(prompt, this.check, reference)) + followUps.map {
@@ -111,7 +113,7 @@ internal fun python(project: Path, vararg args: String): Verdict {
     return Verdict(process.exitValue() == 0, "python3 ${args.joinToString(" ")} → exit ${process.exitValue()}${if (output.isNotEmpty()) ": $output" else ""}")
 }
 
-private fun replaceIn(project: Path, path: String, old: String, new: String) {
+internal fun replaceIn(project: Path, path: String, old: String, new: String) {
     val file = project.resolve(path)
     val text = Files.readString(file)
     check(old in text) { "reference: '$old' not found in $path" }
@@ -406,7 +408,7 @@ val EVAL_TASKS: List<EvalTask> = listOf(
         },
         reference = { "The page contains no temperatures (they are loaded by a script), so weather.json was not written." },
     ),
- ) + LONG_EVAL_TASKS
+ ) + LONG_EVAL_TASKS + TOOL_PROBE_TASKS + HARD_EVAL_TASKS
 
 /**
  * Proves every check is meaningful: it fails on the untouched task and passes after the reference
