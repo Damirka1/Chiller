@@ -163,7 +163,75 @@ class AgentCoordinatorTest {
         advanceUntilIdle()
         assertEquals("completed", fixture.coordinator.state.value.status, fixture.coordinator.state.value.error)
         val note = requests[1].messages.last().content.orEmpty()
-        assertTrue("about 2048 tokens" in note && "3072 characters" in note && "edit_file" in note, note)
+        assertTrue("about 2048 tokens" in note && "2048 characters" in note && "edit_file" in note && "cut off again" !in note, note)
+    }
+
+    @Test fun cutOffNoteNamesAnAppendToolTheProfileHas() {
+        val compact = truncatedCallNotice(2048, setOf("read_file", "replace_text", "create_file"))
+        assertTrue("replace_text" in compact && "edit_file" !in compact, compact)
+        assertTrue("edit_file" in truncatedCallNotice(2048, setOf("replace_text", "edit_file")))
+        val append = truncatedCallNotice(2048, setOf("replace_text", "create_file", "append_file", "edit_file"))
+        assertTrue("append_file" in append && "edit_file" !in append && "never repeat text already written" in append, append)
+        assertTrue("cut off again" in truncatedCallNotice(2048, setOf("append_file"), again = true))
+    }
+
+    @Test fun aPlanClosedRightAfterTheReminderKeepsTheAnswerAlreadyGiven() = runTest {
+        val requests = mutableListOf<ModelRequest>()
+        fun plan(status: String) = ToolCall("p${requests.size}", "update_plan", """{"steps":[{"step":"Edit","status":"done"},{"step":"Check","status":"$status"}]}""")
+        val provider = ScriptedProvider { request -> flow {
+            requests += request
+            when (requests.size) {
+                1 -> emit(ModelEvent.Completed(AgentMessage("assistant", null, listOf(plan("in_progress"))), "tool_calls"))
+                2 -> emit(ModelEvent.Completed(AgentMessage("assistant", "Edited and checked: exit 0."), "stop"))
+                3 -> emit(ModelEvent.Completed(AgentMessage("assistant", null, listOf(plan("done"))), "tool_calls"))
+                else -> emit(ModelEvent.Completed(AgentMessage("assistant", "Edited and checked: exit 0."), "stop"))
+            }
+        } }
+        val f = fixture(provider, PlanTools(), dispatcher = StandardTestDispatcher(testScheduler))
+        f.coordinator.send("edit and check", ExecutionMode.WORKSPACE_EDIT)
+        advanceUntilIdle()
+        assertEquals("completed", f.coordinator.state.value.status)
+        assertEquals(3, requests.size, "the answer is not asked for again")
+        assertEquals("Edited and checked: exit 0.", f.coordinator.state.value.messages.last { !it.content.isNullOrBlank() && it.role == "assistant" }.content)
+    }
+
+    @Test fun anAnswerSentWithTheClosingPlanEndsTheTurn() = runTest {
+        val requests = mutableListOf<ModelRequest>()
+        val provider = ScriptedProvider { request -> flow {
+            requests += request
+            when (requests.size) {
+                1 -> emit(ModelEvent.Completed(AgentMessage("assistant", null, listOf(ToolCall("p1", "update_plan", """{"steps":[{"step":"Fix","status":"in_progress"}]}"""))), "tool_calls"))
+                2 -> emit(ModelEvent.Completed(AgentMessage("assistant", "Fixed it.", listOf(ToolCall("p2", "update_plan", """{"steps":[{"step":"Fix","status":"done"}]}"""))), "tool_calls"))
+                else -> emit(ModelEvent.Completed(AgentMessage("assistant", "Fixed it."), "stop"))
+            }
+        } }
+        val f = fixture(provider, PlanTools(), dispatcher = StandardTestDispatcher(testScheduler))
+        f.coordinator.send("fix", ExecutionMode.WORKSPACE_EDIT)
+        advanceUntilIdle()
+        assertEquals("completed", f.coordinator.state.value.status)
+        assertEquals(2, requests.size, "no extra round to repeat the answer")
+        assertEquals("Fixed it.", f.coordinator.state.value.messages.last { it.role == "assistant" }.content)
+    }
+
+    @Test fun reasoningThatFillsTheReplyIsDroppedAndTheNextRoundRunsWithoutThinking() = runTest {
+        val requests = mutableListOf<ModelRequest>()
+        val provider = ScriptedProvider { request -> flow {
+            requests += request
+            when (requests.size) {
+                1 -> emit(ModelEvent.Completed(AgentMessage("assistant", ""), "length"))
+                2 -> emit(ModelEvent.Completed(AgentMessage("assistant", toolCalls = listOf(ToolCall("r1", "read", "{}"))), "tool_calls"))
+                else -> emit(ModelEvent.Completed(AgentMessage("assistant", "done"), "stop"))
+            }
+        } }
+        val events = MemoryEvents()
+        val fixture = fixture(provider, eventStore = events, dispatcher = StandardTestDispatcher(testScheduler), thinking = true)
+        fixture.coordinator.send("hard task", ExecutionMode.WORKSPACE_EDIT)
+        advanceUntilIdle()
+        assertEquals("completed", fixture.coordinator.state.value.status)
+        assertEquals(listOf(true, false, true), requests.map { it.thinking }, "only the round after the exhausted one skips thinking")
+        assertTrue("reasoning used the whole reply limit" in requests[1].messages.last().content.orEmpty())
+        assertTrue(fixture.coordinator.state.value.messages.none { it.role == "assistant" && it.content == "" && it.toolCalls.isEmpty() }, "the empty reply is not kept")
+        assertEquals("reasoning", events.records.single { it.type == "run.truncated" }.payload["kind"]?.jsonPrimitive?.content)
     }
 
     @Test fun repeatedTruncationStopsInsteadOfLooping() = runTest {
@@ -527,6 +595,25 @@ class AgentCoordinatorTest {
         assertEquals("failed", run(listOf("a.txt", "b.txt", "a.txt", "b.txt", "a.txt")), "alternating failures still repeat a call")
     }
 
+    @Test fun theSameFailingCallTwiceIsWarnedBeforeTheThirdEndsTheTurn() = runTest {
+        val tools = object : ToolExecutor {
+            override val specs = listOf(ToolSpec("read", "read", JsonObject(emptyMap()), ToolEffect.READ))
+            override suspend fun execute(call: ToolCall, context: ToolContext) = ToolResult.failure("NO_MATCH", "missing")
+        }
+        val requests = mutableListOf<ModelRequest>()
+        val provider = ScriptedProvider { request -> flow {
+            requests += request
+            emit(ModelEvent.Completed(AgentMessage("assistant", null, listOf(ToolCall("c${requests.size}", "read", """{"path":"a.txt"}"""))), "tool_calls"))
+        } }
+        val f = fixture(provider, tools, dispatcher = StandardTestDispatcher(testScheduler))
+        f.coordinator.send("read", ExecutionMode.PLAN)
+        advanceUntilIdle()
+        assertEquals("failed", f.coordinator.state.value.status)
+        assertEquals(3, requests.size)
+        assertTrue(requests[1].messages.none { "[Chiller]" in it.content.orEmpty() })
+        assertTrue("Sending it a third time ends this turn" in requests[2].messages.last().content.orEmpty())
+    }
+
     @Test fun theSameResultAgainGetsAReminderThenEndsTheTurn() = runTest {
         val requests = mutableListOf<ModelRequest>()
         val provider = ScriptedProvider { request -> flow {
@@ -773,6 +860,22 @@ class AgentCoordinatorTest {
         assertEquals(2, provider.calls)
     }
 
+    @Test fun processWithoutPermissionTellsTheModelWhatToDoInstead() = runTest {
+        val requests = mutableListOf<ModelRequest>()
+        val provider = ScriptedProvider { request -> flow {
+            requests += request
+            if (requests.size == 1) emit(ModelEvent.Completed(AgentMessage("assistant", toolCalls = listOf(ToolCall("p", "process", "{}"))), "tool_calls"))
+            else emit(ModelEvent.Completed(AgentMessage("assistant", "Read it instead"), "stop"))
+        } }
+        val tools = RecordingTools()
+        val fixture = fixture(provider, tools = tools, dispatcher = StandardTestDispatcher(testScheduler))
+        fixture.coordinator.send("Check the file", ExecutionMode.WORKSPACE_EDIT)
+        advanceUntilIdle()
+        assertTrue(tools.executed.isEmpty())
+        val result = requests[1].messages.last { it.role == "tool" }.content.orEmpty()
+        assertTrue("PERMISSION_DENIED" in result && "read_file" in result, result)
+    }
+
     @Test fun cancelledDeniedProcessRetainsLandingPlanAfterRestore() = runTest {
         val store = MemoryEvents()
         val json = Json { encodeDefaults = true }
@@ -844,10 +947,11 @@ class AgentCoordinatorTest {
         traces: RunTraceSink? = null,
         contextWindow: Int? = null,
         maxOutputTokens: Int = 4096,
+        thinking: Boolean = false,
     ): Fixture {
         val scope = CoroutineScope(SupervisorJob() + dispatcher)
         val processes = RecordingProcesses()
-        return Fixture(AgentCoordinator(provider, tools, eventStore, processes, "session", model, projectInstructions = instructions, traces = traces, scope = scope, contextWindowTokens = contextWindow, maxOutputTokens = maxOutputTokens), processes)
+        return Fixture(AgentCoordinator(provider, tools, eventStore, processes, "session", model, thinking = thinking, projectInstructions = instructions, traces = traces, scope = scope, contextWindowTokens = contextWindow, maxOutputTokens = maxOutputTokens), processes)
     }
 
     private data class Fixture(val coordinator: AgentCoordinator, val processes: RecordingProcesses)

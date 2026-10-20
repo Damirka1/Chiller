@@ -24,11 +24,26 @@ class ModelProfilesTest {
         assertEquals("compact", ModelProfiles.resolve("auto", "quasar", "Gemma 4 26B A4B").id)
         assertEquals("compact", ModelProfiles.resolve("auto", "nebula", "Qwen 3.6 35B A3B").id)
         assertEquals("full", ModelProfiles.resolve("auto", "quasar", null).id)
+        assertEquals("full", ModelProfiles.resolve("auto", "quasar", "Quasar").id)
+        // A branded name keeps working when it also names the model.
+        assertEquals("compact", ModelProfiles.resolve("auto", "quasar", "Quasar (Gemma 4 26B A4B)").id)
+        assertEquals(ModelProfiles.GEMMA_SAMPLING, ModelProfiles.recommendedSampling("quasar", "Quasar (Gemma 4 26B A4B)"))
         assertEquals("full", ModelProfiles.resolve("auto", "qwen3-235b-a22b", "Tiny 7B").id)
         assertFalse("spawn_agent" in ModelProfiles.COMPACT.tools!!, "compact profile has no helpers")
         assertEquals(2048, ModelProfiles.replyTokens(2048, thinking = false))
         assertEquals(2048 + ModelProfiles.THINKING_HEADROOM_TOKENS, ModelProfiles.replyTokens(2048, thinking = true))
         assertEquals(Int.MAX_VALUE, ModelProfiles.replyTokens(Int.MAX_VALUE, thinking = true), "unlimited stays unlimited")
         assertTrue(ModelProfiles.COMPACT.tools!!.containsAll(setOf("read_artifact", "show_file", "find_symbols")), "compact keeps attachments and results usable")
+        assertTrue(ModelProfiles.COMPACT.tools!!.containsAll(setOf("append_file", "delete_file", "move_file", "create_directory")), "compact can write in parts and delete or move with undo")
+    }
+
+    @Test fun `gemma gets its recommended sampling instead of the profile temperature`() {
+        val gemma = ModelProfiles.requestDefaults(ModelProfiles.COMPACT, "quasar", "Gemma 4 26B A4B")
+        assertEquals("""{"temperature":1.0,"top_p":0.95,"top_k":64,"parallel_tool_calls":false}""", gemma.toString())
+        assertEquals(ModelProfiles.GEMMA_SAMPLING, ModelProfiles.recommendedSampling("google/gemma-4-26B-A4B-it"))
+        // Families without a known recommendation keep the profile's temperature; the full profile leaves it to the server.
+        assertEquals("""{"temperature":0.2,"parallel_tool_calls":false}""", ModelProfiles.requestDefaults(ModelProfiles.COMPACT, "nebula", "Qwen 3.6 35B A3B").toString())
+        assertEquals("{}", ModelProfiles.requestDefaults(ModelProfiles.FULL, "deepseek-flash").toString())
+        assertEquals("""{"temperature":1.0,"top_p":0.95,"top_k":64}""", ModelProfiles.requestDefaults(ModelProfiles.FULL, "gemma-3-27b-it").toString())
     }
 }

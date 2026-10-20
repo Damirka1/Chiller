@@ -1,5 +1,12 @@
 package dev.chiller.agent
 
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+
+/** Decoding settings a model family's authors recommend. Null fields are left to the server. */
+data class Sampling(val temperature: Double, val topP: Double? = null, val topK: Int? = null)
+
 /**
  * How the harness talks to a class of models. Small models (a few billion active parameters) choose tools
  * and fill arguments far more reliably with a short tool list and an explicit step-by-step prompt; large
@@ -28,6 +35,9 @@ object ModelProfiles {
     val CORE_TOOLS = setOf(
         "list_files", "search_text", "find_symbols", "read_file", "replace_text", "create_file",
         "run_process", "read_process", "update_plan", "ask_user", "git_diff",
+        // Without these a small model deleted and moved files through the shell (no undo, impossible without process
+        // permission) and could not continue a file cut off by the reply limit.
+        "append_file", "delete_file", "move_file", "create_directory",
         // Capabilities every profile keeps: reading pasted/large results and handing a produced file to the user.
         "read_artifact", "show_file",
         // Present only when the endpoint has an image model.
@@ -48,9 +58,10 @@ object ModelProfiles {
 
     /**
      * Reasoning is generated inside the same max_tokens as the answer, so with thinking on a reply gets this much on
-     * top of its cap. Measured on Gemma 4 26B A4B: a 2048 cap cut 2 of ~90 thinking rounds.
+     * top of its cap. Measured on Gemma 4 26B A4B: a 2048 cap cut 2 of ~90 thinking rounds; 4096 on top still cut 8 rounds
+     * of a spec-heavy task, each losing 80–115 s and the reasoning. It is a ceiling: short replies stay short.
      */
-    const val THINKING_HEADROOM_TOKENS = 4096
+    const val THINKING_HEADROOM_TOKENS = 12288
 
     /** Output tokens for one model reply: [answerCap] plus reasoning headroom when thinking is on, saturating. */
     fun replyTokens(answerCap: Int, thinking: Boolean): Int =
@@ -66,6 +77,31 @@ object ModelProfiles {
     }
 
     fun isSmall(modelId: String): Boolean = sizeHint(modelId) ?: false
+
+    /**
+     * Google's recommended settings for Gemma models. On the tool-* probes (Gemma 4 26B A4B, 20 attempts each) they passed
+     * the same tasks as the compact profile's 0.2, with slightly fewer failed calls and tokens.
+     */
+    val GEMMA_SAMPLING = Sampling(temperature = 1.0, topP = 0.95, topK = 64)
+
+    /**
+     * The family's recommended sampling by model id, then by the catalog's display name (a gateway alias like "quasar"
+     * named "Gemma 4 26B A4B"). Null for families without a known recommendation; the profile's temperature applies then.
+     */
+    fun recommendedSampling(modelId: String, displayName: String? = null): Sampling? =
+        if (listOfNotNull(modelId, displayName).any { "gemma" in it.lowercase() }) GEMMA_SAMPLING else null
+
+    /**
+     * Request fields a profile and model family imply: the profile's temperature, replaced by the family's recommended
+     * sampling when there is one, and the profile's parallel tool calls. The user's own settings go on top of these.
+     */
+    fun requestDefaults(profile: ModelProfile, modelId: String, displayName: String? = null): JsonObject = buildJsonObject {
+        val sampling = recommendedSampling(modelId, displayName)
+        (sampling?.temperature ?: profile.temperature)?.let { put("temperature", it) }
+        sampling?.topP?.let { put("top_p", it) }
+        sampling?.topK?.let { put("top_k", it) }
+        profile.parallelToolCalls?.let { put("parallel_tool_calls", it) }
+    }
 
     /**
      * Heuristic from a model id or name: an active-parameter tag like "a4b", a size tag of 14B or less
@@ -86,7 +122,8 @@ private const val COMPACT_PROMPT = """You are Chiller, a coding assistant that w
 How to work:
 1. Find: start from the project map in your instructions. find_symbols locates where a class or function is defined; search_text finds other text and usages; list_files lists file names.
 2. Read: read_file. It returns snapshot_id and numbered lines like "12 | code". For a big file read only the part you need: pass start_line and end_line around the line that find_symbols or search_text gave you. Do not read the same unchanged lines twice.
-3. Change: replace_text with path, snapshot_id, old_text and new_text. Copy old_text exactly from read_file WITHOUT the "12 | " prefix, keeping spaces. Use create_file for new files.
+3. Change: replace_text with path, snapshot_id, old_text and new_text. Copy old_text exactly from read_file WITHOUT the "12 | " prefix, keeping spaces. Use create_file for new files;
+   write a long file in parts: the first part with create_file, each next part with append_file and the snapshot_id the previous call returned. delete_file and move_file need a snapshot_id too.
    Attachments and large tool results come with an artifact_id: read them with read_artifact. To hand a file you made (a chart, a report) to the user, call show_file with its path.
 4. Check: if process permission is on, run_process then read_process, and look at the exit code.
 5. Finish: a short answer with the files you changed and how you checked them.

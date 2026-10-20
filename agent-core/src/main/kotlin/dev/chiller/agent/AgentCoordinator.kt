@@ -355,6 +355,8 @@ class AgentCoordinator(
         // model is told what happened on the next round only (the note is not part of the saved conversation).
         var truncations = 0
         var truncationNotice: AgentMessage? = null
+        // Reasoning that filled a whole reply is not retried with thinking: the next round answers without it, once.
+        var thinkingPaused = false
         // A final answer while the plan still has open steps gets a bounded reminder instead of ending the turn.
         var planNotice: AgentMessage? = null
         var planReminders = 0
@@ -405,7 +407,7 @@ class AgentCoordinator(
                 repeatNotice = AgentMessage("user", LAST_ROUND_NOTICE)
             }
             val request = ModelRequest(model, selection.messages + listOfNotNull(truncationNotice, planNotice, repeatNotice),
-                if (answerOnly) emptyList() else enabled, thinking, reserve)
+                if (answerOnly) emptyList() else enabled, thinking && !thinkingPaused, reserve)
             var truncatedCall = false
             var truncatedText = false
             var retryShown = false
@@ -446,15 +448,29 @@ class AgentCoordinator(
             trace(id, round, request, completion, finishReason, roundUsage, roundStarted, if (truncatedCall) "INCOMPLETE_TOOL_CALL: recovered" else null)
             if (truncatedCall || truncatedText) {
                 truncations++
+                // Measured on Gemma 4 with thinking: some rounds spend the whole reply on reasoning and return no text at all.
+                val exhaustedThinking = truncatedText && request.thinking && completion?.content.isNullOrBlank()
                 events.append(sessionId, "run.truncated", buildJsonObject {
-                    put("runId", id); put("round", round + 1); put("kind", if (truncatedCall) "tool_call" else "text"); put("maxOutputTokens", reserve)
+                    put("runId", id); put("round", round + 1); put("kind", if (truncatedCall) "tool_call" else if (exhaustedThinking) "reasoning" else "text"); put("maxOutputTokens", reserve)
                 })
-                if (truncatedText) completion?.let { partial -> appendMessage(partial.copy(origin = MessageOrigin(MessageOriginKind.MODEL, model))) }
-                truncationNotice = AgentMessage("user", if (truncatedCall) truncatedCallNotice(reserve) else TRUNCATED_TEXT_NOTICE)
-                _state.update { it.copy(streamingText = "", recoveryNotice = if (truncatedCall) "Ответ достиг лимита. Незавершённый вызов не выполнен; пробуем меньшими частями ($truncations/$MAX_TRUNCATION_RECOVERIES)." else "Ответ достиг лимита. Продолжаем с места обрыва ($truncations/$MAX_TRUNCATION_RECOVERIES).") }
+                if (truncatedText && !exhaustedThinking) completion?.let { partial -> appendMessage(partial.copy(origin = MessageOrigin(MessageOriginKind.MODEL, model))) }
+                thinkingPaused = exhaustedThinking
+                truncationNotice = AgentMessage("user", when {
+                    truncatedCall -> truncatedCallNotice(reserve, enabled.map { it.name }.toSet(), again = truncations > 1)
+                    exhaustedThinking -> EXHAUSTED_THINKING_NOTICE
+                    else -> TRUNCATED_TEXT_NOTICE
+                })
+                _state.update { it.copy(streamingText = "", recoveryNotice = when {
+                    truncatedCall -> "Ответ достиг лимита. Незавершённый вызов не выполнен; пробуем меньшими частями ($truncations/$MAX_TRUNCATION_RECOVERIES)."
+                    exhaustedThinking -> "Рассуждения заняли весь лимит ответа. Следующий шаг — без рассуждений ($truncations/$MAX_TRUNCATION_RECOVERIES)."
+                    else -> "Ответ достиг лимита. Продолжаем с места обрыва ($truncations/$MAX_TRUNCATION_RECOVERIES)."
+                }) }
                 return@repeat
             }
             truncationNotice = null
+            thinkingPaused = false
+            // This round answered an open-plan reminder: its plan update may close the turn with the answer already given.
+            val answeringReminder = planNotice != null
             planNotice = null
             repeatNotice = null
             // Recoveries are limited per streak: a model that makes progress between cut-offs keeps going.
@@ -514,12 +530,25 @@ class AgentCoordinator(
                 appendMessage(AgentMessage("tool", json.encodeToString(result), toolCallId = call.id))
                 val callKey = call.name + ":" + canonicalJson(call.arguments)
                 if (!result.ok) {
-                    if (repeatedFailures.merge(callKey + "|" + result.error?.code, 1, Int::plus)!! >= REPEATED_FAILURE_STOP) tooManyRepeatedErrors = true
+                    val failures = repeatedFailures.merge(callKey + "|" + result.error?.code, 1, Int::plus)!!
+                    if (failures >= REPEATED_FAILURE_STOP) tooManyRepeatedErrors = true
+                    // Small models resend a failing call unchanged even with a recovery hint; one warning comes before the stop.
+                    else if (failures == REPEATED_FAILURE_STOP - 1) repeatNotice = AgentMessage("user", repeatedFailureNotice(call.name))
                 } else {
                     val seen = repeatedResults.merge(callKey + "|" + resultFingerprint(result), 1, Int::plus)!!
                     if (seen >= REPEATED_RESULT_STOP) noProgress = call.name
                     else if (seen >= REPEATED_RESULT_NOTICE) repeatNotice = AgentMessage("user", repeatedCallNotice(call.name, seen))
                 }
+            }
+            // A final answer sent with the update_plan that closes every step ends the turn, and so does an update right after
+            // an open-plan reminder that marks every step done: the answer was already given and stays true. A skipped step
+            // still gets a round to say what was not done. Measured on Gemma: about one round in six only updated the plan,
+            // and after a reminder the model repeated its whole answer in a round of its own.
+            val answered = !response.content.isNullOrBlank() || (answeringReminder && calls.all { allStepsDone(it.arguments) })
+            if (answered && calls.all { it.name == "update_plan" } && results.all { it.ok } && openPlanSteps(_state.value.messages).isEmpty()) {
+                events.append(sessionId, "run.completed", buildJsonObject { put("runId", id) })
+                _state.update { it.copy(status = "completed", activeModelId = null) }
+                return
             }
             if (tooManyRepeatedErrors) throw IllegalStateException("Повторяется одна и та же ошибка инструмента. Все результаты сохранены; уточните задачу и продолжите.")
             noProgress?.let { name ->
@@ -565,8 +594,10 @@ class AgentCoordinator(
 
     private suspend fun executeCall(call: ToolCall, enabled: List<ToolSpec>, mode: ExecutionMode, allowProcesses: Boolean, allowNetwork: Boolean, allowScreenshots: Boolean, runId: String): ToolResult {
         val allowed = enabled.firstOrNull { it.name == call.name }
-            ?: return ToolResult.failure("PERMISSION_DENIED", "Tool is unavailable in the current execution mode")
-        if (allowed.effect == ToolEffect.PROCESS && !allowProcesses) return ToolResult.failure("PERMISSION_DENIED", "Process permission was not granted")
+            ?: return if (tools.specs.none { it.name == call.name }) ToolResult.failure("UNKNOWN_TOOL", "There is no tool named ${call.name}", recovery = "Use one of: ${enabled.joinToString { it.name }}")
+                else ToolResult.failure("PERMISSION_DENIED", "Tool ${call.name} is unavailable in $mode mode or without its permission", recovery = "Use one of: ${enabled.joinToString { it.name }}")
+        if (allowed.effect == ToolEffect.PROCESS && !allowProcesses) return ToolResult.failure("PERMISSION_DENIED", "Process permission was not granted",
+            recovery = "Do not run commands in this task. Read files with read_file or search_text instead, and tell the user in your answer which command would check the result")
         return try {
             tools.execute(call, ToolContext(sessionId, runId, mode, allowProcesses, allowNetwork, allowScreenshots))
         } catch (cancelled: CancellationException) {
@@ -586,14 +617,26 @@ internal fun retryNotice(event: ModelEvent.Retrying): String {
     return "$reason. Повтор через $seconds с (попытка ${event.attempt}/${event.maxAttempts})."
 }
 
-internal fun truncatedCallNotice(replyTokens: Int): String {
-    val partChars = (replyTokens.toLong() * 3 / 2).coerceIn(1_000, 200_000)
-    return "[Chiller] Your previous reply reached the output token limit and its tool call was cut off. Nothing was executed and that call is discarded. " +
-        "Do not resend it in one piece: write large content in parts. Your reply limit is about $replyTokens tokens including any reasoning, so keep each call's " +
-        "content under about $partChars characters. Create the file with the first part, then append each next part by replacing the file's last line with " +
-        "that same line followed by the new part (edit_file with the latest snapshot_id), one part per call."
+internal fun truncatedCallNotice(replyTokens: Int, tools: Set<String> = emptySet(), again: Boolean = false): String {
+    // About a character per token: digits and JSON escapes take a token each on Gemma, and a part that is cut off again costs a whole reply.
+    val partChars = replyTokens.toLong().coerceIn(1_000, 200_000)
+    val start = "Do not resend it in one piece: write large content in parts. Your reply limit is about $replyTokens tokens including any reasoning, so keep each call's " +
+        "content under about $partChars characters. Create the file with the first part, then "
+    // The append step names a tool the model actually has; append_file needs no copy of existing text, which small models get wrong.
+    val parts = when {
+        "append_file" in tools -> "add each next part with append_file and the snapshot_id the previous call returned. Each part continues exactly where the file ends; " +
+            "never repeat text already written. One part per call."
+        "edit_file" !in tools && "replace_text" in tools -> "append each next part by replacing the file's last line with that same line followed by the new part " +
+            "(replace_text with the latest snapshot_id, old_text = the file's current last line, new_text = that line, a line break and the next part), one part per call."
+        else -> "append each next part by replacing the file's last line with that same line followed by the new part (edit_file with the latest snapshot_id), one part per call."
+    }
+    val repeat = if (again) "It was cut off again: the call still held too much. Send a smaller part now, not the rest of the file. " else ""
+    return "[Chiller] Your previous reply reached the output token limit and its tool call was cut off. Nothing was executed and that call is discarded. $repeat$start$parts"
 }
 private const val TRUNCATED_TEXT_NOTICE = "[Chiller] Your previous message reached the output token limit and was cut off. Continue exactly where it stopped, without repeating what you already wrote."
+/** Reasoning filled the whole reply and nothing visible came out; the next round runs without thinking. */
+private const val EXHAUSTED_THINKING_NOTICE = "[Chiller] Your reasoning used the whole reply limit, so no answer or tool call came out and nothing was executed. " +
+    "Do not start the analysis over: take the next single step now, a tool call or the answer, from what you already know."
 
 /**
  * What this run can actually do, from its enabled tools. A small model told "I can't draw pictures" while
@@ -645,6 +688,10 @@ internal fun noProgressNotice(tool: String): String =
 private const val LAST_ROUND_NOTICE = "[Chiller] This is your last step for this request; tools are disabled. Answer now: what is done (with how it was " +
     "verified), what is not done, and what the user can do next. Do not claim anything the tool results did not show."
 
+internal fun repeatedFailureNotice(tool: String): String =
+    "[Chiller] You sent exactly the same $tool call twice and it failed the same way both times. Sending it a third time ends this turn. " +
+        "Do what the error's recovery says, or change your approach: different arguments, smaller parts, or another tool."
+
 internal fun repeatedCallNotice(tool: String, times: Int): String =
     "[Chiller] You have called $tool with the same arguments $times times and got the same result each time. Repeating it will not change anything. " +
         "Use what you already have: try a different step, or give your answer now and say plainly what you could not find or do."
@@ -667,6 +714,11 @@ fun openPlanSteps(messages: List<AgentMessage>): List<String> {
             .map { it["step"]?.jsonPrimitive?.contentOrNull.orEmpty() }
     }.getOrDefault(emptyList())
 }
+
+/** Whether update_plan arguments mark every step done (none skipped, none open). */
+internal fun allStepsDone(arguments: String): Boolean = runCatching {
+    Json.parseToJsonElement(arguments).jsonObject.getValue("steps").jsonArray.all { it.jsonObject["status"]?.jsonPrimitive?.contentOrNull == "done" }
+}.getOrDefault(false)
 
 internal fun openPlanNotice(open: List<String>): String =
     "[Chiller] You are about to finish, but your plan still has open steps:\n" + open.joinToString("\n") { "- $it" } +
@@ -704,7 +756,7 @@ private const val SYSTEM_PROMPT = """You are Chiller, a precise coding assistant
 - When available, use git_status/git_diff/git_log/git_show for repository inspection and find_symbols/read_symbol for lexical navigation. These do not provide semantic rename or LSP guarantees.
 - Background processes belong to this run and stop when it ends. Save important output before finishing; never repeat a side-effecting command merely to recover expired output.
 - The user may point to files as @path (workspace-relative); read them before relying on their content.
-- read_file returns snapshot_id. For small changes use replace_text with old_text copied exactly (no line-number prefix); for larger ones edit_file by line number. Both return snapshotId: reuse it for the next edit of that file without re-reading.
+- read_file returns snapshot_id. For small changes use replace_text with old_text copied exactly (no line-number prefix); for larger ones edit_file by line number. Both return snapshot_id: reuse it for the next edit of that file without re-reading.
 - For tasks with several steps, keep a short checklist with update_plan and update it as you go: mark a step done right after finishing it, or skipped with the reason. Close every step before the final answer.
 - Never invent tool results. Do not claim checks passed unless a process you ran reported it; quote the command and exit code.
 - Facts and numbers you write into files or answers must come from tool results in this conversation. If a search was empty or a page lacked the data, say so plainly and stop or ask; never fill in plausible values. Placeholder data only when the user asks for it, labeled as placeholder. Your final answer reports what failed or was not done.
