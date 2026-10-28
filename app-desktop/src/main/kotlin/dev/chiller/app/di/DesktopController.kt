@@ -130,7 +130,11 @@ data class DesktopState(val run: RunState = RunState(), val sessions: List<Sessi
     /** The dialog's folder is fixed: it is bound and has turns, or file tools already wrote into its own folder. */
     val folderLocked: Boolean = false,
     /** The bound folder of the shown dialog no longer exists; it can be pointed at the new location. */
-    val workspaceMissing: Boolean = false)
+    val workspaceMissing: Boolean = false,
+    /** Dialogs whose run is in progress, shown or in the background. */
+    val runningSessions: Set<String> = emptySet(),
+    /** Dialogs whose run waits for the user's answer. */
+    val waitingSessions: Set<String> = emptySet())
 
 class DesktopController(
     private val directory: Path, initialCredential: String? = LocalCredentials.load(), connectionChecker: ConnectionChecker? = null, catalogClient: ModelCatalogClient? = null,
@@ -147,8 +151,6 @@ class DesktopController(
     private val events = JsonlEventStore(directory.resolve("sessions"))
     private val artifacts = LocalArtifactStore(directory.resolve("artifacts"))
     private val exporter = SessionExporter(events)
-    private var subagentService: SubagentService? = null
-    private var subagentObserver: Job? = null
 
     /** The user's stop button on a helper agent. */
     suspend fun cancelSubagent(id: String) { subagentService?.cancelByUser(id) }
@@ -180,14 +182,25 @@ class DesktopController(
     private val captureController = WindowCaptureController(directory.resolve("captures")) { _state.value.sessionId }
     val screenshotSupported: Boolean get() = captureController.supported
 
-    private var coordinator: AgentCoordinator? = null
-    /** Agent settings changed since the engine was built: the next message rebuilds it, history restored from the journal. */
-    private var engineStale = false
-    private var processService: ProcessService? = null
-    private var workspaceService: LocalWorkspace? = null
-    private var codeService: LocalReadOnlyCodeService? = null
-    private var observer: Job? = null
-    private var questions = PendingQuestions()
+    /**
+     * One dialog's agent with the services it runs with. The shown dialog's engine drives the screen; a dialog left
+     * while its run goes on keeps its engine in the background until the run ends.
+     */
+    private class Engine(
+        val sessionId: String, val root: String?, val coordinator: AgentCoordinator, val workspace: LocalWorkspace, val processes: ProcessService,
+        val code: LocalReadOnlyCodeService, val questions: PendingQuestions, val supervisor: SubagentService, val profile: String, val jobs: List<Job>,
+    ) {
+        /** Agent settings changed since it was built: the next message rebuilds it, history restored from the journal. */
+        @Volatile var stale = false
+        val running: Boolean get() = coordinator.status() !in TERMINAL_STATUSES && (coordinator.isRunning || coordinator.status() in ACTIVE_STATUSES)
+    }
+    private val engines = java.util.concurrent.ConcurrentHashMap<String, Engine>()
+    private val shownEngine: Engine? get() = engines[_state.value.sessionId]
+    private val coordinator: AgentCoordinator? get() = shownEngine?.coordinator
+    private val processService: ProcessService? get() = shownEngine?.processes
+    private val workspaceService: LocalWorkspace? get() = shownEngine?.workspace
+    private val codeService: LocalReadOnlyCodeService? get() = shownEngine?.code
+    private val subagentService: SubagentService? get() = shownEngine?.supervisor
     private val preferencesStore = UiPreferencesStore(directory)
     private val preferencesMutex = Mutex()
     private val checker = connectionChecker ?: KtorConnectionChecker()
@@ -368,7 +381,7 @@ class DesktopController(
 
     /** Only explicitly selected inactive history is eligible; confirmation is snapshot-bound. */
     suspend fun previewSessionDeletion(id: String): String? = commands.withLock {
-        if (busy() || id == _state.value.sessionId) return@withLock null
+        if (busy() || id == _state.value.sessionId || running(id)) return@withLock null
         try {
             val plan = withContext(Dispatchers.IO) { maintenance().previewDelete(setOf(id), setOf(_state.value.sessionId)).single() }
             deletionPlans.clear()
@@ -380,7 +393,7 @@ class DesktopController(
     }
 
     suspend fun deleteSession(id: String): Boolean = commands.withLock {
-        if (busy() || id == _state.value.sessionId) return@withLock false
+        if (busy() || id == _state.value.sessionId || running(id)) return@withLock false
         val plan = deletionPlans.remove(id) ?: return@withLock false
         try {
             val result = withContext(Dispatchers.IO) { maintenance().delete(plan, setOf(_state.value.sessionId)) }
@@ -539,10 +552,12 @@ class DesktopController(
         _state.update { it.copy(connection = connectionForUnverified()) }
     }
 
+    /** The shown dialog is running; other dialogs may run in the background meanwhile. */
     private fun busy(): Boolean {
-        if (coordinator?.state?.value?.status in setOf("completed", "failed", "cancelled")) return false
-        return coordinator?.isRunning == true || listOf(_state.value.run.status, coordinator?.state?.value?.status).any { it in setOf("preparing", "streaming", "executing") }
+        if (coordinator?.status() in TERMINAL_STATUSES) return false
+        return coordinator?.isRunning == true || listOf(_state.value.run.status, coordinator?.status()).any { it in ACTIVE_STATUSES }
     }
+    private fun running(sessionId: String): Boolean = engines[sessionId]?.running == true || (sessionId == _state.value.sessionId && busy())
 
     private suspend fun configureLocked(url: String, model: String, thinking: Boolean, key: String?, keepSession: Boolean = false) {
         if (busy()) return
@@ -583,8 +598,9 @@ class DesktopController(
         else _state.update { it.copy(settings = next, sessionId = newId(), run = RunState(), verify = VerifyState()) }
         _state.update { it.copy(apiKeyConfigured = ready(), connection = if (profileChanged) connectionForUnverified() else it.connection) }
         saveSettings(next)
-        // The next message rebuilds the engine from the journal with the new model and its profile.
+        // The next message rebuilds the engine from the journal with the new model and its profile. Background runs keep theirs.
         resetEngine()
+        disposeIdle()
         if (catalogChanged) {
             restoreCachedCatalog()
             refreshModelsIfConfigured()
@@ -596,12 +612,11 @@ class DesktopController(
      * and without file changes); a dialog with a fixed folder stays as it is and a new dialog opens in [path].
      */
     private suspend fun chooseWorkspaceLocked(path: Path) {
-        if (busy()) return
         try {
             val root = withContext(Dispatchers.IO) { path.toRealPath() }.also { require(Files.isDirectory(it)) }.toString()
             val shown = _state.value
             val session = shown.sessionId
-            val keep = !shown.folderLocked && shown.settings.workspace?.let(::isDemoFolder) != true && events.findEarly(session, "session.demo") == null
+            val keep = !busy() && !shown.folderLocked && shown.settings.workspace?.let(::isDemoFolder) != true && events.findEarly(session, "session.demo") == null
             resetEngine()
             // A dialog with turns records the folder now, so the list moves it into the project at once.
             val attach = keep && shown.run.messages.isNotEmpty()
@@ -625,8 +640,6 @@ class DesktopController(
 
     /** A new dialog in [root], or without a folder when [root] is null. */
     suspend fun newSessionIn(root: String?) = commands.withLock {
-        if (coordinator?.state?.value?.status in setOf("completed", "failed", "cancelled")) coordinator?.awaitCompletion()
-        if (busy()) return@withLock
         try {
             val canonical = root?.let { withContext(Dispatchers.IO) { Path.of(it).toRealPath() }.also { path -> require(Files.isDirectory(path)) }.toString() }
             resetEngine()
@@ -639,8 +652,6 @@ class DesktopController(
     }
 
     private suspend fun newSessionLocked() {
-        if (coordinator?.state?.value?.status in setOf("completed", "failed", "cancelled")) coordinator?.awaitCompletion()
-        if (busy()) return
         resetEngine()
         // Leaving the demo returns to the project the user had open, not the throwaway demo folder.
         val current = _state.value.settings.workspace
@@ -650,12 +661,12 @@ class DesktopController(
 
     /** Leaves the current project: the shown dialog loses its folder while it still can, otherwise a new dialog without one opens. */
     suspend fun closeWorkspace() = commands.withLock {
-        if (busy()) return@withLock
+        val keep = !busy()
         resetEngine()
         val settings = _state.value.settings.copy(workspace = null)
         savedWorkspace = null
         _state.update {
-            if (!it.folderLocked) it.copy(settings = settings, verify = VerifyState(), workspaceMissing = false)
+            if (keep && !it.folderLocked) it.copy(settings = settings, verify = VerifyState(), workspaceMissing = false)
             else it.copy(settings = settings, sessionId = newId(), run = RunState(), verify = VerifyState(), outside = null, undoneChanges = emptySet(), folderLocked = false, workspaceMissing = false)
         }
         saveSettings(settings)
@@ -673,7 +684,7 @@ class DesktopController(
      * their workspace-relative history; the journal records the new binding, nothing is copied or replayed.
      */
     suspend fun relocateWorkspace(from: String, to: Path) = commands.withLock {
-        if (busy()) return@withLock
+        if (engines.values.any { it.running && it.root == from }) return@withLock showError("В этом проекте идёт задача. Дождитесь её завершения.")
         try {
             val root = withContext(Dispatchers.IO) { to.toRealPath() }.also { require(Files.isDirectory(it)) }.toString()
             if (root == from) return@withLock
@@ -704,10 +715,11 @@ class DesktopController(
     }
 
     private suspend fun selectSessionLocked(id: String) {
-        if (busy()) return
         try {
             resetEngine()
             val history = events.read(id)
+            // A dialog still running in the background is shown live from its engine, not restored from the journal.
+            engines[id]?.let { engine -> return showEngine(engine, history) }
             val savedRoot = history.lastOrNull { it.type == "session.workspace" }?.payload?.get("root")?.jsonPrimitive?.contentOrNull
             val missing = savedRoot != null && !withContext(Dispatchers.IO) { Files.isDirectory(Path.of(savedRoot)) }
             _state.update { it.copy(sessionId = id, settings = it.settings.copy(workspace = savedRoot), run = RunState(), verify = VerifyState(), outside = null, undoneChanges = emptySet(),
@@ -716,10 +728,21 @@ class DesktopController(
             if (savedRoot == null || missing) {
                 val messages = projectConversation(history)
                 _state.update { it.copy(run = RunState(messages = messages)) }
-            } else buildEngine().restore()
+            } else {
+                // The restored history is on screen when selection returns, not only once the observer catches up.
+                val engine = buildEngine().also { it.restore() }
+                _state.update { if (it.sessionId == id) it.copy(run = engine.state.value) else it }
+            }
             val outside = history.lastOrNull { it.type == "turn.outside_changes" }?.let { runCatching { json.decodeFromJsonElement(OutsideChanges.serializer(), it.payload) }.getOrNull() }
             _state.update { it.copy(undoneChanges = undoneChangeIds(history), outside = outside) }
         } catch (_: Exception) { showError("Сессию не удалось восстановить. Её данные сохранены для проверки.") }
+    }
+
+    private fun showEngine(engine: Engine, history: List<StoredEvent>) {
+        val run = engine.coordinator.state.value.let { run -> run.copy(question = run.question ?: engine.questions.question.value) }
+        _state.update { it.copy(sessionId = engine.sessionId, settings = it.settings.copy(workspace = engine.root), run = run, verify = VerifyState(), outside = null,
+            undoneChanges = undoneChangeIds(history), folderLocked = folderLocked(history), workspaceMissing = false, activeProfile = engine.profile,
+            subagents = engine.supervisor.state.value) }
     }
 
     /** Records [root] as the dialog's folder unless it already is. */
@@ -739,8 +762,13 @@ class DesktopController(
         if (requestId.isBlank() || requestId.length > 100) return rejected("Недопустимый ID отправки")
         if (attachments.size > 8 || attachments.any { inputAttachments.rawPath(session, it.artifactId) == null }) return rejected("Вложения недоступны в этом диалоге")
         if (text.isBlank() && attachments.isEmpty()) return rejected("Сообщение пустое")
-        if (coordinator?.state?.value?.status in setOf("completed", "failed", "cancelled")) coordinator?.awaitCompletion()
+        if (coordinator?.status() in TERMINAL_STATUSES) coordinator?.awaitCompletion()
         if (busy()) return rejected("Уже выполняется другая задача")
+        // Two agents editing one folder would trip over each other's snapshots; dialogs without a folder have their own.
+        val background = engines.values.filter { it.sessionId != session && it.running }
+        val folder = _state.value.settings.workspace
+        if (folder != null && background.any { it.root == folder }) return rejected("В этом проекте уже идёт задача в другом диалоге. Дождитесь её или остановите.")
+        if (background.size >= MAX_PARALLEL_RUNS) return rejected("Одновременно идут $MAX_PARALLEL_RUNS задачи. Дождитесь одной из них.")
         if (events.findEarly(session, "session.demo") != null) return rejected("Это демо-диалог: в нём отвечает сценарий, а не модель. Начните новый диалог.")
         if (_state.value.settings.model.isBlank()) return rejected("Выберите модель в настройках подключения")
         if (_state.value.workspaceMissing) return rejected("Папка диалога не найдена. Укажите её новое место или начните новый диалог.")
@@ -768,8 +796,7 @@ class DesktopController(
         val folderless = _state.value.settings.workspace == null
         val runMode = if (folderless) ExecutionMode.WORKSPACE_EDIT else mode
         return try {
-            if (engineStale && coordinator != null) resetEngine()
-            engineStale = false
+            if (shownEngine?.stale == true) resetEngine()
             val engine = coordinator ?: buildEngine().also { it.restore() }
             val changesBefore = engine.state.value.activities.count { it.diff != null && it.status == "completed" }
             // Metadata snapshot before an editing turn: what changes outside the file tools is reported afterwards.
@@ -798,7 +825,10 @@ class DesktopController(
         catch (_: Exception) { rejected("Не удалось начать задачу") }
     }
 
-    suspend fun stop() { coordinator?.stop(); questions.cancel() }
+    suspend fun stop() { shownEngine?.let { it.coordinator.stop(); it.questions.cancel() } }
+
+    /** Stops a dialog's run, shown or in the background. */
+    suspend fun stopSession(id: String) { engines[id]?.let { it.coordinator.stop(); it.questions.cancel() } }
     private suspend fun prepareExportLocked(format: String, sessionId: String) {
         if (busy()) return
         try {
@@ -814,7 +844,7 @@ class DesktopController(
             dismissExport()
         } catch (_: Exception) { showError("Не удалось сохранить экспорт. Выберите доступную папку.") }
     }
-    fun answer(text: String) { questions.answer(text) }
+    fun answer(text: String) { shownEngine?.questions?.answer(text) }
     fun allowProcesses(value: Boolean) {
         scope.launch {
             commands.withLock {
@@ -974,7 +1004,6 @@ class DesktopController(
      * not added to recent projects and the dialog refuses later real messages.
      */
     suspend fun startDemo() = commands.withLock {
-        if (busy()) return@withLock
         try {
             val stamp = java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss"))
             val root = withContext(Dispatchers.IO) { directory.resolve("demo").resolve(stamp).resolve("chiller-demo").also { DemoScenario.createProject(it) }.toRealPath() }
@@ -999,10 +1028,9 @@ class DesktopController(
         val readWindow = if (s.settings.costBudget.enabled) minOf(listedWindow ?: 32_768, s.settings.costBudget.inputTokenCeiling) else listedWindow
         val workspace = LocalWorkspace(root, events, artifacts, s.sessionId, ReadLimits.forContextWindow(readWindow))
         workspace.recoverPending()
-        workspaceService = workspace
-        val processes = processServiceFactory(root); processService = processes
-        questions = PendingQuestions()
-        val code = LocalReadOnlyCodeService(workspace.root); codeService = code
+        val processes = processServiceFactory(root)
+        val questions = PendingQuestions()
+        val code = LocalReadOnlyCodeService(workspace.root)
         // generate_image uses the image model on the same endpoint and the same origin-bound key as the chat model.
         val imageOrigin = originOf(s.settings.baseUrl)
         val imageModel = imageModelFor(options, s.catalog)
@@ -1012,7 +1040,7 @@ class DesktopController(
         }
         val imageSession = s.sessionId
         val attachmentImages = AttachmentImages { session, id -> if (session == imageSession) inputAttachments.originalImage(session, id) else null }
-        val builtin = BuiltinTools(workspace, processes, artifacts, questions, code = code, web = BoundedWebService(), screens = captureController,
+        val builtin = BuiltinTools(workspace, processes, artifacts, questions, code = code, web = BoundedWebService(), screens = captureController.forSession(s.sessionId),
             images = images, attachmentImages = attachmentImages)
         val baseProfile = if (java.net.URI(s.settings.baseUrl).host == "api.deepseek.com")
             ChatCompletionsProfile.deepSeekFlash(s.settings.baseUrl, s.settings.model)
@@ -1029,7 +1057,6 @@ class DesktopController(
         val provider = providerOverride ?: RunBudgetProvider(ChatCompletionsProvider(http, profile, cost) { engineOrigin?.let { credentials[it] } }, options.effectiveMaxRequests, options.effectiveTotalOutputTokens, cost)
         // Children use the same provider and model, read-only tools and the plain executor (no delegation).
         val supervisor = SubagentSupervisor(provider, builtin, events, s.sessionId, modelOverride ?: s.settings.model, scope)
-        subagentService = supervisor
         // The model profile narrows the toolbox (helpers only if it keeps spawn_agent) and may cap output.
         val helpers = !folderless && options.subagents && (modelProfile.tools == null || "spawn_agent" in modelProfile.tools!!)
         val delegating: ToolExecutor = if (helpers) SubagentTools(builtin, supervisor) else builtin
@@ -1048,7 +1075,6 @@ class DesktopController(
                 else minOf(window, s.settings.costBudget.inputTokenCeiling + maxOutput.coerceAtMost(window / 2))
             })
         events.append(s.sessionId, "context.profile", buildJsonObject { put("profile", modelProfile.id); put("tools", tools.specs.size) })
-        coordinator = engine
         if (instructions != null) events.append(s.sessionId, "context.instructions", buildJsonObject {
             put("sources", JsonArray(instructions.sources.map(::JsonPrimitive))); put("truncated", instructions.truncated)
         })
@@ -1056,24 +1082,55 @@ class DesktopController(
         // A turn the real provider finished is proof the connection works, so it counts as a check without an extra request.
         val live = providerOverride == null
         var previous = engine.state.value.status
-        observer = scope.launch { combine(engine.state, questions.question) { run, question -> run.copy(question = run.question ?: question) }.collect { run ->
-            val answered = live && run.status == "completed" && previous in setOf("preparing", "streaming", "executing")
+        val id = s.sessionId
+        // Only the shown dialog drives the screen; every dialog reports whether it runs or waits for an answer.
+        val observer = scope.launch(start = CoroutineStart.LAZY) { combine(engine.state, questions.question) { run, question -> run.copy(question = run.question ?: question) }.collect { run ->
+            val answered = live && run.status == "completed" && previous in ACTIVE_STATUSES
+            val finished = previous in ACTIVE_STATUSES && run.status in TERMINAL_STATUSES
             previous = run.status
-            _state.update { it.copy(run = run, connection = if (answered && it.connection.status in setOf("unverified", "reachable")) ConnectionState("verified", "Подтверждено ответом модели", Instant.now().toString()) else it.connection) }
+            _state.update {
+                val running = if (run.status in ACTIVE_STATUSES) it.runningSessions + id else it.runningSessions - id
+                val waiting = if (run.question != null && run.status in ACTIVE_STATUSES) it.waitingSessions + id else it.waitingSessions - id
+                val connection = if (answered && it.connection.status in setOf("unverified", "reachable")) ConnectionState("verified", "Подтверждено ответом модели", Instant.now().toString()) else it.connection
+                if (it.sessionId == id) it.copy(run = run, connection = connection, runningSessions = running, waitingSessions = waiting)
+                else it.copy(connection = connection, runningSessions = running, waitingSessions = waiting)
+            }
+            if (finished) scope.launch { releaseBackground(id) }
         } }
-        subagentObserver = scope.launch { supervisor.state.collect { list -> _state.update { it.copy(subagents = list) } } }
+        val subagentObserver = scope.launch(start = CoroutineStart.LAZY) { supervisor.state.collect { list -> _state.update { if (it.sessionId == id) it.copy(subagents = list) else it } } }
+        engines[id] = Engine(id, workspace.root.takeUnless { folderless }, engine, workspace, processes, code, questions, supervisor, modelProfile.id, listOf(observer, subagentObserver))
+        observer.start(); subagentObserver.start()
         return engine
     }
 
+    /** A background dialog whose run ended gives its engine back; the journal restores it when the dialog is opened. */
+    private suspend fun releaseBackground(id: String) = commands.withLock {
+        val engine = engines[id] ?: return@withLock
+        if (_state.value.sessionId != id && !engine.running) dispose(engine)
+    }
+
+    /**
+     * Lets go of the shown dialog's engine before the screen changes: an idle one is disposed, a running one goes on in
+     * the background with its own folder, processes and journal.
+     */
     private suspend fun resetEngine() {
         autoVerifyEpoch++
-        observer?.cancelAndJoin(); observer = null
-        subagentObserver?.cancelAndJoin(); subagentObserver = null; subagentService = null
         _state.update { it.copy(subagents = emptyList()) }
-        if (coordinator?.state?.value?.status in setOf("completed", "failed", "cancelled")) coordinator?.awaitCompletion() else coordinator?.stop()
-        coordinator = null
-        processService?.close(); processService = null; workspaceService = null
+        val engine = shownEngine ?: return
+        if (!engine.running) dispose(engine)
     }
+
+    private suspend fun dispose(engine: Engine) {
+        engines.remove(engine.sessionId, engine)
+        engine.jobs.forEach { it.cancelAndJoin() }
+        if (engine.coordinator.status() in TERMINAL_STATUSES) engine.coordinator.awaitCompletion() else engine.coordinator.stop()
+        engine.processes.close()
+        _state.update { it.copy(runningSessions = it.runningSessions - engine.sessionId, waitingSessions = it.waitingSessions - engine.sessionId) }
+    }
+
+    /** Disposes every engine that is not running, e.g. after the provider changed. */
+    private suspend fun disposeIdle() { engines.values.filter { !it.running }.forEach { dispose(it) } }
+
     private suspend fun saveSettings(settings: DesktopSettings) = withContext(Dispatchers.IO) {
         Files.createDirectories(directory)
         val target = directory.resolve("settings.json")
@@ -1122,7 +1179,7 @@ class DesktopController(
 
     suspend fun updateAgentOptions(options: AgentOptions) = commands.withLock {
         val settings = _state.value.settings.copy(agent = options.sanitized())
-        if (settings.agent != _state.value.settings.agent) engineStale = true
+        if (settings.agent != _state.value.settings.agent) engines.values.forEach { it.stale = true }
         _state.update { it.copy(settings = settings, verify = VerifyState()) }
         saveSettings(settings)
     }
@@ -1173,7 +1230,7 @@ class DesktopController(
     suspend fun updateCostBudget(budget: CostBudgetSettings): String? = commands.withLock {
         if (budget.enabled) try { MonetaryBudget(budget) } catch (e: ToolException) { return@withLock e.message }
         val settings = _state.value.settings.copy(costBudget = budget)
-        engineStale = true
+        engines.values.forEach { it.stale = true }
         _state.update { it.copy(settings = settings) }
         saveSettings(settings)
         null
@@ -1188,7 +1245,7 @@ class DesktopController(
 
     /** Deletes the app's own throwaway demo projects, except the one shown right now. Returns how many were removed. */
     suspend fun deleteDemoProjects(): Int = commands.withLock {
-        if (busy()) return@withLock 0
+        if (busy() || engines.values.any { it.running && it.root?.let(::isDemoFolder) == true }) return@withLock 0
         val current = _state.value.settings.workspace
         withContext(Dispatchers.IO) {
             val demo = directory.resolve("demo")
@@ -1272,7 +1329,7 @@ class DesktopController(
         }
         pendingCheck?.cancelAndJoin()
         synchronized(catalogLifecycleLock) { catalogRevision.incrementAndGet(); catalogJob?.cancel(); catalogJob = null }
-        resetEngine(); (checker as? AutoCloseable)?.close(); http.close(); credentials.clear(); scope.cancel()
+        engines.values.toList().forEach { dispose(it) }; (checker as? AutoCloseable)?.close(); http.close(); credentials.clear(); scope.cancel()
     }
 
     private fun localizeConnectionMessage(message: String): String = when {
@@ -1290,10 +1347,18 @@ class DesktopController(
         else -> message
     }
 
-    private companion object { const val MAX_MODEL_LENGTH = 200; const val MAX_RECENT_WORKSPACES = 24 }
+    private companion object {
+        val ACTIVE_STATUSES = setOf("preparing", "streaming", "executing")
+        val TERMINAL_STATUSES = setOf("completed", "failed", "cancelled")
+        /** Runs at once across all dialogs. */
+        const val MAX_PARALLEL_RUNS = 3
+        const val MAX_MODEL_LENGTH = 200
+        const val MAX_RECENT_WORKSPACES = 24
+    }
 }
 
 private const val MAX_CUSTOM_PROVIDERS = 16
+private fun AgentCoordinator.status() = state.value.status
 
 /**
  * The task's money budget, or null when it is off. Its prices belong to one endpoint, chat model and image model;

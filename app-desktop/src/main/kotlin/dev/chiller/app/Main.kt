@@ -90,6 +90,16 @@ private fun chillerApplication() = application {
         }
         val macTitleBar = remember(mac) { if (!mac) null else TitleBarSpec(dragArea = { modifier -> WindowDraggableArea(modifier) { androidx.compose.foundation.layout.Box(androidx.compose.ui.Modifier.fillMaxSize()) } }) }
         // A finished task while the window is in the background asks for attention once (Dock bounce / taskbar flash).
+        // A background dialog finishing does the same.
+        var backgroundRuns by remember { mutableStateOf(emptySet<String>()) }
+        LaunchedEffect(state.runningSessions) {
+            val finished = backgroundRuns - state.runningSessions - state.sessionId
+            if (finished.isNotEmpty() && !window.isActive) runCatching {
+                if (java.awt.Taskbar.isTaskbarSupported() && java.awt.Taskbar.getTaskbar().isSupported(java.awt.Taskbar.Feature.USER_ATTENTION))
+                    java.awt.Taskbar.getTaskbar().requestUserAttention(true, false)
+            }
+            backgroundRuns = state.runningSessions
+        }
         var wasActive by remember { mutableStateOf(false) }
         LaunchedEffect(active, state.run.status) {
             if (wasActive && !active && state.run.status in setOf("completed", "failed") && !window.isActive) runCatching {
@@ -107,9 +117,10 @@ private fun chillerApplication() = application {
         val menu = listOf(
             AppMenuSection("Файл", listOf(
                 listOf(
-                    AppMenuItem("Новый диалог", Key.N, "N", enabled = !active) { actions.tryEmit(DesktopAction.NEW_CHAT) },
-                    AppMenuItem("Открыть проект…", Key.O, "O", enabled = !active, onClick = chooseWorkspace),
-                    AppMenuItem("Закрыть проект", enabled = !active && state.settings.workspace != null) { scope.launch { controller.closeWorkspace() } },
+                    // A running dialog goes on in the background, so these stay available.
+                    AppMenuItem("Новый диалог", Key.N, "N") { actions.tryEmit(DesktopAction.NEW_CHAT) },
+                    AppMenuItem("Открыть проект…", Key.O, "O", onClick = chooseWorkspace),
+                    AppMenuItem("Закрыть проект", enabled = state.settings.workspace != null) { scope.launch { controller.closeWorkspace() } },
                 ),
                 listOf(
                     AppMenuItem("Экспорт Markdown…", enabled = !active && state.run.messages.isNotEmpty()) { scope.launch { controller.prepareExport("markdown") } },
@@ -168,6 +179,8 @@ private fun chillerApplication() = application {
                 pinned = state.settings.pinnedWorkspaces, hidden = state.settings.hiddenWorkspaces,
                 folderLocked = state.folderLocked, workspaceMissing = state.workspaceMissing,
                 excluded = controller::isDemoFolder,
+                running = state.runningSessions, waiting = state.waitingSessions,
+                onStop = { id -> scope.launch { controller.stopSession(id) } },
                 onNewIn = { root -> scope.launch { controller.newSessionIn(root) } },
                 onPin = { root, pinned -> scope.launch { controller.pinWorkspace(root, pinned) } },
                 onRemove = { root -> scope.launch { controller.removeRecentWorkspace(root) } },

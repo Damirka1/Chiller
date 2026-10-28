@@ -306,7 +306,7 @@ fun ChillerApp(
     }
     val handleAction by rememberUpdatedState<(DesktopAction) -> Unit> { action ->
         when (action) {
-            DesktopAction.NEW_CHAT -> if (!active) onNewSession()
+            DesktopAction.NEW_CHAT -> onNewSession()
             DesktopAction.SEND -> if (!settings && renameTarget == null && exportPreview == null) send()
             DesktopAction.SETTINGS -> if (!active) { comparing = false; openSettings() }
             DesktopAction.COMPARE -> if (!active && comparison != null) { settings = false; comparing = true }
@@ -331,10 +331,10 @@ fun ChillerApp(
                 when (it.key) {
                     Key.Enter -> { handleAction(DesktopAction.SEND); true }
                     Key.K -> { sidebar = true; runCatching { sidebarSearch.requestFocus() }; true }
-                    Key.P -> { if (!active && !settings) switcher = true; true }
+                    Key.P -> { if (!settings) switcher = true; true }
                     Key.One, Key.Two, Key.Three, Key.Four, Key.Five, Key.Six, Key.Seven, Key.Eight, Key.Nine -> {
                         val index = listOf(Key.One, Key.Two, Key.Three, Key.Four, Key.Five, Key.Six, Key.Seven, Key.Eight, Key.Nine).indexOf(it.key)
-                        tree.projects.getOrNull(index)?.let { group -> if (!active && !settings) projects.onNewIn(group.path) }
+                        tree.projects.getOrNull(index)?.let { group -> if (!settings) projects.onNewIn(group.path) }
                         true
                     }
                     // Without a system menu bar its accelerators live here.
@@ -632,12 +632,19 @@ private fun Sidebar(
             }
         }
         else Column(Modifier.fillMaxSize()) {
-        ChillerControl("Новый диалог", onNew, Modifier.fillMaxWidth(), icon = Icons.Outlined.Add, enabled = enabled, trailing = shortcut("N"))
+        // Dialogs stay reachable while one runs: it goes on in the background.
+        ChillerControl("Новый диалог", onNew, Modifier.fillMaxWidth(), icon = Icons.Outlined.Add, trailing = shortcut("N"))
         SidebarSearch(query, { query = it }, searchFocus)
         Spacer(Modifier.height(6.dp))
         val searching = query.isNotBlank()
         if (searching && shown.isEmpty()) Text("Нет диалогов с «${query.trim()}»", color = c.faint, fontSize = 11.sp, lineHeight = 18.sp, modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp))
         val roots = remember(tree) { tree.projects.flatMap { group -> group.sessions.map { it.id to group.path } }.toMap() }
+        val row: @Composable (SessionInfo, Boolean, String?) -> Unit = { session, nested, project ->
+            val runs = session.id in projects.running || (running && session.id == selected)
+            SessionRow(session, session.id == selected, runs, true, { onSelect(session.id) }, { onRename(session) }, { onDelete(session) }, !running && !runs && session.id != selected, { onExport(session.id, it) },
+                nested = nested, project = project, waiting = session.id in projects.waiting && session.id != selected,
+                onStop = if (runs && session.id != selected) ({ projects.onStop(session.id) }) else null)
+        }
         LazyColumn(Modifier.weight(1f), state = listState, verticalArrangement = Arrangement.spacedBy(1.dp)) {
             if (searching) {
                 if (shown.isNotEmpty()) item(key = "search-header") {
@@ -646,13 +653,8 @@ private fun Sidebar(
                         Text("${shown.size} из ${sessions.size}", color = c.faint, fontSize = 10.sp)
                     }
                 }
-                items(shown, key = { it.id }) { session ->
-                    SessionRow(session, session.id == selected, running && session.id == selected, enabled, { onSelect(session.id) }, { onRename(session) }, { onDelete(session) }, !running && session.id != selected, { onExport(session.id, it) },
-                        project = roots[session.id]?.let(::folderName) ?: "без папки")
-                }
-            } else projectTreeItems(tree, workspace, selected, running, enabled, reduced, expanded, showAll, projects, onChoose) { session, nested ->
-                SessionRow(session, session.id == selected, running && session.id == selected, enabled, { onSelect(session.id) }, { onRename(session) }, { onDelete(session) }, !running && session.id != selected, { onExport(session.id, it) }, nested = nested)
-            }
+                items(shown, key = { it.id }) { session -> row(session, false, roots[session.id]?.let(::folderName) ?: "без папки") }
+            } else projectTreeItems(tree, workspace, selected, reduced, expanded, showAll, projects, onChoose) { session, nested -> row(session, nested, null) }
         }
         Box(Modifier.fillMaxWidth().height(1.dp).background(c.border.copy(alpha = .75f)))
         val (line, dot) = connectionSummary(connection, connected)
@@ -701,7 +703,7 @@ private fun SidebarSearch(query: String, onQuery: (String) -> Unit, focus: Focus
 
 @Composable
 private fun SessionRow(session: SessionInfo, selected: Boolean, running: Boolean, enabled: Boolean, onSelect: () -> Unit, onRename: () -> Unit, onDelete: () -> Unit, canDelete: Boolean, onExport: (String) -> Unit,
-    nested: Boolean = false, project: String? = null) {
+    nested: Boolean = false, project: String? = null, waiting: Boolean = false, onStop: (() -> Unit)? = null) {
     val c = LocalChillerPalette.current
     var menu by remember(session.id) { mutableStateOf(false) }
     var closedAt by remember { mutableStateOf(0L) }
@@ -719,7 +721,7 @@ private fun SessionRow(session: SessionInfo, selected: Boolean, running: Boolean
     ) {
         // Inside a project the title lines up with the project name; the icon is left for the running pulse.
         Box(Modifier.size(15.dp), contentAlignment = Alignment.Center) {
-            if (running) Pulse(c.accent) else if (!nested) Icon(Icons.AutoMirrored.Outlined.Chat, null, Modifier.size(14.dp), tint = if (selected) c.muted else c.faint)
+            if (waiting) Box(Modifier.size(8.dp).clip(CircleShape).background(c.focus)) else if (running) Pulse(c.accent) else if (!nested) Icon(Icons.AutoMirrored.Outlined.Chat, null, Modifier.size(14.dp), tint = if (selected) c.muted else c.faint)
         }
         Spacer(Modifier.width(9.dp))
         Text(session.title.ifBlank { "Новый диалог" }, color = if (selected || !nested) c.text else c.text.copy(alpha = .86f), fontSize = 12.sp, lineHeight = 18.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
@@ -730,6 +732,7 @@ private fun SessionRow(session: SessionInfo, selected: Boolean, running: Boolean
                     ChillerIconButton(Icons.Outlined.MoreHoriz, "Действия диалога", { if (System.currentTimeMillis() - closedAt > 200) menu = !menu }, Modifier.size(26.dp), enabled = enabled)
                     if (menu) ChillerPopover({ menu = false; closedAt = System.currentTimeMillis() }, 200.dp, below = true, alignEnd = true) {
                         Spacer(Modifier.height(5.dp))
+                        onStop?.let { stop -> MenuRow("Остановить", { menu = false; stop() }, subtitle = "Задача идёт в фоне", icon = Icons.Outlined.Stop); MenuDivider() }
                         MenuRow("Переименовать", { menu = false; onRename() }, icon = Icons.Outlined.Edit)
                         MenuRow("Экспорт Markdown", { menu = false; onExport("markdown") }, icon = Icons.Outlined.Description)
                         MenuRow("Экспорт JSON", { menu = false; onExport("json") }, icon = Icons.Outlined.DataObject)
@@ -740,7 +743,7 @@ private fun SessionRow(session: SessionInfo, selected: Boolean, running: Boolean
                         Spacer(Modifier.height(5.dp))
                     }
                 }
-            } else Text(if (running) "идёт" else relativeAge(session.updatedAt), color = if (running) c.accent else c.faint, fontSize = 10.sp, lineHeight = 14.sp, maxLines = 1, modifier = Modifier.padding(end = 8.dp))
+            } else Text(if (waiting) "ждёт ответа" else if (running) "идёт" else relativeAge(session.updatedAt), color = if (waiting) c.focus else if (running) c.accent else c.faint, fontSize = 10.sp, lineHeight = 14.sp, maxLines = 1, modifier = Modifier.padding(end = 8.dp))
         }
     }
 }

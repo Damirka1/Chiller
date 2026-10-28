@@ -73,6 +73,10 @@ data class ProjectsModel(
     val onRemove: (String) -> Unit = {},
     val onReveal: (String) -> Unit = {},
     val onRelocate: (String) -> Unit = {},
+    /** Dialogs whose run is in progress, shown or in the background, and those waiting for an answer. */
+    val running: Set<String> = emptySet(),
+    val waiting: Set<String> = emptySet(),
+    val onStop: (String) -> Unit = {},
 )
 
 private const val PROJECT_PREVIEW = 5
@@ -84,11 +88,12 @@ private const val LOOSE_KEY = "\u0000loose"
  * start expanded; the user's own expand/collapse wins after that.
  */
 internal fun LazyListScope.projectTreeItems(
-    tree: ProjectTree, current: String?, selected: String?, running: Boolean, enabled: Boolean, reduced: Boolean,
+    tree: ProjectTree, current: String?, selected: String?, reduced: Boolean,
     expanded: SnapshotStateMap<String, Boolean>, showAll: SnapshotStateMap<String, Boolean>,
     model: ProjectsModel, onChoose: () -> Unit,
     sessionRow: @Composable (SessionInfo, nested: Boolean) -> Unit,
 ) {
+    val enabled = true
     @Composable fun LazyItemScope.Animated(content: @Composable () -> Unit) =
         Box(if (reduced) Modifier else Modifier.animateItem(fadeInSpec = tween(180), placementSpec = spring(stiffness = 600f, dampingRatio = .9f), fadeOutSpec = tween(110))) { content() }
 
@@ -99,7 +104,12 @@ internal fun LazyListScope.projectTreeItems(
     tree.projects.forEach { group ->
         val open = expanded[group.path] ?: (group.path == current || group.sessions.any { it.id == selected })
         item(key = "project:${group.path}") {
-            Animated { ProjectRow(group, group.path == current, open, running && group.path == current, enabled, reduced, model) { expanded[group.path] = !open } }
+            val activity = when {
+                group.sessions.any { it.id in model.waiting } -> ProjectActivity.WAITING
+                group.sessions.any { it.id in model.running } -> ProjectActivity.RUNNING
+                else -> ProjectActivity.IDLE
+            }
+            Animated { ProjectRow(group, group.path == current, open, activity, enabled, reduced, model) { expanded[group.path] = !open } }
         }
         if (open) {
             val all = showAll[group.path] == true
@@ -153,8 +163,10 @@ private fun NestedAction(title: String, icon: androidx.compose.ui.graphics.vecto
     }
 }
 
+private enum class ProjectActivity { IDLE, RUNNING, WAITING }
+
 @Composable
-private fun ProjectRow(group: ProjectGroup, current: Boolean, open: Boolean, running: Boolean, enabled: Boolean, reduced: Boolean, model: ProjectsModel, onToggle: () -> Unit) {
+private fun ProjectRow(group: ProjectGroup, current: Boolean, open: Boolean, activity: ProjectActivity, enabled: Boolean, reduced: Boolean, model: ProjectsModel, onToggle: () -> Unit) {
     val c = LocalChillerPalette.current
     val name = folderName(group.path)
     val interaction = remember { MutableInteractionSource() }
@@ -199,7 +211,9 @@ private fun ProjectRow(group: ProjectGroup, current: Boolean, open: Boolean, run
                 }
             } else {
                 when {
-                    running -> Box(Modifier.padding(end = 9.dp)) { Pulse(c.accent) }
+                    // Collapsed, the project still shows that one of its dialogs runs or waits for an answer.
+                    activity == ProjectActivity.WAITING -> Box(Modifier.padding(end = 9.dp).size(8.dp).clip(androidx.compose.foundation.shape.CircleShape).background(c.focus))
+                    activity == ProjectActivity.RUNNING -> Box(Modifier.padding(end = 9.dp)) { Pulse(c.accent) }
                     !exists -> Icon(Icons.Outlined.WarningAmber, "Папка не найдена", Modifier.padding(end = 7.dp).size(13.dp), tint = c.negative)
                     branch != null -> Text(branch!!, color = c.faint, fontSize = 10.sp, lineHeight = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 76.dp).padding(end = 7.dp))
                     group.pinned -> Icon(Icons.Outlined.PushPin, "Закреплён", Modifier.padding(end = 8.dp).size(11.dp), tint = c.faint)

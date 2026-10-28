@@ -266,6 +266,59 @@ class DesktopControllerTest {
         } finally { controller.close() }
     }
 
+    @Test fun `a running dialog goes on in the background and comes back live`() = runBlocking {
+        val controller = DesktopController(directory.resolve("background"), initialCredential = null, catalogClient = OfflineCatalog)
+        suspend fun until(condition: () -> Boolean) = kotlinx.coroutines.withTimeout(60_000) { while (!condition()) kotlinx.coroutines.delay(20) }
+        try {
+            controller.initialize()
+            controller.startDemo()
+            val demo = controller.state.value.sessionId
+            val demoRoot = controller.state.value.settings.workspace!!
+            // The scripted run stops at its question: it is waiting, not finished.
+            until { controller.state.value.run.question != null }
+            controller.newSessionIn(null)
+            val other = controller.state.value.sessionId
+            assertNotEquals(demo, other)
+            assertTrue(demo in controller.state.value.runningSessions)
+            assertTrue(demo in controller.state.value.waitingSessions)
+            assertNull(controller.state.value.run.question, "the background question stays with its dialog")
+            // A second run in the same folder would trip over the first one's snapshots.
+            controller.newSessionIn(demoRoot)
+            val receipt = controller.send("Ещё одна задача", ExecutionMode.PLAN)
+            assertFalse(receipt.accepted)
+            assertTrue(receipt.reason!!.contains("уже идёт задача"), receipt.reason)
+            // Back in the dialog, the run is live, answers reach it and it finishes.
+            controller.selectSession(demo)
+            assertNotNull(controller.state.value.run.question)
+            controller.answer("Нет, не нужно")
+            until { controller.state.value.run.status == "completed" || controller.state.value.run.question != null }
+            while (controller.state.value.run.status != "completed") {
+                controller.state.value.run.question?.let { controller.answer("Нет, не нужно") }
+                kotlinx.coroutines.delay(20)
+            }
+            until { demo !in controller.state.value.runningSessions }
+            assertTrue(demo !in controller.state.value.waitingSessions)
+        } finally { controller.close() }
+    }
+
+    @Test fun `a background run can be stopped from the list`() = runBlocking {
+        val controller = DesktopController(directory.resolve("background-stop"), initialCredential = null, catalogClient = OfflineCatalog)
+        try {
+            controller.initialize()
+            controller.startDemo()
+            val demo = controller.state.value.sessionId
+            kotlinx.coroutines.withTimeout(60_000) { while (controller.state.value.run.question == null) kotlinx.coroutines.delay(20) }
+            controller.newSessionIn(null)
+            controller.stopSession(demo)
+            kotlinx.coroutines.withTimeout(30_000) { while (demo in controller.state.value.runningSessions) kotlinx.coroutines.delay(20) }
+            // The engine is let go; reopening restores the dialog from its journal.
+            controller.selectSession(demo)
+            val shown = controller.state.value.run
+            assertTrue(shown.messages.isNotEmpty(), "status=${shown.status} error=${shown.error}")
+            assertTrue(shown.status !in setOf("preparing", "streaming", "executing"), shown.status)
+        } finally { controller.close() }
+    }
+
     @Test fun `moved project folder is found again for all its dialogs`() = runBlocking {
         val old = java.nio.file.Files.createDirectories(directory.resolve("work/old")).toRealPath()
         val controller = DesktopController(directory.resolve("relocate"), initialCredential = null, catalogClient = OfflineCatalog)
