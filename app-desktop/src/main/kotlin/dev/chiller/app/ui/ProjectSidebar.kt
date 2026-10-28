@@ -198,7 +198,8 @@ private fun ProjectRow(group: ProjectGroup, current: Boolean, open: Boolean, act
                 Box {
                     ChillerIconButton(Icons.Outlined.MoreHoriz, "Действия проекта", { if (System.currentTimeMillis() - closedAt > 200) menu = !menu }, Modifier.size(24.dp))
                     if (menu) ChillerPopover({ menu = false; closedAt = System.currentTimeMillis() }, 240.dp, below = true, alignEnd = true) {
-                        val close = { menu = false; closedAt = System.currentTimeMillis() }
+                        // Picking an item closes the menu; only an outside click needs the reopen guard.
+                        val close = { menu = false }
                         Spacer(Modifier.height(5.dp))
                         MenuRow("Новый диалог", { close(); model.onNewIn(group.path) }, icon = Icons.Outlined.Add, enabled = enabled && exists)
                         MenuRow(if (group.pinned) "Открепить" else "Закрепить наверху", { close(); model.onPin(group.path, !group.pinned) }, icon = Icons.Outlined.PushPin)
@@ -275,7 +276,7 @@ internal fun FolderChip(menu: FolderMenu, enabled: Boolean) {
             if (menu.locked && workspace != null) { Spacer(Modifier.width(4.dp)); Icon(Icons.Outlined.Lock, null, Modifier.size(10.dp), tint = c.faint) }
         }
         if (open) ChillerPopover({ open = false; closedAt = System.currentTimeMillis() }, 288.dp) {
-            val close = { open = false; closedAt = System.currentTimeMillis() }
+            val close = { open = false }
             Spacer(Modifier.height(6.dp))
             if (menu.locked) Row(Modifier.padding(start = 16.dp, end = 14.dp, top = 2.dp, bottom = 6.dp), verticalAlignment = Alignment.Top) {
                 Icon(Icons.Outlined.Lock, null, Modifier.padding(top = 2.dp).size(12.dp), tint = c.faint)
