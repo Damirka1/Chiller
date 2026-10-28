@@ -374,7 +374,8 @@ fun ChillerApp(
                     }, onExport = onExportSession, connection = connection, width = 248f * density.fontScale.coerceIn(1f, 1.2f),
                     running = active, searchFocus = sidebarSearch, titleBar = titleBar,
                     settingsOpen = settings && !active, settingsSection = settingsSection, onSettingsSection = { settingsSection = it }, onCloseSettings = { settings = false }, version = settingsData?.version,
-                    onOpenPath = { onOpenWorkspace(it) })
+                    onOpenPath = { onOpenWorkspace(it) },
+                    expansion = view.projectExpansion, onExpansion = { updateView(view.copy(projectExpansion = it)) })
                 Box(Modifier.width(1.dp).fillMaxHeight().background(c.border.copy(alpha = .7f)))
                 BoxWithConstraints(Modifier.weight(1f).fillMaxHeight()) {
                     val compact = maxWidth < 860.dp || density.fontScale > 1.3f
@@ -593,7 +594,8 @@ fun ChillerApp(
         if (notices.isNotEmpty()) Popup(alignment = Alignment.TopEnd, properties = PopupProperties(focusable = false)) {
             NoticeStack(notices, onOpenNotice, onDismissNotice, Modifier.padding(top = 52.dp, end = 16.dp, start = 16.dp, bottom = 16.dp))
         }
-        if (switcher) ProjectSwitcher(tree.projects, workspacePath, onPick = { path -> switcher = false; projects.onNewIn(path) }, onChoose = onChooseWorkspace, onDismiss = { switcher = false; runCatching { rootFocus.requestFocus() } })
+        if (switcher) ProjectSwitcher(tree.projects, workspacePath, onPick = { path -> switcher = false; projects.onNewIn(path) }, onChoose = onChooseWorkspace, onDismiss = { switcher = false; runCatching { rootFocus.requestFocus() } },
+            onOpenDialog = { id -> switcher = false; onSelectSession(id) })
     } }
 }
 
@@ -606,6 +608,8 @@ private fun Sidebar(
     onSettingsSection: (SettingsSection) -> Unit = {}, onCloseSettings: () -> Unit = {}, version: String? = null,
     /** A folder dropped on the sidebar opens as a project. */
     onOpenPath: (String) -> Unit = {},
+    /** Saved expand/collapse of projects; changes are handed back to be saved. */
+    expansion: Map<String, Boolean> = emptyMap(), onExpansion: (Map<String, Boolean>) -> Unit = {},
 ) {
     val c = LocalChillerPalette.current
     var query by remember { mutableStateOf("") }
@@ -614,6 +618,13 @@ private fun Sidebar(
     val listState = rememberLazyListState()
     val reduced = LocalChillerReducedMotion.current
     val expanded = remember { mutableStateMapOf<String, Boolean>() }
+    // Saved choices arrive with the preferences; the user's clicks in this session win over them.
+    LaunchedEffect(expansion) { expansion.forEach { (path, open) -> if (path !in expanded) expanded[path] = open } }
+    val saved by rememberUpdatedState(expansion)
+    val save by rememberUpdatedState(onExpansion)
+    LaunchedEffect(Unit) {
+        snapshotFlow { expanded.toMap() }.collect { current -> if (current.isNotEmpty() && current != saved) save(current) }
+    }
     val showAll = remember { mutableStateMapOf<String, Boolean>() }
     var dropping by remember { mutableStateOf(false) }
     val dropTarget = remember(onOpenPath) { folderDropTarget(onOpenPath) { dropping = it } }
@@ -660,6 +671,7 @@ private fun Sidebar(
             val runs = session.id in projects.running || (running && session.id == selected)
             SessionRow(session, session.id == selected, runs, true, { onSelect(session.id) }, { onRename(session) }, { onDelete(session) }, !running && !runs && session.id != selected, { onExport(session.id, it) },
                 nested = nested, project = project, waiting = session.id in projects.waiting && session.id != selected,
+                unread = session.id in projects.unread && session.id != selected,
                 onStop = if (runs && session.id != selected) ({ projects.onStop(session.id) }) else null)
         }
         LazyColumn(Modifier.weight(1f), state = listState, verticalArrangement = Arrangement.spacedBy(1.dp)) {
@@ -732,7 +744,7 @@ private fun SidebarSearch(query: String, onQuery: (String) -> Unit, focus: Focus
 
 @Composable
 private fun SessionRow(session: SessionInfo, selected: Boolean, running: Boolean, enabled: Boolean, onSelect: () -> Unit, onRename: () -> Unit, onDelete: () -> Unit, canDelete: Boolean, onExport: (String) -> Unit,
-    nested: Boolean = false, project: String? = null, waiting: Boolean = false, onStop: (() -> Unit)? = null) {
+    nested: Boolean = false, project: String? = null, waiting: Boolean = false, onStop: (() -> Unit)? = null, unread: Boolean = false) {
     val c = LocalChillerPalette.current
     var menu by remember(session.id) { mutableStateOf(false) }
     var closedAt by remember { mutableStateOf(0L) }
@@ -750,10 +762,12 @@ private fun SessionRow(session: SessionInfo, selected: Boolean, running: Boolean
     ) {
         // Inside a project the title lines up with the project name; the icon is left for the running pulse.
         Box(Modifier.size(15.dp), contentAlignment = Alignment.Center) {
-            if (waiting) Box(Modifier.size(8.dp).clip(CircleShape).background(c.focus)) else if (running) Pulse(c.accent) else if (!nested) Icon(Icons.AutoMirrored.Outlined.Chat, null, Modifier.size(14.dp), tint = if (selected) c.muted else c.faint)
+            if (waiting) Box(Modifier.size(8.dp).clip(CircleShape).background(c.focus)) else if (running) Pulse(c.accent)
+            else if (unread) Box(Modifier.size(7.dp).clip(CircleShape).background(c.accent)) else if (!nested) Icon(Icons.AutoMirrored.Outlined.Chat, null, Modifier.size(14.dp), tint = if (selected) c.muted else c.faint)
         }
         Spacer(Modifier.width(9.dp))
-        Text(session.title.ifBlank { "Новый диалог" }, color = if (selected || !nested) c.text else c.text.copy(alpha = .86f), fontSize = 12.sp, lineHeight = 18.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+        Text(session.title.ifBlank { "Новый диалог" }, color = if (selected || !nested || unread) c.text else c.text.copy(alpha = .86f), fontSize = 12.sp, lineHeight = 18.sp,
+            fontWeight = if (unread) FontWeight.SemiBold else FontWeight.Normal, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
         if (project != null && !hovered && !menu) Text(project, color = c.faint, fontSize = 10.sp, lineHeight = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 70.dp).padding(start = 6.dp))
         Box(Modifier.width(44.dp), contentAlignment = Alignment.CenterEnd) {
             if (hovered || menu || selected || rowFocused) {

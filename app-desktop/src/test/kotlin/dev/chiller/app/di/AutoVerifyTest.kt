@@ -158,6 +158,7 @@ class AutoVerifyTest {
             assertEquals(2, checks.get(), "the failed check was repaired and checked again")
             assertTrue(Files.exists(project.resolve("file-2.txt")), "the repair turn ran in the background dialog")
             assertEquals(shown, controller.state.value.sessionId)
+            assertTrue(worked in controller.state.value.unreadSessions, "its result waits to be read")
             assertEquals("idle", controller.state.value.verify.status, "the shown dialog has no check of its own")
             withTimeout(10_000) { while (worked in controller.state.value.runningSessions) delay(20) }
             val journal = dev.chiller.sessions.JsonlEventStore(root.resolve("data").resolve("sessions")).read(worked)
@@ -166,6 +167,7 @@ class AutoVerifyTest {
             controller.selectSession(worked)
             assertEquals("passed", controller.state.value.verify.status)
             assertTrue(controller.state.value.notices.none { it.sessionId == worked })
+            assertTrue(worked !in controller.state.value.unreadSessions)
         } finally { controller.close(); server.stop(0) }
     }
 

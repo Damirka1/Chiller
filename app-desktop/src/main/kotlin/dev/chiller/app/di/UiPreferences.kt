@@ -20,6 +20,8 @@ data class UiPreferences(
     val windowWidth: Float = 1280f,
     val windowHeight: Float = 860f,
     val windowMaximized: Boolean = false,
+    /** Projects the user expanded (true) or collapsed (false) in the sidebar, by folder. */
+    val projectExpansion: Map<String, Boolean> = emptyMap(),
 )
 
 /** Stores non-secret appearance preferences separately from provider/session data. */
@@ -60,11 +62,13 @@ class UiPreferencesStore(private val directory: Path) {
         inspectorWidth = if (value.inspectorWidth.isFinite()) value.inspectorWidth.coerceIn(280f, 480f) else 348f,
         windowWidth = value.windowWidth.takeIf { it.isFinite() && it > 0f }?.coerceIn(320f, 16384f) ?: 1280f,
         windowHeight = value.windowHeight.takeIf { it.isFinite() && it > 0f }?.coerceIn(240f, 16384f) ?: 860f,
+        projectExpansion = value.projectExpansion.filterKeys { it.length in 1..1024 }.entries.toList().takeLast(MAX_PROJECTS).associate { it.toPair() },
     )
 
     private companion object {
         val THEMES = setOf("system", "light", "dark")
         val DENSITIES = setOf("normal", "compact")
         val LAYOUTS = setOf("focus", "studio")
+        const val MAX_PROJECTS = 200
     }
 }

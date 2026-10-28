@@ -143,7 +143,9 @@ data class DesktopState(val run: RunState = RunState(), val sessions: List<Sessi
     /** Dialogs whose run waits for the user's answer. */
     val waitingSessions: Set<String> = emptySet(),
     /** News from dialogs in the background, newest last. */
-    val notices: List<Notice> = emptyList())
+    val notices: List<Notice> = emptyList(),
+    /** Dialogs whose run or check finished while they were not on screen and that were not opened since. */
+    val unreadSessions: Set<String> = emptySet())
 
 class DesktopController(
     private val directory: Path, initialCredential: String? = LocalCredentials.load(), connectionChecker: ConnectionChecker? = null, catalogClient: ModelCatalogClient? = null,
@@ -753,7 +755,7 @@ class DesktopController(
     private suspend fun selectSessionLocked(id: String) {
         try {
             resetEngine()
-            _state.update { it.copy(notices = it.notices.filterNot { notice -> notice.sessionId == id }) }
+            _state.update { it.copy(notices = it.notices.filterNot { notice -> notice.sessionId == id }, unreadSessions = it.unreadSessions - id) }
             val history = events.read(id)
             // A dialog still running in the background is shown live from its engine, not restored from the journal.
             engines[id]?.let { engine -> return showEngine(engine, history) }
@@ -1051,7 +1053,8 @@ class DesktopController(
         if (_state.value.sessionId == engine.sessionId) return
         val title = _state.value.sessions.firstOrNull { it.id == engine.sessionId }?.title?.takeIf { it.isNotBlank() } ?: "Диалог"
         val notice = Notice(newId(), engine.sessionId, title, message, tone)
-        _state.update { state -> state.copy(notices = (state.notices.filterNot { it.sessionId == engine.sessionId } + notice).takeLast(MAX_NOTICES)) }
+        _state.update { state -> state.copy(notices = (state.notices.filterNot { it.sessionId == engine.sessionId } + notice).takeLast(MAX_NOTICES),
+            unreadSessions = if (tone == "attention") state.unreadSessions else state.unreadSessions + engine.sessionId) }
     }
 
     fun dismissNotice(id: String) { _state.update { state -> state.copy(notices = state.notices.filterNot { it.id == id }) } }

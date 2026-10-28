@@ -76,6 +76,8 @@ data class ProjectsModel(
     /** Dialogs whose run is in progress, shown or in the background, and those waiting for an answer. */
     val running: Set<String> = emptySet(),
     val waiting: Set<String> = emptySet(),
+    /** Dialogs with a result the user has not seen yet. */
+    val unread: Set<String> = emptySet(),
     val onStop: (String) -> Unit = {},
 )
 
@@ -107,6 +109,7 @@ internal fun LazyListScope.projectTreeItems(
             val activity = when {
                 group.sessions.any { it.id in model.waiting } -> ProjectActivity.WAITING
                 group.sessions.any { it.id in model.running } -> ProjectActivity.RUNNING
+                group.sessions.any { it.id in model.unread } -> ProjectActivity.UNREAD
                 else -> ProjectActivity.IDLE
             }
             Animated { ProjectRow(group, group.path == current, open, activity, enabled, reduced, model) { expanded[group.path] = !open } }
@@ -163,7 +166,7 @@ private fun NestedAction(title: String, icon: androidx.compose.ui.graphics.vecto
     }
 }
 
-private enum class ProjectActivity { IDLE, RUNNING, WAITING }
+private enum class ProjectActivity { IDLE, RUNNING, WAITING, UNREAD }
 
 @Composable
 private fun ProjectRow(group: ProjectGroup, current: Boolean, open: Boolean, activity: ProjectActivity, enabled: Boolean, reduced: Boolean, model: ProjectsModel, onToggle: () -> Unit) {
@@ -215,6 +218,7 @@ private fun ProjectRow(group: ProjectGroup, current: Boolean, open: Boolean, act
                     // Collapsed, the project still shows that one of its dialogs runs or waits for an answer.
                     activity == ProjectActivity.WAITING -> Box(Modifier.padding(end = 9.dp).size(8.dp).clip(androidx.compose.foundation.shape.CircleShape).background(c.focus))
                     activity == ProjectActivity.RUNNING -> Box(Modifier.padding(end = 9.dp)) { Pulse(c.accent) }
+                    activity == ProjectActivity.UNREAD && !open -> Box(Modifier.padding(end = 9.dp).size(7.dp).clip(androidx.compose.foundation.shape.CircleShape).background(c.accent))
                     !exists -> Icon(Icons.Outlined.WarningAmber, "Папка не найдена", Modifier.padding(end = 7.dp).size(13.dp), tint = c.negative)
                     branch != null -> Text(branch!!, color = c.faint, fontSize = 10.sp, lineHeight = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 76.dp).padding(end = 7.dp))
                     group.pinned -> Icon(Icons.Outlined.PushPin, "Закреплён", Modifier.padding(end = 8.dp).size(11.dp), tint = c.faint)
@@ -330,11 +334,12 @@ private fun FolderMenuRow(path: String, selected: Boolean, hint: String?, onClic
 }
 
 /**
- * Ctrl+P: jump to a project by typing part of its name. Enter starts a new dialog there; the project's earlier
- * dialogs are right under it in the sidebar.
+ * Ctrl+P: jump to a project by typing part of its name. Enter starts a new dialog there, Shift+Enter opens the
+ * project's latest dialog.
  */
 @Composable
-internal fun ProjectSwitcher(projects: List<ProjectGroup>, current: String?, onPick: (String?) -> Unit, onChoose: () -> Unit, onDismiss: () -> Unit) {
+internal fun ProjectSwitcher(projects: List<ProjectGroup>, current: String?, onPick: (String?) -> Unit, onChoose: () -> Unit, onDismiss: () -> Unit,
+    onOpenDialog: (String) -> Unit = {}) {
     val c = LocalChillerPalette.current
     var query by remember { mutableStateOf("") }
     var highlight by remember { mutableIntStateOf(0) }
@@ -369,7 +374,11 @@ internal fun ProjectSwitcher(projects: List<ProjectGroup>, current: String?, onP
                     when (event.key) {
                         Key.DirectionDown -> { highlight = (highlight + 1) % rows; true }
                         Key.DirectionUp -> { highlight = (highlight - 1 + rows) % rows; true }
-                        Key.Enter, Key.NumPadEnter -> { pick(highlight); true }
+                        Key.Enter, Key.NumPadEnter -> {
+                            val latest = matches.getOrNull(highlight)?.sessions?.firstOrNull()
+                            if (event.isShiftPressed && latest != null) onOpenDialog(latest.id) else pick(highlight)
+                            true
+                        }
                         Key.Escape -> { onDismiss(); true }
                         else -> false
                     }
@@ -419,7 +428,7 @@ internal fun ProjectSwitcher(projects: List<ProjectGroup>, current: String?, onP
                 }
             }
             Box(Modifier.fillMaxWidth().height(1.dp).background(c.border))
-            Text("↑↓ — выбрать · Enter — новый диалог в проекте", color = c.faint, fontSize = 11.sp, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+            Text("↑↓ — выбрать · Enter — новый диалог · Shift+Enter — последний диалог", color = c.faint, fontSize = 11.sp, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
         }
     }
 }

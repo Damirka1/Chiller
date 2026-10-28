@@ -27,22 +27,25 @@ class ProjectWorkflowUiTest {
     )
     private val calls = mutableListOf<String>()
 
+    private val saved = mutableListOf<UiPreferences>()
+
     private fun ComposeUiTest.app(
         workspace: String? = shop, projects: ProjectsModel = model(), notices: List<Notice> = emptyList(), selected: String = "fresh",
+        preferences: UiPreferences = UiPreferences(theme = "light", reducedMotion = true),
     ) = setContent {
         ChillerApp(
             RunState(), sessions, selected, workspace, isDemo = false,
             providerModel = "fake-model", providerBaseUrl = "http://localhost:8000/v1", thinkingEnabled = false, apiKeyConfigured = true,
             onSend = { _, _, id -> SendReceipt(false, selected, id) }, onStop = {}, onNewSession = { calls += "new" }, onSelectSession = { calls += "select:$it" },
             onChooseWorkspace = { calls += "choose" }, onConfigureProvider = { _, _, _, _ -> null }, onAnswerQuestion = {}, onUndo = {},
-            onAllowProcessesChange = {}, allowProcesses = false, preferences = UiPreferences(theme = "light", reducedMotion = true),
+            onAllowProcessesChange = {}, allowProcesses = false, preferences = preferences, onPreferences = { saved += it },
             recentWorkspaces = listOf(shop, api), onOpenWorkspace = { calls += "open:$it" }, onCloseWorkspace = { calls += "close" },
             projects = projects, notices = notices, onContinueElsewhere = { calls += "continue"; null }, onOpenNotice = { calls += "notice:${it.sessionId}" }, onDismissNotice = { calls += "dismiss:$it" },
         )
     }
 
-    private fun model(folderLocked: Boolean = false, missing: Boolean = false, running: Set<String> = emptySet()) = ProjectsModel(
-        folderLocked = folderLocked, workspaceMissing = missing, running = running,
+    private fun model(folderLocked: Boolean = false, missing: Boolean = false, running: Set<String> = emptySet(), unread: Set<String> = emptySet()) = ProjectsModel(
+        folderLocked = folderLocked, workspaceMissing = missing, running = running, unread = unread,
         onNewIn = { calls += "newIn:${it?.let(::folderName)}" }, onPin = { path, pinned -> calls += "pin:${folderName(path)}:$pinned" },
         onRemove = { calls += "remove:${folderName(it)}" }, onRelocate = { calls += "relocate:${folderName(it)}" }, onStop = { calls += "stop:$it" },
     )
@@ -68,6 +71,21 @@ class ProjectWorkflowUiTest {
         assertEquals("newIn:null", calls.last())
     }
 
+    @Test fun projectExpansionComesFromPreferencesAndIsSaved() = runComposeUiTest {
+        app(preferences = UiPreferences(theme = "light", reducedMotion = true, projectExpansion = mapOf(api to true, shop to false)))
+        onNodeWithText("Тесты для парсера CSV").assertExists()
+        onNodeWithText("Починить расчёт скидки").assertDoesNotExist()
+        onAllNodesWithText("demo-shop").onFirst().performClick()
+        onNodeWithText("Починить расчёт скидки").assertExists()
+        waitUntil { saved.lastOrNull()?.projectExpansion == mapOf(api to true, shop to true) }
+    }
+
+    @Test fun unreadDialogStandsOutUntilOpened() = runComposeUiTest {
+        app(projects = model(unread = setOf("s3")))
+        onNodeWithText("Как работает Flow").assertExists()
+        onAllNodesWithText("Как работает Flow").assertCountEquals(1)
+    }
+
     @Test fun ctrlPJumpsToAProjectByName() = runComposeUiTest {
         app()
         onRoot().performKeyInput { keyDown(Key.CtrlLeft); pressKey(Key.P); keyUp(Key.CtrlLeft) }
@@ -75,6 +93,11 @@ class ProjectWorkflowUiTest {
         onNodeWithContentDescription("Поиск проекта").performKeyInput { pressKey(Key.Enter) }
         assertEquals("newIn:backend-api", calls.last())
         onNodeWithContentDescription("Поиск проекта").assertDoesNotExist()
+        // Shift+Enter opens the project's latest dialog instead.
+        onRoot().performKeyInput { keyDown(Key.CtrlLeft); pressKey(Key.P); keyUp(Key.CtrlLeft) }
+        onNodeWithContentDescription("Поиск проекта").performTextInput("back")
+        onNodeWithContentDescription("Поиск проекта").performKeyInput { keyDown(Key.ShiftLeft); pressKey(Key.Enter); keyUp(Key.ShiftLeft) }
+        assertEquals("select:s2", calls.last())
     }
 
     @Test fun folderChipSwapsTheFolderOrDropsIt() = runComposeUiTest {
