@@ -371,7 +371,8 @@ fun ChillerApp(
                         }
                     }, onExport = onExportSession, connection = connection, width = 248f * density.fontScale.coerceIn(1f, 1.2f),
                     running = active, searchFocus = sidebarSearch, titleBar = titleBar,
-                    settingsOpen = settings && !active, settingsSection = settingsSection, onSettingsSection = { settingsSection = it }, onCloseSettings = { settings = false }, version = settingsData?.version)
+                    settingsOpen = settings && !active, settingsSection = settingsSection, onSettingsSection = { settingsSection = it }, onCloseSettings = { settings = false }, version = settingsData?.version,
+                    onOpenPath = { onOpenWorkspace(it) })
                 Box(Modifier.width(1.dp).fillMaxHeight().background(c.border.copy(alpha = .7f)))
                 BoxWithConstraints(Modifier.weight(1f).fillMaxHeight()) {
                     val compact = maxWidth < 860.dp || density.fontScale > 1.3f
@@ -598,6 +599,8 @@ private fun Sidebar(
     running: Boolean, searchFocus: FocusRequester, titleBar: TitleBarSpec?,
     settingsOpen: Boolean = false, settingsSection: SettingsSection = SettingsSection.CONNECTION,
     onSettingsSection: (SettingsSection) -> Unit = {}, onCloseSettings: () -> Unit = {}, version: String? = null,
+    /** A folder dropped on the sidebar opens as a project. */
+    onOpenPath: (String) -> Unit = {},
 ) {
     val c = LocalChillerPalette.current
     var query by remember { mutableStateOf("") }
@@ -607,7 +610,10 @@ private fun Sidebar(
     val reduced = LocalChillerReducedMotion.current
     val expanded = remember { mutableStateMapOf<String, Boolean>() }
     val showAll = remember { mutableStateMapOf<String, Boolean>() }
-    Column(Modifier.width(width.dp).fillMaxHeight().background(c.sidebar).padding(horizontal = 12.dp)) {
+    var dropping by remember { mutableStateOf(false) }
+    val dropTarget = remember(onOpenPath) { folderDropTarget(onOpenPath) { dropping = it } }
+    Box(Modifier.width(width.dp).fillMaxHeight().dragAndDropTarget(shouldStartDragAndDrop = { !settingsOpen }, target = dropTarget)) {
+    Column(Modifier.fillMaxSize().background(c.sidebar).padding(horizontal = 12.dp)) {
         // Room for the floating traffic lights; the strip moves the window like a title bar.
         val trafficLights = titleBar != null && titleBar.trafficLightsWidth > 0.dp
         if (trafficLights) titleBar!!.dragArea(Modifier.fillMaxWidth().height(titleBar.height))
@@ -680,6 +686,18 @@ private fun Sidebar(
         }
         }
         }
+    }
+    if (dropping) Box(
+        Modifier.matchParentSize().padding(8.dp).clip(RoundedCornerShape(12.dp)).background(c.sidebar.copy(alpha = .92f))
+            .border(2.dp, c.accent.copy(alpha = .6f), RoundedCornerShape(12.dp)),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Icon(Icons.Outlined.CreateNewFolder, null, Modifier.size(24.dp), tint = c.accent)
+            Spacer(Modifier.height(8.dp))
+            Text("Отпустите, чтобы открыть проект", color = c.text, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+        }
+    }
     }
 }
 

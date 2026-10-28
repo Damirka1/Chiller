@@ -130,8 +130,9 @@ internal fun StartScreen(
     }
 }
 
+/** Accepts a dropped folder (or a file's folder); the start screen and the sidebar open it as a project. */
 @OptIn(ExperimentalComposeUiApi::class)
-private fun folderDropTarget(onOpenPath: (String) -> Unit, onActive: (Boolean) -> Unit) = object : DragAndDropTarget {
+internal fun folderDropTarget(onOpenPath: (String) -> Unit, onActive: (Boolean) -> Unit) = object : DragAndDropTarget {
     override fun onEntered(event: DragAndDropEvent) = onActive(true)
     override fun onExited(event: DragAndDropEvent) = onActive(false)
     override fun onEnded(event: DragAndDropEvent) = onActive(false)
