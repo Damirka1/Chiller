@@ -556,6 +556,11 @@ private fun AppearanceSection(data: SettingsData, actions: SettingsActions) {
         Choice("Раскладка по умолчанию", listOf("focus" to "Focus", "studio" to "Studio"), p.layout) { actions.preferences(p.copy(layout = it)) }
         SettingToggle("Уменьшить движение", "Без анимаций появления, переливов и мигающего курсора", p.reducedMotion) { actions.preferences(p.copy(reducedMotion = it)) }
     }
+    Card {
+        SectionTitle("Уведомления", "О диалогах в фоне Chiller сообщает внутри окна. Системные уведомления приходят, только когда окно не в фокусе.")
+        SettingToggle("Системные уведомления", "Задача завершена, проверка пройдена или агент ждёт ответа. Для них нужна иконка Chiller в области уведомлений.",
+            p.systemNotifications) { actions.preferences(p.copy(systemNotifications = it)) }
+    }
 }
 
 @Composable

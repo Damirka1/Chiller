@@ -17,6 +17,9 @@ class UiPreferencesTest {
         assertEquals(200, loaded.size)
         assertEquals(true, loaded["/p/250"])
         assertFalse("" in loaded)
+        assertTrue(store.load().systemNotifications, "system notifications are on unless turned off")
+        store.save(UiPreferences(systemNotifications = false))
+        assertFalse(store.load().systemNotifications)
     }
 
     @Test

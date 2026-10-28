@@ -20,6 +20,8 @@ data class UiPreferences(
     val windowWidth: Float = 1280f,
     val windowHeight: Float = 860f,
     val windowMaximized: Boolean = false,
+    /** Background news also as system notifications while the window is not in focus; needs an icon in the tray. */
+    val systemNotifications: Boolean = true,
     /** Projects the user expanded (true) or collapsed (false) in the sidebar, by folder. */
     val projectExpansion: Map<String, Boolean> = emptyMap(),
 )

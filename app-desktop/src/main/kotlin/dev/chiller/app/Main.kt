@@ -48,6 +48,18 @@ private fun chillerApplication() = application {
         value = dev.chiller.app.di.UiPreferencesStore(directory).load()
     }
     val initialPreferences = savedPreferences ?: return@application
+    // Background news reach the system while the window is not in focus; the tray icon exists only while they are on.
+    val trayState = rememberTrayState()
+    val raise = remember { MutableSharedFlow<String?>(extraBufferCapacity = 4) }
+    var lastNotice by remember { mutableStateOf<String?>(null) }
+    if (!preview && state.uiPreferences.systemNotifications && isTraySupported) Tray(
+        icon = androidx.compose.ui.res.painterResource("chiller-icon.png"), state = trayState, tooltip = "Chiller",
+        onAction = { raise.tryEmit(lastNotice) },
+        menu = {
+            Item("Открыть Chiller") { raise.tryEmit(null) }
+            Item("Выход") { scope.launch { controller.close(); exitApplication() } }
+        },
+    )
     val windowState = rememberWindowState(
         width = (if (preview) System.getenv("CHILLER_PREVIEW_WIDTH")?.toIntOrNull()?.coerceIn(800, 1800)?.toFloat() ?: 1280f else initialPreferences.windowWidth).dp,
         height = (if (preview) System.getenv("CHILLER_PREVIEW_HEIGHT")?.toIntOrNull()?.coerceIn(600, 1200)?.toFloat() ?: 860f else initialPreferences.windowHeight).dp,
@@ -90,6 +102,25 @@ private fun chillerApplication() = application {
         }
         val macTitleBar = remember(mac) { if (!mac) null else TitleBarSpec(dragArea = { modifier -> WindowDraggableArea(modifier) { androidx.compose.foundation.layout.Box(androidx.compose.ui.Modifier.fillMaxSize()) } }) }
         // A finished task while the window is in the background asks for attention once (Dock bounce / taskbar flash).
+        // Clicking the system notification or the tray icon brings the window back, with the dialog the news was about.
+        LaunchedEffect(Unit) {
+            raise.collect { sessionId ->
+                if (windowState.isMinimized) windowState.isMinimized = false
+                window.toFront(); window.requestFocus()
+                if (sessionId != null) controller.selectSession(sessionId)
+            }
+        }
+        var announced by remember { mutableStateOf(emptySet<String>()) }
+        LaunchedEffect(state.notices) {
+            val fresh = state.notices.filter { it.id !in announced }
+            announced = state.notices.map { it.id }.toSet()
+            if (preview || !state.uiPreferences.systemNotifications || window.isActive) return@LaunchedEffect
+            fresh.lastOrNull()?.let { notice ->
+                lastNotice = notice.sessionId
+                val type = when (notice.tone) { "negative" -> Notification.Type.Error; "attention" -> Notification.Type.Warning; else -> Notification.Type.Info }
+                trayState.sendNotification(Notification(notice.title, notice.message, type))
+            }
+        }
         // A background dialog finishing does the same.
         var backgroundRuns by remember { mutableStateOf(emptySet<String>()) }
         LaunchedEffect(state.runningSessions) {
