@@ -22,6 +22,29 @@ class PendingQuestions : InteractionBroker {
     fun cancel() { pending?.cancel() }
 }
 
+/**
+ * The file change waiting for the user's decision. Approving "the rest of this run" lets later changes of the same
+ * run through without asking; the next run asks again.
+ */
+class PendingApprovals : ApprovalGate {
+    private val _request = MutableStateFlow<ApprovalRequest?>(null)
+    val request: StateFlow<ApprovalRequest?> = _request.asStateFlow()
+    private var pending: CompletableDeferred<Boolean>? = null
+    @Volatile private var trustedRun: String? = null
+    override suspend fun approve(request: ApprovalRequest): Boolean {
+        if (request.runId == trustedRun) return true
+        check(pending == null) { "A change is already waiting for approval" }
+        val decision = CompletableDeferred<Boolean>()
+        pending = decision; _request.value = request
+        return try { decision.await() } finally { pending = null; _request.value = null }
+    }
+    fun decide(approved: Boolean, restOfRun: Boolean = false) {
+        if (approved && restOfRun) trustedRun = _request.value?.runId
+        pending?.complete(approved)
+    }
+    fun cancel() { pending?.cancel() }
+}
+
 private class RunStats {
     private val startedAt = System.nanoTime()
     var rounds = 0
@@ -61,6 +84,8 @@ class AgentCoordinator(
     private val clock: java.time.Clock = java.time.Clock.systemDefaultZone(),
     /** The user's OS and how to start commands on it; see [hostEnvironment]. */
     private val environment: String = hostEnvironment(),
+    /** When set, every file change waits for the user's yes or no before it runs. */
+    private val approvals: ApprovalGate? = null,
 ) {
     private val json = Json { encodeDefaults = true; ignoreUnknownKeys = true }
     private val _state = MutableStateFlow(RunState())
@@ -277,15 +302,20 @@ class AgentCoordinator(
      */
     private suspend fun answerStoppedQuestions() {
         val open = _state.value.activities.filter { it.status in setOf("running", "executing", "preparing") }
-        if (open.isEmpty() || open.any { it.name != "ask_user" || it.toolCallId == null }) return
+        // A change still waiting for approval was not written, so its outcome is known too.
+        if (open.isEmpty() || open.any { (it.name != "ask_user" && it.toolCallId !in awaitingApproval) || it.toolCallId == null }) return
         val pending = unresolvedToolCalls(_state.value.messages).map { it.id }.toSet()
         if (open.any { it.toolCallId !in pending }) return
-        val result = ToolResult.failure("CANCELLED", "The user stopped the run without answering this question")
         open.forEach { question ->
+            val result = ToolResult.failure("CANCELLED", if (question.name == "ask_user") "The user stopped the run without answering this question"
+                else "The user stopped the run before approving this change; nothing was written")
             activity(question.copy(status = "cancelled", output = json.encodeToString(result)))
             appendMessage(AgentMessage("tool", json.encodeToString(result), toolCallId = question.toolCallId))
         }
     }
+
+    /** Calls waiting for the user's approval right now; nothing of theirs has run. */
+    private val awaitingApproval: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
 
     private suspend fun appendMessage(message: AgentMessage) {
         events.append(sessionId, "message", json.encodeToJsonElement(message).jsonObject)
@@ -616,6 +646,16 @@ class AgentCoordinator(
                 else ToolResult.failure("PERMISSION_DENIED", "Tool ${call.name} is unavailable in $mode mode or without its permission", recovery = "Use one of: ${enabled.joinToString { it.name }}")
         if (allowed.effect == ToolEffect.PROCESS && !allowProcesses) return ToolResult.failure("PERMISSION_DENIED", "Process permission was not granted",
             recovery = "Do not run commands in this task. Read files with read_file or search_text instead, and tell the user in your answer which command would check the result")
+        if (approvals != null && allowed.effect == ToolEffect.FILE_WRITE) {
+            val arguments = runCatching { json.parseToJsonElement(call.arguments).jsonObject }.getOrDefault(JsonObject(emptyMap()))
+            // Kept in the set if the run is stopped while waiting: stopping then settles the call as not written.
+            awaitingApproval += call.id
+            val approved = approvals.approve(ApprovalRequest(runId = runId, callId = call.id, tool = call.name, arguments = arguments))
+            awaitingApproval -= call.id
+            events.append(sessionId, "tool.approval", buildJsonObject { put("callId", call.id); put("approved", approved) })
+            if (!approved) return ToolResult.failure("DECLINED_BY_USER", "The user declined this change; nothing was written",
+                recovery = "Do not send the same change again. Ask the user what to do differently, or continue without it")
+        }
         return try {
             tools.execute(call, ToolContext(sessionId, runId, mode, allowProcesses, allowNetwork, allowScreenshots))
         } catch (cancelled: CancellationException) {

@@ -207,6 +207,7 @@ private fun chillerApplication() = application {
             onDeleteMessage = controller::deleteMessage,
             onRecoverInterrupted = { scope.launch { controller.recoverInterrupted() } },
             onContinueElsewhere = { chooseDirectory(window, null, mac)?.let { path -> controller.continueInFolder(path) } },
+            editApproval = dev.chiller.app.ui.EditApproval(state.settings.confirmEdits, { value -> scope.launch { controller.setConfirmEdits(value) } }, controller::decideApproval),
             notices = state.notices, onOpenNotice = { notice -> scope.launch { controller.selectSession(notice.sessionId) } }, onDismissNotice = controller::dismissNotice,
             projects = dev.chiller.app.ui.ProjectsModel(
                 pinned = state.settings.pinnedWorkspaces, hidden = state.settings.hiddenWorkspaces,

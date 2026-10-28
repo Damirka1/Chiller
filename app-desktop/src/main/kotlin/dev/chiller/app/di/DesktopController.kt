@@ -44,6 +44,8 @@ data class DesktopSettings(val baseUrl: String = "https://api.deepseek.com", val
     val pinnedWorkspaces: List<String> = emptyList(),
     /** Folders removed from the project list; their dialogs stay. Opening the folder again shows it again. */
     val hiddenWorkspaces: List<String> = emptyList(),
+    /** File changes in a project wait for the user's yes or no before they are written. */
+    val confirmEdits: Boolean = false,
     /** MCP servers the user connected; their tools join every dialog's tools while the server runs. */
     val mcpServers: List<dev.chiller.tools.McpServerConfig> = emptyList())
 
@@ -208,6 +210,7 @@ class DesktopController(
     private class Engine(
         val sessionId: String, val root: String?, val coordinator: AgentCoordinator, val workspace: LocalWorkspace, val processes: ProcessService,
         val code: LocalReadOnlyCodeService, val questions: PendingQuestions, val supervisor: SubagentService, val profile: String, val jobs: List<Job>,
+        val approvals: PendingApprovals?,
     ) {
         /** Agent settings changed since it was built: the next message rebuilds it, history restored from the journal. */
         @Volatile var stale = false
@@ -822,7 +825,7 @@ class DesktopController(
     }
 
     private fun showEngine(engine: Engine, history: List<StoredEvent>) {
-        val run = engine.coordinator.state.value.let { run -> run.copy(question = run.question ?: engine.questions.question.value) }
+        val run = engine.coordinator.state.value.let { run -> run.copy(question = run.question ?: engine.questions.question.value, approval = engine.approvals?.request?.value) }
         _state.update { it.copy(sessionId = engine.sessionId, settings = it.settings.copy(workspace = engine.root), run = run, verify = engine.verify, outside = null,
             undoneChanges = undoneChangeIds(history), folderLocked = folderLocked(history), workspaceMissing = false, activeProfile = engine.profile, worktree = worktreeOf(history, engine.root),
             subagents = engine.supervisor.state.value) }
@@ -1033,6 +1036,17 @@ class DesktopController(
         } catch (_: Exception) { showError("Не удалось сохранить экспорт. Выберите доступную папку.") }
     }
     fun answer(text: String) { shownEngine?.questions?.answer(text) }
+
+    /** The user's decision on the shown dialog's waiting change; [restOfRun] approves this run's later changes too. */
+    fun decideApproval(approved: Boolean, restOfRun: Boolean = false) { shownEngine?.approvals?.decide(approved, restOfRun) }
+
+    /** Turns asking before each file change on or off; dialogs pick it up from their next message. */
+    suspend fun setConfirmEdits(value: Boolean) = commands.withLock {
+        val settings = _state.value.settings.copy(confirmEdits = value)
+        _state.update { it.copy(settings = settings) }
+        saveSettings(settings)
+        engines.values.forEach { it.stale = true }
+    }
     fun allowProcesses(value: Boolean) {
         scope.launch {
             commands.withLock {
@@ -1263,6 +1277,8 @@ class DesktopController(
         workspace.recoverPending()
         val processes = processServiceFactory(root)
         val questions = PendingQuestions()
+        // Asking before each change applies to project files; a dialog without a folder only writes its own pictures.
+        val approvals = if (s.settings.confirmEdits && !folderless && providerOverride == null) PendingApprovals() else null
         val code = LocalReadOnlyCodeService(workspace.root)
         // generate_image uses the image model on the same endpoint and the same origin-bound key as the chat model.
         val imageOrigin = originOf(s.settings.baseUrl)
@@ -1305,6 +1321,7 @@ class DesktopController(
         val engine = AgentCoordinator(provider, tools, events, processes, s.sessionId, modelOverride ?: s.settings.model, s.settings.thinking, maxRounds = options.effectiveMaxRounds, maxOutputTokens = maxOutput,
             projectInstructions = instructions?.text, traces = traceSink(s.sessionId), subagents = supervisor.takeIf { helpers }, systemPrompt = if (folderless) ModelProfiles.CHAT_PROMPT else modelProfile.systemPrompt, projectMap = map, scope = scope,
             // With a cost budget the prompt must stay within the input ceiling its reservations assume.
+            approvals = approvals,
             contextWindowTokens = (s.catalog.models.firstOrNull { it.id == (modelOverride ?: s.settings.model) }?.contextWindow ?: 32_768).let { window ->
                 if (cost == null) s.catalog.models.firstOrNull { it.id == (modelOverride ?: s.settings.model) }?.contextWindow
                 else minOf(window, s.settings.costBudget.inputTokenCeiling + maxOutput.coerceAtMost(window / 2))
@@ -1320,15 +1337,19 @@ class DesktopController(
         val id = s.sessionId
         // Only the shown dialog drives the screen; every dialog reports whether it runs or waits for an answer.
         var asked = false
-        val observer = scope.launch(start = CoroutineStart.LAZY) { combine(engine.state, questions.question) { run, question -> run.copy(question = run.question ?: question) }.collect { run ->
+        val waitingChange = approvals?.request ?: kotlinx.coroutines.flow.flowOf(null)
+        var askedApproval = false
+        val observer = scope.launch(start = CoroutineStart.LAZY) { combine(engine.state, questions.question, waitingChange) { run, question, approval -> run.copy(question = run.question ?: question, approval = approval) }.collect { run ->
             val answered = live && run.status == "completed" && previous in ACTIVE_STATUSES
             val finished = previous in ACTIVE_STATUSES && run.status in TERMINAL_STATUSES
             previous = run.status
             if (run.question != null && !asked) engines[id]?.let { notice(it, "Ждёт вашего ответа", "attention") }
             asked = run.question != null
+            if (run.approval != null && !askedApproval) engines[id]?.let { notice(it, "Ждёт подтверждения правки", "attention") }
+            askedApproval = run.approval != null
             _state.update {
                 val running = if (run.status in ACTIVE_STATUSES) it.runningSessions + id else it.runningSessions - id
-                val waiting = if (run.question != null && run.status in ACTIVE_STATUSES) it.waitingSessions + id else it.waitingSessions - id
+                val waiting = if ((run.question != null || run.approval != null) && run.status in ACTIVE_STATUSES) it.waitingSessions + id else it.waitingSessions - id
                 val connection = if (answered && it.connection.status in setOf("unverified", "reachable")) ConnectionState("verified", "Подтверждено ответом модели", Instant.now().toString()) else it.connection
                 if (it.sessionId == id) it.copy(run = run, connection = connection, runningSessions = running, waitingSessions = waiting)
                 else it.copy(connection = connection, runningSessions = running, waitingSessions = waiting)
@@ -1336,7 +1357,7 @@ class DesktopController(
             if (finished) scope.launch { releaseBackground(id) }
         } }
         val subagentObserver = scope.launch(start = CoroutineStart.LAZY) { supervisor.state.collect { list -> _state.update { if (it.sessionId == id) it.copy(subagents = list) else it } } }
-        engines[id] = Engine(id, workspace.root.takeUnless { folderless }, engine, workspace, processes, code, questions, supervisor, modelProfile.id, listOf(observer, subagentObserver))
+        engines[id] = Engine(id, workspace.root.takeUnless { folderless }, engine, workspace, processes, code, questions, supervisor, modelProfile.id, listOf(observer, subagentObserver), approvals)
         observer.start(); subagentObserver.start()
         return engine
     }

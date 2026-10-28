@@ -184,6 +184,8 @@ fun ChillerApp(
     projects: ProjectsModel = ProjectsModel(),
     /** News from dialogs in the background; a click opens the dialog. */
     notices: List<dev.chiller.app.di.Notice> = emptyList(), onOpenNotice: (dev.chiller.app.di.Notice) -> Unit = {}, onDismissNotice: (String) -> Unit = {},
+    /** Whether file changes wait for the user's yes or no, with the toggle and the decision. */
+    editApproval: EditApproval = EditApproval(),
     /** Picks a folder and opens a dialog there that continues the shown one; returns its id and opening draft. */
     onContinueElsewhere: (suspend () -> Pair<String, String>?)? = null,
 ) {
@@ -333,7 +335,7 @@ fun ChillerApp(
     LaunchedEffect(dark, titleBar) { titleBar?.onDark?.invoke(dark) }
     // Provider-given model names (an optional extension of /models), for the composer's model button.
     val modelNames = remember(catalog.models) { catalog.models.mapNotNull { m -> m.displayName?.takeIf { it.isNotBlank() }?.let { m.id to it } }.toMap() }
-    ChillerTheme(darkTheme = dark, reducedMotion = reducedMotion, compact = compactDensity) { CompositionLocalProvider(LocalModelNames provides modelNames, LocalFilePreview provides onPreviewFile) {
+    ChillerTheme(darkTheme = dark, reducedMotion = reducedMotion, compact = compactDensity) { CompositionLocalProvider(LocalModelNames provides modelNames, LocalFilePreview provides onPreviewFile, LocalEditApproval provides editApproval) {
         val c = LocalChillerPalette.current
         val menu = titleBar?.menu
         BoxWithConstraints(Modifier.fillMaxSize().then(titleBar?.hitTest ?: Modifier).background(c.canvas).focusRequester(rootFocus).chillerKeyboardFocusTracking().onPreviewKeyEvent {
@@ -388,7 +390,7 @@ fun ChillerApp(
                     Column(Modifier.fillMaxSize()) {
                         Toolbar(
                             titleBar, leadingInset = titleBar != null && titleBar.trafficLightsWidth > 0.dp && !showSidebar,
-                            sessions.firstOrNull { it.id == selectedSessionId }?.title, workspacePath, layout, active, state.status, state.question != null,
+                            sessions.firstOrNull { it.id == selectedSessionId }?.title, workspacePath, layout, active, state.status, state.question != null || state.approval != null,
                             onLayout = { updateView(view.copy(layout = it.name.lowercase())) }, onSidebar = { sidebar = !sidebar }, onSettings = { openSettings() },
                             canConfigure = !active, compact = compact, compactChanges = showCompactChanges,
                             onCompactChanges = { showCompactChanges = !showCompactChanges },
@@ -1141,7 +1143,8 @@ private fun ComposerToolbar(
                         Spacer(Modifier.height(6.dp))
                     }
                 } else Box {
-                    ChillerControl(if (mode == ExecutionMode.PLAN) "План" else "Изменения", toggleMode, icon = if (mode == ExecutionMode.PLAN) Icons.Outlined.Lightbulb else Icons.Outlined.Edit, enabled = !running, style = if (modeMenu) ControlStyle.SELECTED else ControlStyle.QUIET)
+                    val confirming = LocalEditApproval.current.enabled
+                    ChillerControl(if (mode == ExecutionMode.PLAN) "План" else "Изменения", toggleMode, icon = if (mode == ExecutionMode.PLAN) Icons.Outlined.Lightbulb else if (confirming) Icons.Outlined.FactCheck else Icons.Outlined.Edit, enabled = !running, style = if (modeMenu) ControlStyle.SELECTED else ControlStyle.QUIET)
                     if (modeMenu) ChillerPopover(onDismiss = { modeMenu = false; modeClosedAt = System.currentTimeMillis() }, width = modeMenuWidth) {
                         Spacer(Modifier.height(6.dp))
                         MenuRow("План", { onMode(ExecutionMode.PLAN); modeMenu = false }, subtitle = "Только чтение, без изменений", icon = Icons.Outlined.Lightbulb, selected = mode == ExecutionMode.PLAN)
@@ -1154,6 +1157,14 @@ private fun ComposerToolbar(
                                     Text("Запуск тестов и сборки", color = c.faint, fontSize = 11.sp, lineHeight = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 }
                                 ChillerToggle(allowProcesses, { onAllow(it) }, "Команды процессов", enabled = !running)
+                            }
+                            val approval = LocalEditApproval.current
+                            Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 14.dp, top = 2.dp, bottom = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Column(Modifier.weight(1f)) {
+                                    Text("Подтверждать правки", color = c.text, fontSize = 13.sp, lineHeight = 18.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Text("Показывать каждую правку до записи", color = c.faint, fontSize = 11.sp, lineHeight = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                }
+                                ChillerToggle(approval.enabled, { approval.onChange(it) }, "Подтверждать правки", enabled = !running)
                             }
                         }
                         MenuDivider()
@@ -1300,9 +1311,10 @@ private fun Conversation(state: RunState, reduced: Boolean, onAnswer: (String) -
             if (state.status in setOf("preparing", "streaming", "executing")) item(key = "run-status") {
                 val label = runProgressLabel(state).orEmpty()
                 Row(entryModifier("run-status").padding(start = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                    if (state.question == null) Pulse(c.accent) else Icon(Icons.Outlined.Chat, null, Modifier.size(15.dp), tint = c.accent)
+                    val waiting = state.question != null || state.approval != null
+                    if (!waiting) Pulse(c.accent) else Icon(if (state.approval != null) Icons.Outlined.FactCheck else Icons.Outlined.Chat, null, Modifier.size(15.dp), tint = c.accent)
                     Spacer(Modifier.width(10.dp))
-                    if (state.question == null) ShimmerText(label, reduced) else Text(label, color = c.accent, fontSize = 12.sp)
+                    if (!waiting) ShimmerText(label, reduced) else Text(if (state.approval != null) "Ждёт подтверждения правки" else label, color = c.accent, fontSize = 12.sp)
                 }
             }
             // A turn that did something ends with a card of facts; a plain answer keeps the short status line.
@@ -1317,6 +1329,10 @@ private fun Conversation(state: RunState, reduced: Boolean, onAnswer: (String) -
                 if (state.status in setOf("completed", "failed", "cancelled") && state.modelRounds > 0) item(key = "run-summary") { Box(entryModifier("run-summary")) { RunSummaryLine(state) } }
             }
             state.question?.let { q -> item(key = "question-${q.id}") { Box(entryModifier("question-${q.id}")) { Question(q, onAnswer, state.status != "interrupted") } } }
+            state.approval?.let { request -> item(key = "approval-${request.id}") {
+                val approval = LocalEditApproval.current
+                Box(entryModifier("approval-${request.id}")) { ApprovalCard(request, approval.onDecide) }
+            } }
             state.error?.let { error -> item(key = "error") { Column(entryModifier("error")) { Row(Modifier.fillMaxWidth().padding(8.dp), horizontalArrangement = Arrangement.spacedBy(9.dp)) {
                 Icon(Icons.Outlined.ErrorOutline, null, Modifier.size(16.dp), tint = c.negative)
                 Text(runErrorDescription(error), color = c.negative, fontSize = 12.sp, lineHeight = 20.sp)

@@ -547,6 +547,59 @@ class AgentCoordinatorTest {
         assertTrue(tools.executed.isEmpty())
     }
 
+    @Test fun fileChangesWaitForTheUsersDecision() = runTest {
+        val written = mutableListOf<String>()
+        val tools = object : ToolExecutor {
+            override val specs = listOf(ToolSpec("write", "write", JsonObject(emptyMap()), ToolEffect.FILE_WRITE), ToolSpec("read", "read", JsonObject(emptyMap()), ToolEffect.READ))
+            override suspend fun execute(call: ToolCall, context: ToolContext): ToolResult { if (call.name == "write") written += call.id; return ToolResult(true) }
+        }
+        var round = 0
+        val provider = ScriptedProvider { flow {
+            val calls = when (round++) {
+                0 -> listOf(ToolCall("r1", "read", "{}"), ToolCall("w1", "write", """{"path":"a.txt"}"""))
+                1 -> listOf(ToolCall("w2", "write", """{"path":"b.txt"}"""))
+                2 -> listOf(ToolCall("w3", "write", """{"path":"c.txt"}"""))
+                else -> emptyList()
+            }
+            emit(ModelEvent.Completed(AgentMessage("assistant", if (calls.isEmpty()) "done" else null, toolCalls = calls), if (calls.isEmpty()) "stop" else "tool_calls"))
+        } }
+        val approvals = PendingApprovals()
+        val events = MemoryEvents()
+        val f = fixture(provider, tools, events, StandardTestDispatcher(testScheduler), approvals = approvals)
+        f.coordinator.send("work", ExecutionMode.WORKSPACE_EDIT)
+        runCurrent()
+        // Reads run; the write waits with its full arguments.
+        assertEquals("w1", approvals.request.value?.callId)
+        assertEquals("a.txt", approvals.request.value!!.arguments["path"]!!.jsonPrimitive.content)
+        approvals.decide(false); runCurrent()
+        assertTrue(written.isEmpty())
+        assertTrue(f.coordinator.state.value.messages.any { it.role == "tool" && it.toolCallId == "w1" && "DECLINED_BY_USER" in it.content.orEmpty() })
+        assertEquals("w2", approvals.request.value?.callId)
+        approvals.decide(true, restOfRun = true); advanceUntilIdle()
+        assertEquals(listOf("w2", "w3"), written, "the rest of this run goes through without asking")
+        // Every decision is journaled, the ones "the rest of this run" covered included.
+        assertEquals(listOf(false, true, true), events.records.filter { it.type == "tool.approval" }.map { it.payload["approved"]!!.jsonPrimitive.boolean })
+    }
+
+    @Test fun stoppingWhileAChangeWaitsForApprovalRestoresAsStopped() = runTest {
+        val events = MemoryEvents()
+        val tools = object : ToolExecutor {
+            override val specs = listOf(ToolSpec("write", "write", JsonObject(emptyMap()), ToolEffect.FILE_WRITE))
+            override suspend fun execute(call: ToolCall, context: ToolContext): ToolResult = error("a declined or stopped change never runs")
+        }
+        val provider = ScriptedProvider { flow { emit(ModelEvent.Completed(AgentMessage("assistant", toolCalls = listOf(ToolCall("w1", "write", "{}"))), "tool_calls")) } }
+        val approvals = PendingApprovals()
+        val running = fixture(provider, tools, events, StandardTestDispatcher(testScheduler), approvals = approvals)
+        running.coordinator.send("work", ExecutionMode.WORKSPACE_EDIT)
+        runCurrent()
+        assertEquals("w1", approvals.request.value?.callId)
+        running.coordinator.stop()
+        val restored = fixture(ScriptedProvider { error("no provider on restore") }, tools, events, StandardTestDispatcher(testScheduler)).coordinator
+        restored.restore()
+        assertEquals("cancelled", restored.state.value.status)
+        assertTrue(restored.state.value.messages.last { it.role == "tool" }.content.orEmpty().contains("nothing was written"))
+    }
+
     @Test fun planModeOffersOnlyReadOnlyServerTools() = runTest {
         val offered = mutableListOf<List<String>>()
         val tools = object : ToolExecutor {
@@ -992,10 +1045,11 @@ class AgentCoordinatorTest {
         contextWindow: Int? = null,
         maxOutputTokens: Int = 4096,
         thinking: Boolean = false,
+        approvals: ApprovalGate? = null,
     ): Fixture {
         val scope = CoroutineScope(SupervisorJob() + dispatcher)
         val processes = RecordingProcesses()
-        return Fixture(AgentCoordinator(provider, tools, eventStore, processes, "session", model, thinking = thinking, projectInstructions = instructions, traces = traces, scope = scope, contextWindowTokens = contextWindow, maxOutputTokens = maxOutputTokens), processes)
+        return Fixture(AgentCoordinator(provider, tools, eventStore, processes, "session", model, thinking = thinking, projectInstructions = instructions, traces = traces, scope = scope, contextWindowTokens = contextWindow, maxOutputTokens = maxOutputTokens, approvals = approvals), processes)
     }
 
     private data class Fixture(val coordinator: AgentCoordinator, val processes: RecordingProcesses)

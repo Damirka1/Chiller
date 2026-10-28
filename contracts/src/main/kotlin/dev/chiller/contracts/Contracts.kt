@@ -306,6 +306,13 @@ interface ArtifactStore {
 data class UserQuestion(val id: String = newId(), val question: String, val options: List<String> = emptyList())
 interface InteractionBroker { suspend fun ask(question: UserQuestion): String }
 
+/** A file change the agent is about to make, waiting for the user's yes or no; [arguments] are the call's complete arguments. */
+@Serializable
+data class ApprovalRequest(val id: String = newId(), val runId: String, val callId: String, val tool: String, val arguments: JsonObject)
+
+/** Asks the user before a file change; false means declined, and nothing is written. */
+fun interface ApprovalGate { suspend fun approve(request: ApprovalRequest): Boolean }
+
 @Serializable
 data class Activity(val id: String = newId(), val name: String, val target: String, val status: String, val output: String = "", val diff: String? = null, val toolCallId: String? = null)
 data class RunState(
@@ -317,6 +324,8 @@ data class RunState(
     val activities: List<Activity> = emptyList(),
     val error: String? = null,
     val question: UserQuestion? = null,
+    /** A file change waiting for the user's decision, when changes are confirmed one by one. */
+    val approval: ApprovalRequest? = null,
     val contextEstimatedTokens: Int? = null,
     val droppedContextMessages: Int = 0,
     val prunedContextResults: Int = 0,
