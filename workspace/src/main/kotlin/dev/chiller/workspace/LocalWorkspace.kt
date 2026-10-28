@@ -950,7 +950,7 @@ class LocalWorkspace(
         val starts = mutableListOf<Int>()
         var from = 0
         while (true) { val at = joined.indexOf(oldText, from); if (at < 0) break; starts += at; from = at + oldText.length }
-        if (starts.isEmpty()) throw ToolException("NO_MATCH", "old_text was not found; copy it exactly from read_file output without line numbers, including whitespace", noMatchHint(lines, oldText))
+        if (starts.isEmpty()) throw ToolException("NO_MATCH", "old_text was not found; copy it exactly from read_file output without line numbers, including whitespace", noMatchHint(lines, oldText) + longBlockHint(oldText))
         val lineStart = IntArray(lines.size + 1).also { for (i in lines.indices) it[i + 1] = it[i] + lines[i].length + 1 }
         fun lineOf(offset: Int) = (lineStart.indexOfLast { it <= offset }).coerceIn(0, lines.size - 1)
         if (starts.size != expectedCount) throw ToolException("MATCH_COUNT_MISMATCH", "old_text matches ${starts.size} times, expected $expectedCount; nothing was changed",
@@ -982,6 +982,16 @@ class LocalWorkspace(
      * Why old_text did not match, for the model's next attempt. Nothing is applied from it: the hint only points at the
      * lines that match when whitespace is ignored and shows their exact text to copy.
      */
+    /**
+     * Live Gemma runs failed again and again to copy a block of about 100 lines exactly. For a long old_text the hint
+     * offers the way that needs no copy: edit_file by the line numbers read_file shows.
+     */
+    private fun longBlockHint(oldText: String): String {
+        val count = oldText.trimEnd('\n').split('\n').size
+        return if (count <= LONG_OLD_TEXT_LINES) "" else ". old_text has $count lines; a block this long is easier to change with edit_file " +
+            "(op replace, start_line and end_line from read_file) than to copy exactly"
+    }
+
     private fun noMatchHint(lines: List<String>, oldText: String): String {
         val wanted = oldText.split('\n').map { it.trim() }.filter { it.isNotEmpty() }
         if (wanted.isEmpty()) return "old_text has only whitespace; include the text of the lines to change"
@@ -1080,3 +1090,4 @@ private const val MAX_BINARY_CREATE_BYTES = 32 * 1_048_576
 private val READ_PREFIX = Regex("""^\d+ \| ?""")
 /** The exact text of a near match is shown only when it is short enough to copy back. */
 private const val MAX_HINT_CHARS = 2_000
+private const val LONG_OLD_TEXT_LINES = 30
