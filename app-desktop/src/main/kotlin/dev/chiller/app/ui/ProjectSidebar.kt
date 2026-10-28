@@ -31,6 +31,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
@@ -188,11 +189,22 @@ private fun ProjectRow(group: ProjectGroup, current: Boolean, open: Boolean, act
     val exists by produceState(true, group.path, model.workspaceMissing) { value = withContext(Dispatchers.IO) { Files.isDirectory(Path.of(group.path)) } }
     val branch by produceState<String?>(null, group.path, current) { value = if (current) withContext(Dispatchers.IO) { runCatching { gitBranch(Path.of(group.path)) }.getOrNull() } else null }
     val turn by animateFloatAsState(if (open) 0f else -90f, if (reduced) snap() else tween(160), label = "chevron")
+    var focused by remember { mutableStateOf(false) }
     val actions = hovered || menu
     Hint(homeRelative(group.path)) {
         Row(
             Modifier.fillMaxWidth().height(32.dp).clip(RoundedCornerShape(7.dp))
-                .background(if (hovered && enabled) c.hover else Color.Transparent)
+                .background(if ((hovered || (focused && ChillerFocusVisibility.keyboard)) && enabled) c.hover else Color.Transparent)
+                .onFocusChanged { focused = it.isFocused }
+                // → expands, ← collapses, as in a file tree.
+                .onPreviewKeyEvent { event ->
+                    if (event.type != KeyEventType.KeyDown) false
+                    else when (event.key) {
+                        Key.DirectionRight -> { if (!open) onToggle(); true }
+                        Key.DirectionLeft -> { if (open) onToggle(); true }
+                        else -> false
+                    }
+                }
                 .hoverable(interaction).pointerHoverIcon(PointerIcon.Hand)
                 .clickable(interactionSource = interaction, indication = null, role = Role.Button, onClick = onToggle)
                 .semantics { contentDescription = "Проект $name, ${if (open) "свернуть" else "развернуть"}" }

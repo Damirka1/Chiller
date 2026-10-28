@@ -153,6 +153,19 @@ class ProjectWorkflowUiTest {
         assertEquals("remove", calls.last())
     }
 
+    @Test fun theSidebarWorksFromTheKeyboard() = runComposeUiTest {
+        app()
+        onNodeWithContentDescription("Проект backend-api, развернуть").requestFocus()
+        onRoot().performKeyInput { pressKey(Key.DirectionRight) }
+        onNodeWithText("Тесты для парсера CSV").assertExists()
+        onRoot().performKeyInput { pressKey(Key.DirectionDown) }
+        onRoot().performKeyInput { pressKey(Key.Enter) }
+        assertEquals("select:s2", calls.last())
+        onNodeWithContentDescription("Проект backend-api, свернуть").requestFocus()
+        onRoot().performKeyInput { pressKey(Key.DirectionLeft) }
+        onNodeWithText("Тесты для парсера CSV").assertDoesNotExist()
+    }
+
     @Test fun eachProjectKeepsItsMode() = runComposeUiTest {
         app(preferences = UiPreferences(theme = "light", reducedMotion = true, projectModes = mapOf(shop to "edit")))
         onNodeWithText("Изменения").assertExists()

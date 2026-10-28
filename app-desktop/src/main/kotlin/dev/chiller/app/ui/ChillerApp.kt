@@ -730,7 +730,16 @@ private fun Sidebar(
                 unread = session.id in projects.unread && session.id != selected, isolated = session.id in projects.origins,
                 onStop = if (runs && session.id != selected) ({ projects.onStop(session.id) }) else null)
         }
-        LazyColumn(Modifier.weight(1f), state = listState, verticalArrangement = Arrangement.spacedBy(1.dp)) {
+        val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
+        // ↑ ↓ walk the projects and dialogs; Enter opens, → and ← expand and collapse a project.
+        LazyColumn(Modifier.weight(1f).onPreviewKeyEvent { event ->
+            if (event.type != KeyEventType.KeyDown) false
+            else when (event.key) {
+                Key.DirectionDown -> focusManager.moveFocus(androidx.compose.ui.focus.FocusDirection.Down)
+                Key.DirectionUp -> focusManager.moveFocus(androidx.compose.ui.focus.FocusDirection.Up)
+                else -> false
+            }
+        }, state = listState, verticalArrangement = Arrangement.spacedBy(1.dp)) {
             if (searching) {
                 if (shown.isNotEmpty()) item(key = "search-header") {
                     Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp)) {
@@ -786,6 +795,7 @@ private fun Sidebar(
 @Composable
 private fun SidebarSearch(query: String, onQuery: (String) -> Unit, focus: FocusRequester) {
     val c = LocalChillerPalette.current
+    val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
     var focused by remember { mutableStateOf(false) }
     Row(
         Modifier.padding(top = 6.dp).fillMaxWidth().height(32.dp).clip(RoundedCornerShape(7.dp))
@@ -798,7 +808,14 @@ private fun SidebarSearch(query: String, onQuery: (String) -> Unit, focus: Focus
         BasicTextField(query, onQuery, singleLine = true,
             textStyle = TextStyle(color = c.text, fontSize = 13.sp, lineHeight = 19.sp, letterSpacing = 0.sp), cursorBrush = SolidColor(c.text),
             modifier = Modifier.weight(1f).focusRequester(focus).onFocusChanged { focused = it.isFocused }
-                .onPreviewKeyEvent { if (it.type == KeyEventType.KeyDown && it.key == Key.Escape && query.isNotEmpty()) { onQuery(""); true } else false }
+                .onPreviewKeyEvent {
+                    when {
+                        it.type != KeyEventType.KeyDown -> false
+                        it.key == Key.Escape && query.isNotEmpty() -> { onQuery(""); true }
+                        it.key == Key.DirectionDown -> { ChillerFocusVisibility.keyboard = true; focusManager.moveFocus(androidx.compose.ui.focus.FocusDirection.Down) }
+                        else -> false
+                    }
+                }
                 .semantics { contentDescription = "Поиск диалогов" },
             decorationBox = { inner -> Box { if (query.isEmpty()) Text("Поиск", color = c.faint, fontSize = 13.sp, lineHeight = 19.sp); inner() } },
         )
@@ -818,7 +835,7 @@ private fun SessionRow(session: SessionInfo, selected: Boolean, running: Boolean
     val hovered by interaction.collectIsHoveredAsState()
     Row(
         Modifier.fillMaxWidth().height(34.dp).clip(RoundedCornerShape(7.dp))
-            .background(when { selected -> c.selected; hovered && enabled -> c.hover; else -> androidx.compose.ui.graphics.Color.Transparent })
+            .background(when { selected -> c.selected; (hovered || (rowFocused && ChillerFocusVisibility.keyboard)) && enabled -> c.hover; else -> androidx.compose.ui.graphics.Color.Transparent })
             .hoverable(interaction).pointerHoverIcon(PointerIcon.Hand)
             .onFocusChanged { rowFocused = it.isFocused }
             .clickable(interactionSource = interaction, indication = null, enabled = enabled, role = Role.Button, onClick = onSelect)

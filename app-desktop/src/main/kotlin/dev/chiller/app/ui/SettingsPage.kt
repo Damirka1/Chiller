@@ -636,7 +636,7 @@ private fun KeysSection() {
     Card {
         listOf(shortcut("N") to "Новый диалог", shortcut("O") to "Открыть проект", shortcut("K") to "Поиск по диалогам и сообщениям", shortcut("P") to "Перейти к проекту",
             (if (isMacOs) "⌘ ⇧ P" else "Ctrl+Shift+P") to "Все команды", shortcut("1…9") to "Новый диалог в проекте по номеру", shortcut("↵") to "Отправить", shortcut(".") to "Остановить задачу",
-            shortcut(",") to "Настройки", "Esc" to "Закрыть меню, настройки или поиск", "↑ ↓ ↵" to "Выбор в меню модели", "↑ ↓" to "Разделы настроек", "Tab" to "Навигация с клавиатуры (видимый фокус)").forEach { (keys, label) ->
+            shortcut(",") to "Настройки", "Esc" to "Закрыть меню, настройки или поиск", "↑ ↓ ↵" to "Выбор в меню модели", "↑ ↓ → ←" to "Боковая панель: чаты и проекты", "↑ ↓" to "Разделы настроек", "Tab" to "Навигация с клавиатуры (видимый фокус)").forEach { (keys, label) ->
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 2.dp)) {
                 Text(label, color = c.text, fontSize = 13.sp, modifier = Modifier.weight(1f))
                 Text(keys, color = c.muted, fontSize = 12.sp, fontFamily = ChillerFonts.mono, modifier = Modifier.clip(RoundedCornerShape(6.dp)).border(1.dp, c.border, RoundedCornerShape(6.dp)).padding(horizontal = 8.dp, vertical = 3.dp))
