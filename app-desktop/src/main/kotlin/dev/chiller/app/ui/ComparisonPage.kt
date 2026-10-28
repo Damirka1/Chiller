@@ -21,7 +21,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -55,7 +54,7 @@ internal fun ComparisonPage(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 ChillerControl("Назад к диалогу", actions.close, icon = Icons.AutoMirrored.Outlined.ArrowBack)
                 Spacer(Modifier.weight(1f))
-                Text(endpoint.removePrefix("https://").removePrefix("http://"), color = c.faint, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+                Text(endpoint.removePrefix("https://").removePrefix("http://"), color = c.faint, fontSize = 11.sp, fontFamily = ChillerFonts.mono)
             }
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text("Сравнение моделей", color = c.text, fontSize = 22.sp, fontWeight = FontWeight.Medium, letterSpacing = (-.5).sp)
@@ -130,7 +129,7 @@ private fun Setup(models: List<String>, tasks: List<Pair<String, String>>, actio
                         Spacer(Modifier.width(8.dp))
                         Column(Modifier.weight(1f)) {
                             Text(title, color = c.text, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            Text(id, color = c.faint, fontSize = 10.sp, fontFamily = FontFamily.Monospace, maxLines = 1)
+                            Text(id, color = c.faint, fontSize = 10.sp, fontFamily = ChillerFonts.mono, maxLines = 1)
                         }
                     }
                 }
@@ -192,7 +191,7 @@ private fun ResultsTable(sides: List<ComparisonSide>, taskIds: List<String>, res
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 2.dp)) {
                 Column(Modifier.width(220.dp)) {
                     Text(titles.firstOrNull { it.first == task }?.second ?: task, color = c.text, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text(task, color = c.faint, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+                    Text(task, color = c.faint, fontSize = 10.sp, fontFamily = ChillerFonts.mono)
                 }
                 sides.forEachIndexed { i, side ->
                     val rows = results[i].orEmpty().filter { it.task == task }
@@ -239,7 +238,7 @@ private fun History(history: List<ComparisonRecord>, actions: ComparisonActions)
                     Text(record.sides.joinToString("  vs  ") { it.label }, color = c.text, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     Text(formatStamp(record.startedAt) + " · ${record.tasks.size} задач" + if (!record.complete) " · остановлено" else "", color = c.faint, fontSize = 11.sp)
                 }
-                Text(record.reports.joinToString("  ") { r -> "${r.results.count { it.passed }}/${r.results.size}" }, color = c.muted, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+                Text(record.reports.joinToString("  ") { r -> "${r.results.count { it.passed }}/${r.results.size}" }, color = c.muted, fontSize = 12.sp, fontFamily = ChillerFonts.mono)
             }
         }
     }

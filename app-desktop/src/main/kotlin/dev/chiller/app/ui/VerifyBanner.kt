@@ -21,7 +21,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -52,7 +51,7 @@ internal fun VerifyBanner(state: VerifyState, onDismiss: () -> Unit) {
                 if (state.status != "running") ChillerIconButton(Icons.Outlined.Close, "Скрыть", onDismiss, Modifier.size(24.dp))
             }
             if (open) SelectionContainer {
-                Text(state.outputTail.takeLast(3000), color = c.muted, fontSize = 11.sp, lineHeight = 16.sp, fontFamily = FontFamily.Monospace,
+                Text(state.outputTail.takeLast(3000), color = c.muted, fontSize = 11.sp, lineHeight = 16.sp, fontFamily = ChillerFonts.mono,
                     modifier = Modifier.padding(top = 6.dp).heightIn(max = 220.dp).horizontalScroll(rememberScrollState()))
             }
         }

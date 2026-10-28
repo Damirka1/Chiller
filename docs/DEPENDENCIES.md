@@ -10,6 +10,12 @@ JetBrains Runtime API 1.10.1 (`org.jetbrains.runtime:jbr-api`, Apache-2.0) да�
 
 Chiller распространяется под [Apache License 2.0](../LICENSE). Она не заменяет лицензии сторонних компонентов. Текст лицензии Chiller включается в ресурсы приложения и передаётся сборщику установщиков.
 
+## Шрифт Medeo
+
+Интерфейс набран шрифтом Medeo 1.000-rc4 (релиз `v1.0.0-rc.4.1` из DNFDEVS/medeo-font, SIL Open Font License 1.1): Medeo Sans — текст интерфейса, Medeo Mono — код, пути и команды. Это release candidate, взятый осознанно; при выходе 1.0 файлы заменяются той же раскладкой. Medeo основан на Geist (Vercel, basement.studio) и Inter (Rasmus Andersson); копирайты перечислены в лицензии.
+
+В ресурсах `design-system` лежат статические начертания без изменений: Sans Regular, Italic, Medium, SemiBold и Mono Regular, Medium, SemiBold (около 3,8 МБ), рядом — `OFL.txt` из релиза. SHA-256 архива релиза: `3dede94b30924e56644634ae5f4f85d624c8dfc151d2c42a947472eccc2a0e22`. В Sans включена OpenType-фича `zero` (перечёркнутый ноль); в Mono ноль перечёркнут сам.
+
 ## Встроенный ripgrep
 
 Установщик содержит ripgrep 14.1.1 из официального релиза BurntSushi/ripgrep. Архив выбирается по ОС и архитектуре сборки, SHA-256 фиксирован в `build-support/ripgrep.gradle.kts`. Вместе с бинарником поставляются COPYING, LICENSE-MIT и UNLICENSE из архива. Chiller использует вариант MIT. При запуске приложение ничего не скачивает; обновление бинарника выполняется через новую сборку. Windows ARM64 пока не поддерживается этой упаковкой.

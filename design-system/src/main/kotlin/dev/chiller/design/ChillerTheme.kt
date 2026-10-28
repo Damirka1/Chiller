@@ -11,7 +11,9 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.platform.Font
 import androidx.compose.ui.unit.sp
 
 val LocalChillerReducedMotion = staticCompositionLocalOf { false }
@@ -30,8 +32,32 @@ val LocalChillerPalette = staticCompositionLocalOf { ChillerPalette(
     Color(0xFFF0F6F0), Color(0xFFFBF0EE),
 ) }
 
+/**
+ * Medeo (SIL OFL 1.1, bundled with its license in fonts/medeo): Sans for the interface, Mono for code, paths and
+ * commands. The weights the interface uses are bundled as static files; others fall back to the nearest one.
+ */
+object ChillerFonts {
+    val sans = FontFamily(
+        Font("fonts/medeo/MedeoSans-Regular.ttf", FontWeight.Normal),
+        Font("fonts/medeo/MedeoSans-Italic.ttf", FontWeight.Normal, FontStyle.Italic),
+        Font("fonts/medeo/MedeoSans-Medium.ttf", FontWeight.Medium),
+        Font("fonts/medeo/MedeoSans-SemiBold.ttf", FontWeight.SemiBold),
+    )
+    val mono = FontFamily(
+        Font("fonts/medeo/MedeoMono-Regular.ttf", FontWeight.Normal),
+        Font("fonts/medeo/MedeoMono-Medium.ttf", FontWeight.Medium),
+        Font("fonts/medeo/MedeoMono-SemiBold.ttf", FontWeight.SemiBold),
+    )
+    /**
+     * Slashed zero in Sans: in tokens, ids and numbers 0 must not look like O. The standard `zero` feature, not `ss09`:
+     * the style is inherited by Mono spans, and in Mono `ss09` would turn its slashed zero back into a plain one,
+     * while Mono has no `zero` feature and keeps its slash.
+     */
+    const val FEATURES = "zero"
+}
+
 private fun type(size: Int, height: Int, weight: FontWeight = FontWeight.Normal, tracking: Float = 0f) =
-    TextStyle(fontFamily = FontFamily.SansSerif, fontSize = size.sp, lineHeight = height.sp, fontWeight = weight, letterSpacing = tracking.sp)
+    TextStyle(fontFamily = ChillerFonts.sans, fontFeatureSettings = ChillerFonts.FEATURES, fontSize = size.sp, lineHeight = height.sp, fontWeight = weight, letterSpacing = tracking.sp)
 
 private val DesktopTypography = Typography(
     displayLarge = type(40, 48, tracking = -1.5f), displayMedium = type(34, 42, tracking = -1f), displaySmall = type(30, 38, tracking = -.8f),

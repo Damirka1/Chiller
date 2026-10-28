@@ -32,7 +32,6 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -248,7 +247,7 @@ private fun ProjectCard(path: String, overview: ProjectOverview?, onChange: () -
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Text(overview?.name ?: Path.of(path).fileName.toString(), color = c.text, fontSize = 14.sp, lineHeight = 20.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(homeRelative(path), color = c.faint, fontSize = 11.sp, lineHeight = 15.sp, fontFamily = FontFamily.Monospace, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(homeRelative(path), color = c.faint, fontSize = 11.sp, lineHeight = 15.sp, fontFamily = ChillerFonts.mono, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             ChillerControl("Сменить", onChange)
             ChillerControl("Закрыть", onClose)

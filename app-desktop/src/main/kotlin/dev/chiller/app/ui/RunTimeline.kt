@@ -36,7 +36,6 @@ import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -178,7 +177,7 @@ internal fun ToolRow(activity: Activity, reduced: Boolean, onUndo: (String) -> U
             Spacer(Modifier.width(9.dp))
             Text(toolLabel(activity.name), color = if (failed) c.negative else c.muted, fontSize = 12.sp, lineHeight = 18.sp)
             Spacer(Modifier.width(8.dp))
-            Text(activity.target, color = c.text, fontSize = 12.sp, lineHeight = 18.sp, fontFamily = FontFamily.Monospace, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+            Text(activity.target, color = c.text, fontSize = 12.sp, lineHeight = 18.sp, fontFamily = ChillerFonts.mono, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
             activity.diff?.let { val (a, r) = diffStats(it); if (a + r > 0) { Spacer(Modifier.width(8.dp)); DiffStat(a, r) } }
             Spacer(Modifier.width(8.dp))
             when {
@@ -194,7 +193,7 @@ internal fun ToolRow(activity: Activity, reduced: Boolean, onUndo: (String) -> U
             Column(Modifier.fillMaxWidth().background(c.sidebar.copy(alpha = .5f))) {
                 if (activity.diff != null) Diff(activity.diff!!)
                 else if (activity.output.isNotBlank() && presentedFile == null) SelectionContainer {
-                    Text(prettyOutput(activity.output), color = c.muted, fontSize = 11.sp, lineHeight = 18.sp, fontFamily = FontFamily.Monospace, modifier = Modifier.fillMaxWidth().padding(12.dp), maxLines = 24, overflow = TextOverflow.Ellipsis)
+                    Text(prettyOutput(activity.output), color = c.muted, fontSize = 11.sp, lineHeight = 18.sp, fontFamily = ChillerFonts.mono, modifier = Modifier.fillMaxWidth().padding(12.dp), maxLines = 24, overflow = TextOverflow.Ellipsis)
                 }
                 else Text("Без вывода", color = c.faint, fontSize = 11.sp, modifier = Modifier.padding(12.dp))
                 val id = if (canUndo && success && activity.name in FILE_EFFECTS) changeId(activity.output) else null
@@ -236,9 +235,9 @@ private fun StatusTag(text: String, color: Color) {
 internal fun DiffStat(added: Int, removed: Int) {
     val c = LocalChillerPalette.current
     Row {
-        if (added > 0) Text("+$added", color = c.positive, fontSize = 11.sp, lineHeight = 16.sp, fontFamily = FontFamily.Monospace)
+        if (added > 0) Text("+$added", color = c.positive, fontSize = 11.sp, lineHeight = 16.sp, fontFamily = ChillerFonts.mono)
         if (added > 0 && removed > 0) Spacer(Modifier.width(5.dp))
-        if (removed > 0) Text("−$removed", color = c.negative, fontSize = 11.sp, lineHeight = 16.sp, fontFamily = FontFamily.Monospace)
+        if (removed > 0) Text("−$removed", color = c.negative, fontSize = 11.sp, lineHeight = 16.sp, fontFamily = ChillerFonts.mono)
     }
 }
 
@@ -258,7 +257,7 @@ internal fun Diff(diff: String) {
             diff.lineSequence().take(500).forEach { line ->
                 val added = line.startsWith('+') && !line.startsWith("+++ ")
                 val removed = line.startsWith('-') && !line.startsWith("--- ")
-                Text(line, fontFamily = FontFamily.Monospace, fontSize = 11.sp, lineHeight = 19.sp, letterSpacing = 0.sp,
+                Text(line, fontFamily = ChillerFonts.mono, fontSize = 11.sp, lineHeight = 19.sp, letterSpacing = 0.sp,
                     color = when { added -> c.positive; removed -> c.negative; else -> c.muted },
                     modifier = Modifier.fillMaxWidth().background(when { added -> c.added; removed -> c.removed; else -> c.canvas }).padding(horizontal = 12.dp))
             }

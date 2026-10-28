@@ -24,12 +24,12 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.chiller.contracts.RunState
+import dev.chiller.design.ChillerFonts
 import dev.chiller.design.LocalChillerPalette
 import dev.chiller.design.LocalChillerReducedMotion
 
@@ -82,15 +82,15 @@ internal fun TurnResultCard(state: RunState, result: TurnResult, modifier: Modif
                 if (result.files.isNotEmpty()) Section("Изменено") {
                     result.files.take(6).forEach { file ->
                         Line(fileIcon(file.kind), if (file.undone) c.faint else c.muted) {
-                            Text(file.path, color = if (file.undone) c.faint else c.text, fontSize = 12.sp, fontFamily = FontFamily.Monospace, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                            Text(file.path, color = if (file.undone) c.faint else c.text, fontSize = 12.sp, fontFamily = ChillerFonts.mono, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
                             Spacer(Modifier.width(8.dp))
                             when {
                                 file.undone -> Text("откачено", color = c.faint, fontSize = 11.sp)
                                 file.kind == "deleted" -> Text("удалён", color = c.negative, fontSize = 11.sp)
                                 else -> {
                                     if (file.kind == "created") { Text("новый", color = c.positive, fontSize = 11.sp); Spacer(Modifier.width(6.dp)) }
-                                    if (file.added > 0) Text("+${file.added}", color = c.positive, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
-                                    if (file.removed > 0) { Spacer(Modifier.width(4.dp)); Text("−${file.removed}", color = c.negative, fontSize = 11.sp, fontFamily = FontFamily.Monospace) }
+                                    if (file.added > 0) Text("+${file.added}", color = c.positive, fontSize = 11.sp, fontFamily = ChillerFonts.mono)
+                                    if (file.removed > 0) { Spacer(Modifier.width(4.dp)); Text("−${file.removed}", color = c.negative, fontSize = 11.sp, fontFamily = ChillerFonts.mono) }
                                 }
                             }
                         }
@@ -102,7 +102,7 @@ internal fun TurnResultCard(state: RunState, result: TurnResult, modifier: Modif
                     val rows = outside.added.map { it to "новый" } + outside.modified.map { it to "изменён" } + outside.deleted.map { it to "удалён" }
                     rows.take(6).forEach { (path, label) ->
                         Line(Icons.Outlined.Terminal, c.muted) {
-                            Text(path, color = c.text, fontSize = 12.sp, fontFamily = FontFamily.Monospace, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                            Text(path, color = c.text, fontSize = 12.sp, fontFamily = ChillerFonts.mono, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
                             Spacer(Modifier.width(8.dp)); Text(label, color = c.faint, fontSize = 11.sp)
                         }
                     }
@@ -118,7 +118,7 @@ internal fun TurnResultCard(state: RunState, result: TurnResult, modifier: Modif
                             else -> run.state to c.faint
                         }
                         Line(Icons.Outlined.Terminal, c.muted) {
-                            Text(run.command, color = c.text, fontSize = 12.sp, fontFamily = FontFamily.Monospace, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                            Text(run.command, color = c.text, fontSize = 12.sp, fontFamily = ChillerFonts.mono, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
                             Spacer(Modifier.width(8.dp))
                             Box(Modifier.size(6.dp).clip(CircleShape).background(color)); Spacer(Modifier.width(5.dp))
                             Text(label, color = color, fontSize = 11.sp)
@@ -126,7 +126,7 @@ internal fun TurnResultCard(state: RunState, result: TurnResult, modifier: Modif
                     }
                 }
                 if (result.presented.isNotEmpty()) Section("Показано") {
-                    result.presented.forEach { path -> Line(Icons.Outlined.Image, c.muted) { Text(path, color = c.text, fontSize = 12.sp, fontFamily = FontFamily.Monospace, maxLines = 1, overflow = TextOverflow.Ellipsis) } }
+                    result.presented.forEach { path -> Line(Icons.Outlined.Image, c.muted) { Text(path, color = c.text, fontSize = 12.sp, fontFamily = ChillerFonts.mono, maxLines = 1, overflow = TextOverflow.Ellipsis) } }
                 }
                 val stats = runSummaryParts(state)
                 if (stats.isNotEmpty()) Text(stats.joinToString("  ·  "), color = c.faint, fontSize = 11.sp, lineHeight = 16.sp)

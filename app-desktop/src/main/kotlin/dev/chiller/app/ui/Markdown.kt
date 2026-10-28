@@ -26,13 +26,13 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.chiller.design.ChillerFonts
 import dev.chiller.design.ChillerIconButton
 import dev.chiller.design.ChillerPalette
 import dev.chiller.design.LocalChillerPalette
@@ -174,7 +174,7 @@ fun inlineMarkdown(text: String, c: ChillerPalette): AnnotatedString = buildAnno
         append(text.substring(last, m.range.first))
         val g = m.groupValues
         when {
-            g[1].isNotEmpty() -> { pushStyle(SpanStyle(fontFamily = FontFamily.Monospace, fontSize = 12.5.sp, background = c.hover, color = c.text)); append(" ${g[1]} "); pop() }
+            g[1].isNotEmpty() -> { pushStyle(SpanStyle(fontFamily = ChillerFonts.mono, fontSize = 12.5.sp, background = c.hover, color = c.text)); append(" ${g[1]} "); pop() }
             g[2].isNotEmpty() || g[3].isNotEmpty() -> { pushStyle(SpanStyle(fontWeight = FontWeight.SemiBold)); append(g[2].ifEmpty { g[3] }); pop() }
             g[4].isNotEmpty() || g[5].isNotEmpty() -> { pushStyle(SpanStyle(fontStyle = FontStyle.Italic)); append(g[4].ifEmpty { g[5] }); pop() }
             g[6].isNotEmpty() -> { pushStyle(SpanStyle(color = c.accent, textDecoration = TextDecoration.Underline)); append(g[6]); pop() }

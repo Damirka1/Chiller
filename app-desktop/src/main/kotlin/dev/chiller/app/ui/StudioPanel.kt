@@ -29,7 +29,6 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -229,7 +228,7 @@ private fun AgentCard(agent: SubagentSnapshot, onCancel: (String) -> Unit) {
             }
             Spacer(Modifier.width(9.dp))
             Column(Modifier.weight(1f)) {
-                Text(agent.taskId, color = c.text, fontSize = 12.sp, fontWeight = FontWeight.Medium, fontFamily = FontFamily.Monospace, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(agent.taskId, color = c.text, fontSize = 12.sp, fontWeight = FontWeight.Medium, fontFamily = ChillerFonts.mono, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(label, color = color, fontSize = 11.sp)
             }
             if (!agent.status.isTerminal) ChillerControl("Остановить", { onCancel(agent.id) }, icon = Icons.Outlined.Stop)
@@ -250,7 +249,7 @@ private fun AgentCard(agent: SubagentSnapshot, onCancel: (String) -> Unit) {
         if (agent.status == SubagentStatus.RUNNING && agent.activity.isNotBlank()) Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(Icons.Outlined.Bolt, null, Modifier.size(12.dp), tint = c.muted)
             Spacer(Modifier.width(5.dp))
-            Text(agent.activity, color = c.muted, fontSize = 11.sp, fontFamily = FontFamily.Monospace, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(agent.activity, color = c.muted, fontSize = 11.sp, fontFamily = ChillerFonts.mono, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
         agent.error?.takeIf { agent.status != SubagentStatus.COMPLETED }?.let { Text(it, color = if (agent.status == SubagentStatus.FAILED) c.negative else c.muted, fontSize = 11.sp, lineHeight = 16.sp) }
         agent.result?.let { result ->

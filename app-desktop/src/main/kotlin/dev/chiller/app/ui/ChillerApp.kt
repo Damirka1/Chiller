@@ -64,7 +64,6 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Constraints
@@ -1461,12 +1460,12 @@ private fun CodeBlock(code: String, language: String) {
     val shape = RoundedCornerShape(10.dp)
     Column(Modifier.fillMaxWidth().clip(shape).border(1.dp, c.border, shape).background(c.sidebar)) {
         Row(Modifier.fillMaxWidth().padding(start = 12.dp, end = 4.dp, top = 2.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(language.ifBlank { "код" }, color = c.faint, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+            Text(language.ifBlank { "код" }, color = c.faint, fontSize = 11.sp, fontFamily = ChillerFonts.mono)
             Spacer(Modifier.weight(1f))
             if (copied) Text("Скопировано", color = c.muted, fontSize = 11.sp, modifier = Modifier.padding(end = 2.dp))
             ChillerIconButton(if (copied) Icons.Outlined.Check else Icons.Outlined.ContentCopy, "Копировать код", { clipboard.setText(AnnotatedString(code)); copied = true }, Modifier.size(26.dp))
         }
-        Text(code, color = c.text, fontFamily = FontFamily.Monospace, fontSize = 12.5.sp, lineHeight = 20.sp,
+        Text(code, color = c.text, fontFamily = ChillerFonts.mono, fontSize = 12.5.sp, lineHeight = 20.sp,
             modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(start = 12.dp, end = 12.dp, bottom = 12.dp))
     }
 }
@@ -1599,7 +1598,7 @@ private fun ExportPreview(content: String, format: String, onDismiss: () -> Unit
             }
             Text("Проверьте содержимое перед сохранением. Известные поля ключей скрыты; произвольный текст может содержать личные данные.", color = c.muted, fontSize = 12.sp, lineHeight = 19.sp)
             SelectionContainer {
-                Text(content, color = c.text, fontFamily = FontFamily.Monospace, fontSize = 11.sp, lineHeight = 18.sp,
+                Text(content, color = c.text, fontFamily = ChillerFonts.mono, fontSize = 11.sp, lineHeight = 18.sp,
                     modifier = Modifier.fillMaxWidth().weight(1f, fill = false).heightIn(min = 150.dp, max = 430.dp).verticalScroll(rememberScrollState()).background(c.canvas).padding(13.dp))
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
