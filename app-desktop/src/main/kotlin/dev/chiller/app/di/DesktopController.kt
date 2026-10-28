@@ -30,142 +30,6 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
 
-@Serializable
-data class DesktopSettings(val baseUrl: String = "https://api.deepseek.com", val model: String = "deepseek-flash", val thinking: Boolean = false, val workspace: String? = null, val rememberedModels: Map<String, List<String>> = emptyMap(), val recentWorkspaces: List<String> = emptyList(), val agent: AgentOptions = AgentOptions(), val credentialOrigins: List<String> = emptyList(),
-    /** Check command per project root, e.g. "./gradlew test"; used by auto-verify. */
-    val verifyCommands: Map<String, String> = emptyMap(),
-    val modelCatalogs: Map<String, CachedModelCatalog> = emptyMap(),
-    val allowProcesses: Boolean = false,
-    /** Providers defined on this machine; see [CustomProvider]. */
-    val customProviders: List<CustomProvider> = emptyList(),
-    /** Money limit per task with the user's prices for one endpoint and model; off by default. */
-    val costBudget: CostBudgetSettings = CostBudgetSettings(),
-    /** Projects kept at the top of the sidebar, in the user's order. */
-    val pinnedWorkspaces: List<String> = emptyList(),
-    /** Folders removed from the project list; their dialogs stay. Opening the folder again shows it again. */
-    val hiddenWorkspaces: List<String> = emptyList(),
-    /** Per project folder, what it remembers; see [ProjectPrefs]. */
-    val projectPrefs: Map<String, ProjectPrefs> = emptyMap(),
-    /** File changes in a project wait for the user's yes or no before they are written. */
-    val confirmEdits: Boolean = false,
-    /** MCP servers the user connected; their tools join every dialog's tools while the server runs. */
-    val mcpServers: List<dev.chiller.tools.McpServerConfig> = emptyList())
-
-/**
- * What a project remembers of how it was last worked in: the model on its endpoint (offered to new dialogs only on
- * that same endpoint) and process permission. Null means "not chosen here yet".
- */
-@Serializable
-data class ProjectPrefs(val baseUrl: String? = null, val model: String? = null, val allowProcesses: Boolean? = null)
-
-@Serializable
-data class CachedModelCatalog(val models: List<ProviderModel>, val fetchedAt: String)
-
-/**
- * How the agent runs; applied from the next dialog. A limit of 0 means "no limit" ("model maximum" for the reply
- * length); every other value is bounded so a typo cannot start a runaway run.
- */
-@Serializable
-data class AgentOptions(
-    val maxRounds: Int = 24,
-    val maxOutputTokens: Int = 4096,
-    val subagents: Boolean = true,
-    val projectInstructions: Boolean = true,
-    val maxRequests: Int = 48,
-    val totalOutputTokens: Int = 32768,
-    val allowNetwork: Boolean = false,
-    val allowScreenshots: Boolean = false,
-    /** "auto", "full" or "compact"; see ModelProfiles. */
-    val profile: String = "auto",
-    /** Overrides the profile's temperature; null keeps the profile/provider default. */
-    val temperature: Double? = null,
-    /** Extra top-level request fields as a JSON object, e.g. vLLM structured-output options. */
-    val requestExtras: String = "",
-    /** After an editing run, run the project's check command and send failures back to the agent. */
-    val autoVerify: Boolean = false,
-    val autoVerifyAttempts: Int = 2,
-    /** "auto" (by model id), "on" or "off": whether attached images are sent as pixels. */
-    val vision: String = "auto",
-    /** Image model for generate_image: "auto" (the first one the catalog lists), "off", or a model id. */
-    val imageModel: String = "auto",
-) {
-    fun sanitized() = copy(autoVerifyAttempts = autoVerifyAttempts.coerceIn(1, 3), maxRounds = unlimitedOr(maxRounds, 4, 200), maxOutputTokens = unlimitedOr(maxOutputTokens, 1024, 1_048_576),
-        maxRequests = unlimitedOr(maxRequests, 1, 500), totalOutputTokens = unlimitedOr(totalOutputTokens, 1024, 4_194_304),
-        profile = profile.takeIf { it in setOf("auto", "full", "compact") } ?: "auto", temperature = temperature?.coerceIn(0.0, 2.0), requestExtras = requestExtras.take(4000),
-        vision = vision.takeIf { it in setOf("auto", "on", "off") } ?: "auto", imageModel = imageModel.trim().take(200).ifEmpty { "auto" })
-
-    /** Model steps per task; "no limit" still stops at a backstop so a looping run cannot go on forever. */
-    val effectiveMaxRounds: Int get() = if (maxRounds == UNLIMITED) UNLIMITED_ROUNDS_BACKSTOP else maxRounds
-    val effectiveMaxRequests: Int get() = if (maxRequests == UNLIMITED) Int.MAX_VALUE else maxRequests
-    val effectiveTotalOutputTokens: Int get() = if (totalOutputTokens == UNLIMITED) Int.MAX_VALUE else totalOutputTokens
-
-    companion object {
-        const val UNLIMITED = 0
-        const val UNLIMITED_ROUNDS_BACKSTOP = 500
-        private fun unlimitedOr(value: Int, min: Int, max: Int) = if (value == UNLIMITED) UNLIMITED else value.coerceIn(min, max)
-    }
-}
-
-/**
- * Reply length per model step. "Model maximum" asks for as much as the context allows (the coordinator caps it at half the
- * window) and the provider clamps it to the model's real ceiling; an explicit choice also lifts the profile's own cap.
- */
-fun effectiveMaxOutput(options: AgentOptions, profileCap: Int?): Int =
-    if (options.maxOutputTokens == AgentOptions.UNLIMITED) Int.MAX_VALUE
-    else profileCap?.let { minOf(it, options.maxOutputTokens) } ?: options.maxOutputTokens
-data class SendReceipt(val accepted: Boolean, val sessionId: String, val clientRequestId: String, val reason: String? = null)
-
-internal data class AutoVerifyContext(
-    val sessionId: String,
-    val root: String,
-    val allowProcesses: Boolean,
-    val processService: ProcessService,
-    val command: String,
-    val options: AgentOptions,
-    val epoch: Long,
-) {
-    /**
-     * The result still belongs to the same dialog engine and run, and the user changed nothing it depends on: the
-     * project's check command, the agent options and process permission. Which dialog is shown does not matter.
-     */
-    fun isCurrent(settings: DesktopSettings, allowProcesses: Boolean, currentProcessService: ProcessService?, currentEpoch: Long): Boolean =
-        settings.verifyCommands[root] == command && settings.agent.sanitized() == options && allowProcesses == this.allowProcesses &&
-            currentProcessService === processService && currentEpoch == epoch
-}
-
-/** A short message about a dialog that is not on screen: its run ended, its check finished, or it waits for an answer. */
-data class Notice(val id: String, val sessionId: String, val title: String, val message: String, val tone: String /* positive, negative, attention, neutral */)
-data class ConnectionState(val status: String = "unverified", val message: String = "", val checkedAt: String? = null)
-data class ModelCatalogState(
-    val status: String = "idle",
-    val models: List<ProviderModel> = emptyList(),
-    val message: String = "",
-    val fetchedAt: String? = null,
-    val stale: Boolean = false,
-) {
-    /** Models that can hold a conversation; image-only models are listed for their own setting, never for chat. */
-    val chatModels: List<ProviderModel> get() = models.filter { it.chat != false }
-}
-data class DesktopState(val run: RunState = RunState(), val sessions: List<SessionInfo> = emptyList(), val sessionId: String = newId(), val settings: DesktopSettings = DesktopSettings(), val apiKeyConfigured: Boolean = false, val allowProcesses: Boolean = false, val exportContent: String? = null, val exportFormat: String = "markdown", val exportSessionId: String? = null, val uiPreferences: UiPreferences = UiPreferences(), val connection: ConnectionState = ConnectionState(), val catalog: ModelCatalogState = ModelCatalogState(), val sessionWorkspaces: Map<String, String> = emptyMap(), val subagents: List<SubagentSnapshot> = emptyList(), val captureTargets: List<CaptureTarget> = emptyList(), val selectedCaptureTarget: String? = null, val activeProfile: String? = null, val verify: VerifyState = VerifyState(), val undoneChanges: Set<String> = emptySet(), val outside: OutsideChanges? = null,
-    /** The dialog's folder is fixed: it is bound and has turns, or file tools already wrote into its own folder. */
-    val folderLocked: Boolean = false,
-    /** The bound folder of the shown dialog no longer exists; it can be pointed at the new location. */
-    val workspaceMissing: Boolean = false,
-    /** Dialogs whose run is in progress, shown or in the background. */
-    val runningSessions: Set<String> = emptySet(),
-    /** Dialogs whose run waits for the user's answer. */
-    val waitingSessions: Set<String> = emptySet(),
-    /** News from dialogs in the background, newest last. */
-    val notices: List<Notice> = emptyList(),
-    /** Dialogs whose run or check finished while they were not on screen and that were not opened since. */
-    val unreadSessions: Set<String> = emptySet(),
-    /** The project each dialog in its own working copy was made from, by dialog id. */
-    val sessionOrigins: Map<String, String> = emptyMap(),
-    /** The shown dialog's own working copy, when it has one. */
-    val worktree: WorktreeInfo? = null,
-    /** Each MCP server's state by its id, for the settings page. */
-    val mcp: Map<String, dev.chiller.tools.McpServerState> = emptyMap())
-
 class DesktopController(
     private val directory: Path, initialCredential: String? = LocalCredentials.load(), connectionChecker: ConnectionChecker? = null, catalogClient: ModelCatalogClient? = null,
     /** Keys found in the environment or .env by variable name (OPENAI_API_KEY, …); mapped to their presets' origins. */
@@ -392,16 +256,6 @@ class DesktopController(
         _state.update { it.copy(catalog = ModelCatalogState()) }
     }
 
-    private fun catalogMessage(result: ModelCatalogResult, key: String?) = when (result.errorCode) {
-        "AUTHENTICATION_FAILED" -> "Провайдер отклонил ключ"
-        "UNSUPPORTED" -> "Этот адрес не отдаёт список моделей — укажите ID вручную"
-        "RATE_LIMITED" -> "Провайдер ограничил частоту запросов"
-        "RESPONSE_TOO_LARGE" -> "Ответ со списком моделей слишком большой"
-        "MALFORMED_RESPONSE" -> "Провайдер вернул неожиданный формат списка"
-        "PROVIDER_TIMEOUT", "NETWORK" -> "Список моделей не получен: таймаут или сеть"
-        "PROVIDER_HTTP_ERROR" -> "Провайдер не отдал список моделей"
-        else -> (result.message ?: "Не удалось получить список моделей").let { message -> if (key.isNullOrBlank()) message else message.replace(key, "[СКРЫТО]") }.take(200)
-    }
 
     suspend fun selectModel(model: String): String? = commands.withLock {
         val selected = model.trim()
@@ -1473,17 +1327,6 @@ class DesktopController(
         while (models.size > 16) models.remove(models.keys.first())
         return settings.copy(rememberedModels = models)
     }
-    private fun normalizeEndpoint(endpoint: String): String = runCatching {
-        val uri = java.net.URI(endpoint.trim()).normalize()
-        val scheme = uri.scheme.lowercase(); val host = uri.host.lowercase()
-        val port = if ((scheme == "https" && uri.port == 443) || (scheme == "http" && uri.port == 80)) -1 else uri.port
-        java.net.URI(scheme, null, host, port, uri.path.trimEnd('/'), null, null).toASCIIString().trimEnd('/')
-    }.getOrDefault(endpoint.trim().trimEnd('/').lowercase())
-    private fun sameOrigin(first: String, second: String): Boolean = runCatching {
-        val a = java.net.URI(first); val b = java.net.URI(second)
-        a.scheme.equals(b.scheme, true) && a.host.equals(b.host, true) && effectivePort(a) == effectivePort(b)
-    }.getOrDefault(false)
-    private fun effectivePort(uri: java.net.URI) = uri.port.takeIf { it >= 0 } ?: if (uri.scheme.equals("https", true)) 443 else 80
     private fun connectionForUnverified() = if (!ready()) ConnectionState("missing", "Не задан API-ключ") else ConnectionState("unverified", if (credential == null) "Локальный сервер без ключа · не проверено" else "Подключение ещё не проверено")
 
     suspend fun updateAgentOptions(options: AgentOptions) = commands.withLock {
@@ -1658,20 +1501,6 @@ class DesktopController(
         engines.values.toList().forEach { dispose(it) }; mcp.close(); (checker as? AutoCloseable)?.close(); http.close(); credentials.clear(); scope.cancel()
     }
 
-    private fun localizeConnectionMessage(message: String): String = when {
-        message == "Connection and model access verified" || message == "verified" -> "Подключение и доступ к модели подтверждены"
-        message.startsWith("Authentication failed") -> "Провайдер отклонил API-ключ"
-        message.startsWith("Rate limit reached") -> "Провайдер ограничил частоту запросов"
-        message.startsWith("Model or endpoint not found") -> "Модель или адрес провайдера не найдены"
-        message.startsWith("Provider server error") -> "Ошибка сервера провайдера"
-        message.startsWith("Provider rejected the request") -> "Провайдер отклонил запрос"
-        message.startsWith("Network error") -> "Сетевая ошибка или истекло время ожидания"
-        message.startsWith("Invalid or unsupported endpoint") -> "Адрес провайдера недопустим или не поддерживается"
-        message == "Model ID is required" -> "Укажите ID модели"
-        message == "API key is required" -> "Укажите API-ключ"
-        message.isBlank() -> "Проверка подключения не выполнена"
-        else -> message
-    }
 
     private companion object {
         val ACTIVE_STATUSES = setOf("preparing", "streaming", "executing")
