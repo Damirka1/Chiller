@@ -195,6 +195,7 @@ class AgentCoordinator(
                     }
                 } catch (cancelled: CancellationException) {
                     withContext(NonCancellable) {
+                        runCatching { answerStoppedQuestions() }
                         events.append(sessionId, "run.cancelled", buildJsonObject { put("runId", id) })
                         _state.update { it.copy(status = "cancelled", streamingText = "", activeModelId = null, runDurationMs = stats.durationMs) }
                     }
@@ -268,6 +269,23 @@ class AgentCoordinator(
     }
 
     private fun JsonObject.long(key: String): Long? = this[key]?.jsonPrimitive?.longOrNull?.takeIf { it >= 0 }
+
+    /**
+     * A run stopped while it only waited for the user's answer has no effect of unknown outcome: each open question
+     * gets a "stopped without an answer" result, so the dialog restores as stopped rather than interrupted. With any
+     * other call still open nothing is settled here and the outcome stays unknown, as for every interrupted call.
+     */
+    private suspend fun answerStoppedQuestions() {
+        val open = _state.value.activities.filter { it.status in setOf("running", "executing", "preparing") }
+        if (open.isEmpty() || open.any { it.name != "ask_user" || it.toolCallId == null }) return
+        val pending = unresolvedToolCalls(_state.value.messages).map { it.id }.toSet()
+        if (open.any { it.toolCallId !in pending }) return
+        val result = ToolResult.failure("CANCELLED", "The user stopped the run without answering this question")
+        open.forEach { question ->
+            activity(question.copy(status = "cancelled", output = json.encodeToString(result)))
+            appendMessage(AgentMessage("tool", json.encodeToString(result), toolCallId = question.toolCallId))
+        }
+    }
 
     private suspend fun appendMessage(message: AgentMessage) {
         events.append(sessionId, "message", json.encodeToJsonElement(message).jsonObject)

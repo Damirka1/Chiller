@@ -547,6 +547,37 @@ class AgentCoordinatorTest {
         assertTrue(tools.executed.isEmpty())
     }
 
+    @Test fun stoppingWhileOnlyAQuestionWaitsRestoresAsStopped() = runTest {
+        suspend fun stopWhileWaiting(calls: List<ToolCall>): RunState {
+            val events = MemoryEvents()
+            val waiting = CompletableDeferred<Unit>()
+            val tools = object : ToolExecutor {
+                override val specs = listOf(ToolSpec("ask_user", "ask", JsonObject(emptyMap()), ToolEffect.READ), ToolSpec("write", "write", JsonObject(emptyMap()), ToolEffect.FILE_WRITE))
+                override suspend fun execute(call: ToolCall, context: ToolContext): ToolResult {
+                    if (call.name != "ask_user") return ToolResult(true)
+                    waiting.complete(Unit); awaitCancellation()
+                }
+            }
+            val provider = ScriptedProvider { flow { emit(ModelEvent.Completed(AgentMessage("assistant", toolCalls = calls), "tool_calls")) } }
+            val running = fixture(provider, tools, events, StandardTestDispatcher(testScheduler))
+            running.coordinator.send("work", ExecutionMode.WORKSPACE_EDIT)
+            runCurrent()
+            assertTrue(waiting.isCompleted)
+            running.coordinator.stop()
+            val restored = fixture(ScriptedProvider { error("restore must not call the provider") }, tools, events, StandardTestDispatcher(testScheduler)).coordinator
+            restored.restore()
+            return restored.state.value
+        }
+        val question = ToolCall("q1", "ask_user", "{\"question\":\"A or B?\"}")
+        val stopped = stopWhileWaiting(listOf(question))
+        assertEquals("cancelled", stopped.status)
+        assertEquals(null, stopped.question)
+        assertTrue(stopped.messages.last { it.role == "tool" }.content.orEmpty().contains("CANCELLED"))
+        // A write in the same batch may have happened: its outcome stays unknown and nothing is settled.
+        val mixed = stopWhileWaiting(listOf(ToolCall("w1", "write", "{}"), question))
+        assertEquals("interrupted", mixed.status)
+    }
+
     @Test fun repeatedErrorsSaveEveryBatchResultAndAllowManualContinuation() = runTest {
         var rounds = 0
         var effects = 0
