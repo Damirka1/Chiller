@@ -285,13 +285,20 @@ private fun StarterCard(starter: Starter, modifier: Modifier, onClick: () -> Uni
         modifier.height(IntrinsicSize.Min).clip(shape).background(if (hovered) c.hover else c.surface).border(1.dp, if (hovered) c.muted.copy(alpha = .35f) else c.border, shape)
             .hoverable(interaction).pointerHoverIcon(PointerIcon.Hand)
             .clickable(interactionSource = interaction, indication = null, role = Role.Button, onClick = onClick)
-            .padding(horizontal = 14.dp, vertical = 9.dp),
+            .padding(horizontal = 12.dp, vertical = 10.dp),
     ) {
+        // Every task says how it will run: reading only (Plan) or changing files.
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(starter.title, color = c.text, fontSize = 13.sp, lineHeight = 19.sp, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-            if (starter.needsEdits) Icon(Icons.Outlined.Edit, "Нужен режим изменений", Modifier.size(13.dp), tint = c.faint)
+            Box(Modifier.size(30.dp).clip(RoundedCornerShape(8.dp)).background(if (starter.needsEdits) c.accent.copy(alpha = .10f) else c.hover), contentAlignment = Alignment.Center) {
+                Icon(if (starter.needsEdits) Icons.Outlined.Edit else Icons.Outlined.Lightbulb, if (starter.needsEdits) "Режим изменений" else "Режим плана",
+                    Modifier.size(15.dp), tint = if (starter.needsEdits) c.accent else c.muted)
+            }
+            Spacer(Modifier.width(11.dp))
+            Column(Modifier.weight(1f)) {
+                Text(starter.title, color = c.text, fontSize = 13.sp, lineHeight = 19.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(starter.detail, color = c.muted, fontSize = 12.sp, lineHeight = 17.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
         }
-        Text(starter.detail, color = c.muted, fontSize = 12.sp, lineHeight = 17.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 

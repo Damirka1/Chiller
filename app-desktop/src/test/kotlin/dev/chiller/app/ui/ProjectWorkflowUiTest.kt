@@ -153,6 +153,24 @@ class ProjectWorkflowUiTest {
         assertEquals("remove", calls.last())
     }
 
+    @Test fun anAnswerOffersAllItsActionsOnHover() = runComposeUiTest {
+        setContent {
+            ChillerApp(
+                RunState(status = "completed", messages = listOf(dev.chiller.contracts.AgentMessage("user", "Привет"), dev.chiller.contracts.AgentMessage("assistant", "Ответ модели"))),
+                sessions, "s1", shop, isDemo = false, providerModel = "fake-model", providerBaseUrl = "http://localhost:8000/v1", thinkingEnabled = false, apiKeyConfigured = true,
+                onSend = { _, _, id -> SendReceipt(false, "s1", id) }, onStop = {}, onNewSession = {}, onSelectSession = {}, onChooseWorkspace = {},
+                onConfigureProvider = { _, _, _, _ -> null }, onAnswerQuestion = {}, onUndo = {}, onAllowProcessesChange = {}, allowProcesses = false,
+                preferences = UiPreferences(theme = "light", reducedMotion = true),
+                onDeleteMessage = { calls += "delete:$it"; true },
+            )
+        }
+        onNodeWithText("Ответ модели").performMouseInput { moveTo(center) }
+        // All three fit: they used to sit in a 32 dp column where only the first one showed.
+        onNodeWithContentDescription("Копировать ответ").assertIsDisplayed()
+        onNodeWithContentDescription("Изменить сообщение").assertIsDisplayed()
+        onNodeWithContentDescription("Удалить ход диалога").assertIsDisplayed()
+    }
+
     @Test fun noticesOpenTheirDialogAndCanBeClosed() = runComposeUiTest {
         app(notices = listOf(Notice("n1", "s2", "Тесты для парсера CSV", "Задача завершена, проверка пройдена", "positive")))
         onNodeWithText("Задача завершена, проверка пройдена").performClick()

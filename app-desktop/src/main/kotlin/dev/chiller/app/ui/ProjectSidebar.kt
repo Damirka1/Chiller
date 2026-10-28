@@ -170,8 +170,8 @@ private fun NestedAction(title: String, icon: androidx.compose.ui.graphics.vecto
     ) {
         Box(Modifier.size(15.dp), contentAlignment = Alignment.Center) { Icon(icon, null, Modifier.size(13.dp), tint = c.faint) }
         Spacer(Modifier.width(9.dp))
-        Text(title, color = if (hovered && enabled) c.muted else c.faint, fontSize = 11.sp, lineHeight = 16.sp, maxLines = 1, modifier = Modifier.weight(1f))
-        trailing?.let { Text(it, color = c.faint, fontSize = 10.sp) }
+        Text(title, color = if (hovered && enabled) c.muted else c.faint, fontSize = 12.sp, lineHeight = 17.sp, maxLines = 1, modifier = Modifier.weight(1f))
+        trailing?.let { Text(it, color = c.faint, fontSize = 11.sp) }
     }
 }
 
@@ -203,7 +203,7 @@ private fun ProjectRow(group: ProjectGroup, current: Boolean, open: Boolean, act
             Spacer(Modifier.width(3.dp))
             ProjectTile(group.path, 20.dp, dimmed = !exists)
             Spacer(Modifier.width(7.dp))
-            Text(name, color = if (exists) c.text else c.faint, fontSize = 12.sp, lineHeight = 18.sp, fontWeight = if (current) FontWeight.Medium else FontWeight.Normal,
+            Text(name, color = if (exists) c.text else c.faint, fontSize = 13.sp, lineHeight = 19.sp, fontWeight = if (current) FontWeight.Medium else FontWeight.Normal,
                 maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
             if (actions) {
                 ChillerIconButton(Icons.Outlined.Add, "Новый диалог в $name", { model.onNewIn(group.path) }, Modifier.size(24.dp), enabled = enabled && exists)
@@ -229,9 +229,9 @@ private fun ProjectRow(group: ProjectGroup, current: Boolean, open: Boolean, act
                     activity == ProjectActivity.RUNNING -> Box(Modifier.padding(end = 9.dp)) { Pulse(c.accent) }
                     activity == ProjectActivity.UNREAD && !open -> Box(Modifier.padding(end = 9.dp).size(7.dp).clip(androidx.compose.foundation.shape.CircleShape).background(c.accent))
                     !exists -> Icon(Icons.Outlined.WarningAmber, "Папка не найдена", Modifier.padding(end = 7.dp).size(13.dp), tint = c.negative)
-                    branch != null -> Text(branch!!, color = c.faint, fontSize = 10.sp, lineHeight = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 76.dp).padding(end = 7.dp))
+                    branch != null -> Text(branch!!, color = c.faint, fontSize = 11.sp, lineHeight = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 76.dp).padding(end = 7.dp))
                     group.pinned -> Icon(Icons.Outlined.PushPin, "Закреплён", Modifier.padding(end = 8.dp).size(11.dp), tint = c.faint)
-                    !open && group.sessions.isNotEmpty() -> Text("${group.sessions.size}", color = c.faint, fontSize = 10.sp, lineHeight = 14.sp, modifier = Modifier.padding(end = 9.dp))
+                    !open && group.sessions.isNotEmpty() -> Text("${group.sessions.size}", color = c.faint, fontSize = 11.sp, lineHeight = 15.sp, modifier = Modifier.padding(end = 9.dp))
                 }
             }
         }
@@ -291,7 +291,7 @@ internal fun FolderChip(menu: FolderMenu, enabled: Boolean) {
             if (workspace != null) ProjectTile(menu.worktree?.repo ?: workspace, 15.dp, dimmed = menu.missing)
             else Icon(Icons.AutoMirrored.Outlined.Chat, null, Modifier.size(13.dp), tint = c.faint)
             Spacer(Modifier.width(6.dp))
-            Text(menu.worktree?.let { folderName(it.repo) + " · копия" } ?: workspace?.let(::folderName) ?: "Без папки", color = if (menu.missing) c.negative else if (workspace == null) c.faint else c.muted, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+            Text(menu.worktree?.let { folderName(it.repo) + " · копия" } ?: workspace?.let(::folderName) ?: "Без папки", color = if (menu.missing) c.negative else if (workspace == null) c.faint else c.muted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
             if (menu.locked && workspace != null) { Spacer(Modifier.width(4.dp)); Icon(Icons.Outlined.Lock, null, Modifier.size(10.dp), tint = c.faint) }
         }
         if (open) ChillerPopover({ open = false; closedAt = System.currentTimeMillis() }, 288.dp) {
@@ -345,7 +345,7 @@ private fun FolderMenuRow(path: String, selected: Boolean, hint: String?, onClic
             Text(folderName(path), color = c.text, fontSize = 13.sp, lineHeight = 18.sp, fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(homeRelative(path), color = c.faint, fontSize = 11.sp, lineHeight = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
-        hint?.let { Text(it, color = c.faint, fontSize = 10.sp, modifier = Modifier.padding(start = 8.dp)) }
+        hint?.let { Text(it, color = c.faint, fontSize = 11.sp, modifier = Modifier.padding(start = 8.dp)) }
         if (selected) Icon(Icons.Outlined.Check, null, Modifier.padding(start = 8.dp).size(16.dp), tint = c.accent)
     }
 }

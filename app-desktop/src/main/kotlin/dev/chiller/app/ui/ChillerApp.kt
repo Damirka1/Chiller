@@ -377,7 +377,7 @@ fun ChillerApp(
                                 }
                             }
                         }
-                    }, onExport = onExportSession, connection = connection, width = 248f * density.fontScale.coerceIn(1f, 1.2f),
+                    }, onExport = onExportSession, connection = connection, width = 264f * density.fontScale.coerceIn(1f, 1.2f),
                     running = active, searchFocus = sidebarSearch, titleBar = titleBar,
                     settingsOpen = settings && !active, settingsSection = settingsSection, onSettingsSection = { settingsSection = it }, onCloseSettings = { settings = false }, version = settingsData?.version,
                     onOpenPath = { onOpenWorkspace(it) },
@@ -392,6 +392,7 @@ fun ChillerApp(
                             onLayout = { updateView(view.copy(layout = it.name.lowercase())) }, onSidebar = { sidebar = !sidebar }, onSettings = { openSettings() },
                             canConfigure = !active, compact = compact, compactChanges = showCompactChanges,
                             onCompactChanges = { showCompactChanges = !showCompactChanges },
+                            showMenu = !showSidebar,
                         )
                         RunProgressBar(active)
                         // The page under the toolbar moves with the sidebar: settings come in from the right, the chat from the left.
@@ -503,7 +504,8 @@ fun ChillerApp(
                                 }
                             }
                             AnimatedVisibility(
-                                visible = layout == WorkspaceLayout.STUDIO && (!compact || showCompactChanges),
+                                // An empty dialog has nothing to inspect yet: the start screen gets the whole width.
+                                visible = layout == WorkspaceLayout.STUDIO && (!compact || showCompactChanges) && (!empty || subagents.isNotEmpty()),
                                 enter = if (reducedMotion) EnterTransition.None else expandHorizontally(tween(160)) + fadeIn(tween(160)),
                                 exit = if (reducedMotion) ExitTransition.None else shrinkHorizontally(tween(180)) + fadeOut(tween(110)),
                             ) {
@@ -646,6 +648,8 @@ private fun Sidebar(
             ChillerMark(Modifier.size(23.dp), c.accent); Spacer(Modifier.width(9.dp))
             Text("Chiller", color = c.text, fontSize = 15.sp, fontWeight = FontWeight.Medium, letterSpacing = (-.4f).sp)
             Spacer(Modifier.weight(1f))
+            // Without a system menu bar the app menu lives by the logo, away from the sidebar toggle in the toolbar.
+            titleBar?.menu?.let { AppMenuButton(it) }
         }
         // While settings are open the chats cannot be used, so the sidebar turns into the settings navigation.
         // Opening slides it in from the right, closing slides the dialogs back from the left.
@@ -688,7 +692,7 @@ private fun Sidebar(
                 if (shown.isNotEmpty()) item(key = "search-header") {
                     Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp)) {
                         Text("Найдено", color = c.muted, fontSize = 12.sp, modifier = Modifier.weight(1f))
-                        Text("${shown.size} из ${sessions.size}", color = c.faint, fontSize = 10.sp)
+                        Text("${shown.size} из ${sessions.size}", color = c.faint, fontSize = 11.sp)
                     }
                 }
                 items(shown, key = { it.id }) { session -> row(session, false, roots[session.id]?.let(::folderName) ?: "без папки") }
@@ -700,7 +704,7 @@ private fun Sidebar(
             HoverRow(onSettings, Modifier.weight(1f), enabled = enabled) {
                 Icon(Icons.Outlined.Settings, null, Modifier.size(16.dp), tint = c.muted)
                 Column(Modifier.weight(1f).padding(start = 10.dp)) {
-                    Text("Настройки", color = c.text, fontSize = 12.sp, lineHeight = 17.sp, maxLines = 1)
+                    Text("Настройки", color = c.text, fontSize = 13.sp, lineHeight = 19.sp, maxLines = 1)
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Box(Modifier.size(6.dp).clip(CircleShape).background(dot))
                         Spacer(Modifier.width(6.dp))
@@ -740,11 +744,11 @@ private fun SidebarSearch(query: String, onQuery: (String) -> Unit, focus: Focus
         Icon(Icons.Outlined.Search, null, Modifier.size(14.dp), tint = c.faint)
         Spacer(Modifier.width(8.dp))
         BasicTextField(query, onQuery, singleLine = true,
-            textStyle = TextStyle(color = c.text, fontSize = 12.sp, lineHeight = 18.sp, letterSpacing = 0.sp), cursorBrush = SolidColor(c.text),
+            textStyle = TextStyle(color = c.text, fontSize = 13.sp, lineHeight = 19.sp, letterSpacing = 0.sp), cursorBrush = SolidColor(c.text),
             modifier = Modifier.weight(1f).focusRequester(focus).onFocusChanged { focused = it.isFocused }
                 .onPreviewKeyEvent { if (it.type == KeyEventType.KeyDown && it.key == Key.Escape && query.isNotEmpty()) { onQuery(""); true } else false }
                 .semantics { contentDescription = "Поиск диалогов" },
-            decorationBox = { inner -> Box { if (query.isEmpty()) Text("Поиск", color = c.faint, fontSize = 12.sp, lineHeight = 18.sp); inner() } },
+            decorationBox = { inner -> Box { if (query.isEmpty()) Text("Поиск", color = c.faint, fontSize = 13.sp, lineHeight = 19.sp); inner() } },
         )
         if (query.isNotEmpty()) Icon(Icons.Outlined.Close, "Очистить поиск", Modifier.size(14.dp).clip(CircleShape).clickable { onQuery("") }, tint = c.faint)
         else Text(shortcut("K"), color = c.faint, fontSize = 11.sp)
@@ -776,9 +780,9 @@ private fun SessionRow(session: SessionInfo, selected: Boolean, running: Boolean
             else if (isolated) Icon(Icons.Outlined.AccountTree, "Отдельная копия", Modifier.size(12.dp), tint = c.faint) else if (!nested) Icon(Icons.AutoMirrored.Outlined.Chat, null, Modifier.size(14.dp), tint = if (selected) c.muted else c.faint)
         }
         Spacer(Modifier.width(9.dp))
-        Text(session.title.ifBlank { "Новый диалог" }, color = if (selected || !nested || unread) c.text else c.text.copy(alpha = .86f), fontSize = 12.sp, lineHeight = 18.sp,
+        Text(session.title.ifBlank { "Новый диалог" }, color = if (selected || !nested || unread) c.text else c.text.copy(alpha = .86f), fontSize = 13.sp, lineHeight = 19.sp,
             fontWeight = if (unread) FontWeight.SemiBold else FontWeight.Normal, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-        if (project != null && !hovered && !menu) Text(project, color = c.faint, fontSize = 10.sp, lineHeight = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 70.dp).padding(start = 6.dp))
+        if (project != null && !hovered && !menu) Text(project, color = c.faint, fontSize = 11.sp, lineHeight = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 70.dp).padding(start = 6.dp))
         Box(Modifier.width(44.dp), contentAlignment = Alignment.CenterEnd) {
             if (hovered || menu || selected || rowFocused) {
                 Box {
@@ -796,13 +800,15 @@ private fun SessionRow(session: SessionInfo, selected: Boolean, running: Boolean
                         Spacer(Modifier.height(5.dp))
                     }
                 }
-            } else Text(if (waiting) "ждёт ответа" else if (running) "идёт" else relativeAge(session.updatedAt), color = if (waiting) c.focus else if (running) c.accent else c.faint, fontSize = 10.sp, lineHeight = 14.sp, maxLines = 1, modifier = Modifier.padding(end = 8.dp))
+            } else Text(if (waiting) "ждёт ответа" else if (running) "идёт" else relativeAge(session.updatedAt), color = if (waiting) c.focus else if (running) c.accent else c.faint, fontSize = 11.sp, lineHeight = 15.sp, maxLines = 1, modifier = Modifier.padding(end = 8.dp))
         }
     }
 }
 
 @Composable
-private fun Toolbar(titleBar: TitleBarSpec?, leadingInset: Boolean, title: String?, workspace: String?, layout: WorkspaceLayout, active: Boolean, status: String, waitingForUser: Boolean, onLayout: (WorkspaceLayout) -> Unit, onSidebar: () -> Unit, onSettings: () -> Unit, canConfigure: Boolean, compact: Boolean, compactChanges: Boolean, onCompactChanges: () -> Unit) {
+private fun Toolbar(titleBar: TitleBarSpec?, leadingInset: Boolean, title: String?, workspace: String?, layout: WorkspaceLayout, active: Boolean, status: String, waitingForUser: Boolean, onLayout: (WorkspaceLayout) -> Unit, onSidebar: () -> Unit, onSettings: () -> Unit, canConfigure: Boolean, compact: Boolean, compactChanges: Boolean, onCompactChanges: () -> Unit,
+    /** The app menu is in the toolbar only while the sidebar, its usual place, is hidden. */
+    showMenu: Boolean = true) {
     val c = LocalChillerPalette.current
     // Empty toolbar space drags the window; controls on top keep their clicks.
     Box(Modifier.fillMaxWidth()) {
@@ -810,13 +816,13 @@ private fun Toolbar(titleBar: TitleBarSpec?, leadingInset: Boolean, title: Strin
     // Windows caption buttons sit flush with the window's top-right corner; the toolbar ends a little before them.
     val end = titleBar?.captionButtonsWidth?.takeIf { it > 0.dp }?.plus(6.dp) ?: 15.dp
     Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(start = if (leadingInset) titleBar!!.trafficLightsWidth else 15.dp, end = end, top = 4.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-        titleBar?.menu?.let { AppMenuButton(it); Spacer(Modifier.width(2.dp)) }
+        if (showMenu) titleBar?.menu?.let { AppMenuButton(it); Spacer(Modifier.width(2.dp)) }
         ChillerIconButton(Icons.Outlined.VerticalSplit, "Боковая панель", onSidebar)
         Spacer(Modifier.width(10.dp))
         Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
-            Text(workspace?.let(::folderName) ?: "Chiller", color = c.muted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 140.dp))
-            Text(" / ", color = c.faint, fontSize = 12.sp)
-            Text(title?.take(44) ?: "Новый диалог", color = c.text, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+            Text(workspace?.let(::folderName) ?: "Chiller", color = c.muted, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 140.dp))
+            Text(" / ", color = c.faint, fontSize = 13.sp)
+            Text(title?.take(44) ?: "Новый диалог", color = c.text, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
         }
         if (active) { Text(if (waitingForUser) "Ждёт ответа" else statusLabel(status), color = c.muted, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 120.dp).padding(end = 12.dp)) }
         Row(Modifier.clip(RoundedCornerShape(7.dp)).background(c.sidebar).padding(2.dp), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -1410,8 +1416,8 @@ private fun Message(message: AgentMessage, showHeader: Boolean = true, streaming
                     Text(authorLabel(message), color = c.muted, fontWeight = FontWeight.Medium, fontSize = 12.sp, lineHeight = 18.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 320.dp))
                 }
             }
-            Row {
-                SelectionContainer(Modifier.weight(1f)) {
+            Box(Modifier.fillMaxWidth()) {
+                SelectionContainer(Modifier.fillMaxWidth()) {
                     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         val segments = content.split("```")
                         segments.forEachIndexed { index, text ->
@@ -1423,14 +1429,16 @@ private fun Message(message: AgentMessage, showHeader: Boolean = true, streaming
                         }
                     }
                 }
-                // Copy sits beside the text and shows on hover, so it adds no height to the message.
-                Box(Modifier.width(32.dp).padding(start = 8.dp), contentAlignment = Alignment.TopEnd) {
-                    if (!streaming) androidx.compose.animation.AnimatedVisibility(hovered || hasFocus || copied, enter = fadeIn(tween(120)), exit = fadeOut(tween(120))) {
-                        Row {
-                            ChillerIconButton(Icons.Outlined.DeleteOutline, "Удалить ход диалога", { onDelete?.invoke(content) }, Modifier.size(24.dp), enabled = onDelete != null)
-                            ChillerIconButton(Icons.Outlined.Edit, "Изменить сообщение", { onEdit?.invoke(content) }, Modifier.size(24.dp), enabled = onEdit != null)
-                            ChillerIconButton(if (copied) Icons.Outlined.Check else Icons.Outlined.ContentCopy, if (copied) "Скопировано" else "Копировать ответ", { clipboard.setText(AnnotatedString(content)); copied = true }, Modifier.size(24.dp))
-                        }
+                // The actions float over the answer's top-right corner on hover: the text keeps its full width and
+                // nothing moves when they appear.
+                if (!streaming) androidx.compose.animation.AnimatedVisibility(hovered || hasFocus || copied, Modifier.align(Alignment.TopEnd).offset(y = if (showHeader) (-28).dp else (-14).dp),
+                    enter = fadeIn(tween(120)), exit = fadeOut(tween(120))) {
+                    val pill = RoundedCornerShape(8.dp)
+                    Row(Modifier.shadow(6.dp, pill, ambientColor = androidx.compose.ui.graphics.Color.Black.copy(alpha = .08f), spotColor = androidx.compose.ui.graphics.Color.Black.copy(alpha = .12f))
+                        .clip(pill).background(c.surface).border(1.dp, c.border, pill).padding(2.dp)) {
+                        ChillerIconButton(if (copied) Icons.Outlined.Check else Icons.Outlined.ContentCopy, if (copied) "Скопировано" else "Копировать ответ", { clipboard.setText(AnnotatedString(content)); copied = true }, Modifier.size(26.dp))
+                        if (onEdit != null) ChillerIconButton(Icons.Outlined.Edit, "Изменить сообщение", { onEdit.invoke(content) }, Modifier.size(26.dp))
+                        if (onDelete != null) ChillerIconButton(Icons.Outlined.DeleteOutline, "Удалить ход диалога", { onDelete.invoke(content) }, Modifier.size(26.dp))
                     }
                 }
             }

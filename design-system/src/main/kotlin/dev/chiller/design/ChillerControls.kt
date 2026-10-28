@@ -98,7 +98,7 @@ fun ChillerControl(
         if (inlineTrailing && trailing != null) {
             InlineTrailingLabel(label, trailing, foreground, if (style == ControlStyle.PRIMARY) c.canvas.copy(alpha = .5f) else c.faint, enabled)
         } else {
-            Text(label, color = foreground.copy(alpha = if (enabled) 1f else .35f), fontSize = 12.sp, lineHeight = 18.sp, letterSpacing = 0.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+            Text(label, color = foreground.copy(alpha = if (enabled) 1f else .35f), fontSize = 13.sp, lineHeight = 18.sp, letterSpacing = 0.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
                 modifier = if (trailing != null) Modifier.weight(1f) else Modifier)
             trailing?.let { Text(it, fontSize = 11.sp, lineHeight = 16.sp, letterSpacing = 0.sp, color = if (style == ControlStyle.PRIMARY) c.canvas.copy(alpha = .5f) else c.faint) }
         }
@@ -110,7 +110,7 @@ fun ChillerControl(
 private fun InlineTrailingLabel(label: String, trailing: String, color: Color, trailingColor: Color, enabled: Boolean) {
     Layout(
         content = {
-            Text(label, color = color.copy(alpha = if (enabled) 1f else .35f), fontSize = 12.sp, lineHeight = 18.sp, letterSpacing = 0.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(label, color = color.copy(alpha = if (enabled) 1f else .35f), fontSize = 13.sp, lineHeight = 18.sp, letterSpacing = 0.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(trailing, fontSize = 11.sp, lineHeight = 16.sp, letterSpacing = 0.sp, color = trailingColor)
         }
     ) { measurables, constraints ->

@@ -27,7 +27,7 @@ data class ChillerPalette(
 )
 val LocalChillerPalette = staticCompositionLocalOf { ChillerPalette(
     Color(0xFFFFFFFF), Color(0xFFF4F5F6), Color.White, Color(0xFFE1E4E7),
-    Color(0xFF252A30), Color(0xFF606871), Color(0xFF737C86), Color(0xFFEBEDF0),
+    Color(0xFF252A30), Color(0xFF5B636C), Color(0xFF6A737D), Color(0xFFEBEDF0),
     Color(0xFFE4E7EA), Color(0xFF376D59), Color(0xFF1769AA), Color(0xFF356D57), Color(0xFFB6453A),
     Color(0xFFF0F6F0), Color(0xFFFBF0EE),
 ) }
