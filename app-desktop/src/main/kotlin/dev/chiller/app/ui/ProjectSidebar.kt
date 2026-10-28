@@ -54,6 +54,7 @@ import androidx.compose.ui.window.PopupProperties
 import dev.chiller.contracts.SessionInfo
 import dev.chiller.design.*
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.nio.file.Files
 import java.nio.file.Path
@@ -78,6 +79,14 @@ data class ProjectsModel(
     val waiting: Set<String> = emptySet(),
     /** Dialogs with a result the user has not seen yet. */
     val unread: Set<String> = emptySet(),
+    /** The project each dialog in its own working copy belongs to, by dialog id. */
+    val origins: Map<String, String> = emptyMap(),
+    /** The shown dialog's own working copy and what can be done with it. */
+    val worktree: dev.chiller.app.di.WorktreeInfo? = null,
+    val onIsolate: () -> Unit = {},
+    val worktreeChanges: suspend () -> List<String>? = { null },
+    val onApplyWorktree: suspend () -> String = { "" },
+    val onRemoveWorktree: () -> Unit = {},
     val onStop: (String) -> Unit = {},
 )
 
@@ -252,6 +261,10 @@ data class FolderMenu(
     val onOpen: (String) -> Unit, val onChoose: () -> Unit, val onDetach: () -> Unit, val onRelocate: (String) -> Unit,
     /** For a dialog with a fixed folder: a new dialog elsewhere that starts from a draft of this one. */
     val onContinueElsewhere: (() -> Unit)? = null,
+    /** The dialog works in its own copy of [workspace]'s project. */
+    val worktree: dev.chiller.app.di.WorktreeInfo? = null,
+    /** Offered for an empty dialog in a git project: work in its own copy, side by side with other dialogs. */
+    val onIsolate: (() -> Unit)? = null,
 )
 
 /**
@@ -271,14 +284,14 @@ internal fun FolderChip(menu: FolderMenu, enabled: Boolean) {
             Modifier.widthIn(max = 168.dp).height(28.dp).clip(RoundedCornerShape(7.dp)).background(if ((hovered || open) && enabled) c.hover else c.sidebar)
                 .hoverable(interaction).pointerHoverIcon(PointerIcon.Hand)
                 .clickable(interactionSource = interaction, indication = null, enabled = enabled, role = Role.Button) { if (System.currentTimeMillis() - closedAt > 200) open = !open }
-                .semantics { contentDescription = "Папка диалога: ${workspace?.let(::folderName) ?: "без папки"}" }
+                .semantics { contentDescription = "Папка диалога: ${menu.worktree?.let { folderName(it.repo) + ", отдельная копия" } ?: workspace?.let(::folderName) ?: "без папки"}" }
                 .padding(start = 6.dp, end = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            if (workspace != null) ProjectTile(workspace, 15.dp, dimmed = menu.missing)
+            if (workspace != null) ProjectTile(menu.worktree?.repo ?: workspace, 15.dp, dimmed = menu.missing)
             else Icon(Icons.AutoMirrored.Outlined.Chat, null, Modifier.size(13.dp), tint = c.faint)
             Spacer(Modifier.width(6.dp))
-            Text(workspace?.let(::folderName) ?: "Без папки", color = if (menu.missing) c.negative else if (workspace == null) c.faint else c.muted, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+            Text(menu.worktree?.let { folderName(it.repo) + " · копия" } ?: workspace?.let(::folderName) ?: "Без папки", color = if (menu.missing) c.negative else if (workspace == null) c.faint else c.muted, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
             if (menu.locked && workspace != null) { Spacer(Modifier.width(4.dp)); Icon(Icons.Outlined.Lock, null, Modifier.size(10.dp), tint = c.faint) }
         }
         if (open) ChillerPopover({ open = false; closedAt = System.currentTimeMillis() }, 288.dp) {
@@ -292,6 +305,10 @@ internal fun FolderChip(menu: FolderMenu, enabled: Boolean) {
             }
             if (menu.locked) menu.onContinueElsewhere?.let { continueElsewhere ->
                 MenuRow("Продолжить в другой папке…", { close(); continueElsewhere() }, subtitle = "Новый диалог с кратким пересказом этого", icon = Icons.Outlined.CreateNewFolder)
+                MenuDivider()
+            }
+            menu.onIsolate?.let { isolate ->
+                MenuRow("Работать в отдельной копии", { close(); isolate() }, subtitle = "git worktree: параллельно с другими задачами проекта", icon = Icons.Outlined.AccountTree)
                 MenuDivider()
             }
             if (menu.missing && workspace != null) {
@@ -463,5 +480,59 @@ internal fun MissingFolderBanner(path: String, enabled: Boolean, onRelocate: () 
         ChillerControl("Новый диалог", onNewDialog, enabled = enabled)
         Spacer(Modifier.width(6.dp))
         ChillerControl("Указать новое место…", onRelocate, icon = Icons.Outlined.FolderOpen, style = ControlStyle.PRIMARY, enabled = enabled)
+    }
+}
+
+/**
+ * Above the composer of a dialog that works in its own copy: the branch, what changed, and the way back into the
+ * project. Applying is exact or nothing; removing asks first because unapplied changes go with the copy.
+ */
+@Composable
+internal fun WorktreeBar(info: dev.chiller.app.di.WorktreeInfo, running: Boolean, model: ProjectsModel) {
+    val c = LocalChillerPalette.current
+    val scope = rememberCoroutineScope()
+    var refresh by remember { mutableIntStateOf(0) }
+    val changes by produceState<List<String>?>(null, info, running, refresh) { value = if (running) null else model.worktreeChanges() }
+    var message by remember(info) { mutableStateOf<String?>(null) }
+    var applying by remember { mutableStateOf(false) }
+    var menu by remember { mutableStateOf(false) }
+    var confirm by remember { mutableStateOf(false) }
+    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(c.sidebar).border(1.dp, c.border, RoundedCornerShape(12.dp)).padding(start = 14.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        Icon(Icons.Outlined.AccountTree, null, Modifier.size(16.dp), tint = c.accent)
+        Spacer(Modifier.width(10.dp))
+        Column(Modifier.weight(1f)) {
+            Text("Отдельная копия · ${info.branch}", color = c.text, fontSize = 12.sp, lineHeight = 17.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            val line = message ?: when {
+                running -> "Задача идёт в копии; проект не меняется"
+                changes == null -> "Изменения появятся здесь"
+                changes!!.isEmpty() -> "Изменений пока нет"
+                else -> "Изменено: ${changes!!.size} ${plural(changes!!.size, "файл", "файла", "файлов")} · " + changes!!.take(3).joinToString(", ") { it.substringAfterLast('/') } + if (changes!!.size > 3) "…" else ""
+            }
+            Text(line, color = c.muted, fontSize = 11.sp, lineHeight = 15.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        }
+        Spacer(Modifier.width(8.dp))
+        ChillerControl(if (applying) "Переношу…" else "Перенести в проект", {
+            applying = true
+            scope.launch { try { message = model.onApplyWorktree() } finally { applying = false; refresh++ } }
+        }, icon = Icons.Outlined.MoveDown, style = ControlStyle.PRIMARY, enabled = !running && !applying && !changes.isNullOrEmpty())
+        Box {
+            ChillerIconButton(Icons.Outlined.MoreHoriz, "Действия с копией", { menu = !menu; confirm = false }, Modifier.size(28.dp), enabled = !running)
+            if (menu) ChillerPopover({ menu = false }, 280.dp, alignEnd = true) {
+                Spacer(Modifier.height(6.dp))
+                if (!confirm) {
+                    MenuRow("Показать в $fileManagerName", { menu = false; model.onReveal(info.path) }, icon = Icons.Outlined.FolderOpen)
+                    MenuDivider()
+                    MenuRow("Удалить копию…", { confirm = true }, subtitle = "Диалог вернётся в проект", icon = Icons.Outlined.DeleteOutline)
+                } else {
+                    Text(if (changes.isNullOrEmpty()) "Удалить копию? Ветка ${info.branch} останется в репозитории."
+                        else "Удалить копию? Изменения, которые не перенесены в проект, пропадут вместе с ней; ветка ${info.branch} останется.",
+                        color = c.muted, fontSize = 12.sp, lineHeight = 17.sp, modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp))
+                    MenuRow("Удалить копию", { menu = false; confirm = false; model.onRemoveWorktree() }, icon = Icons.Outlined.DeleteOutline)
+                    MenuRow("Отмена", { confirm = false }, icon = Icons.Outlined.Close)
+                }
+                Spacer(Modifier.height(6.dp))
+            }
+        }
     }
 }

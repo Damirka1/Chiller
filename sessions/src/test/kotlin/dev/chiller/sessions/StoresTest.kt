@@ -46,6 +46,13 @@ class StoresTest {
         assertEquals("/p/one", store.list().single().workspace)
         store.append("s", "session.workspace", buildJsonObject { put("root", "/p/moved") })
         assertEquals("/p/moved", JsonlEventStore(root).list().single().workspace)
+        // A dialog in its own working copy belongs to the project it was made from, until the copy is removed.
+        store.append("s", "session.worktree", buildJsonObject { put("repo", "/p/moved"); put("path", "/data/wt/s/moved"); put("branch", "chiller/s") })
+        store.append("s", "session.workspace", buildJsonObject { put("root", "/data/wt/s/moved") })
+        assertEquals("/p/moved", store.list().single().origin)
+        store.append("s", "session.worktree", buildJsonObject { put("repo", "/p/moved"); put("path", "/data/wt/s/moved"); put("removed", true) })
+        store.append("s", "session.workspace", buildJsonObject { put("root", "/p/moved") })
+        assertNull(store.list().single().origin)
     }
 
     @Test fun corruptInteriorIsNotSkipped() = runTest {        val root = Files.createTempDirectory("chiller-session")

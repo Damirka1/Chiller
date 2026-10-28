@@ -145,7 +145,11 @@ data class DesktopState(val run: RunState = RunState(), val sessions: List<Sessi
     /** News from dialogs in the background, newest last. */
     val notices: List<Notice> = emptyList(),
     /** Dialogs whose run or check finished while they were not on screen and that were not opened since. */
-    val unreadSessions: Set<String> = emptySet())
+    val unreadSessions: Set<String> = emptySet(),
+    /** The project each dialog in its own working copy was made from, by dialog id. */
+    val sessionOrigins: Map<String, String> = emptyMap(),
+    /** The shown dialog's own working copy, when it has one. */
+    val worktree: WorktreeInfo? = null)
 
 class DesktopController(
     private val directory: Path, initialCredential: String? = LocalCredentials.load(), connectionChecker: ConnectionChecker? = null, catalogClient: ModelCatalogClient? = null,
@@ -214,6 +218,9 @@ class DesktopController(
         var verifyAttempt = 0
     }
     private val engines = java.util.concurrent.ConcurrentHashMap<String, Engine>()
+    private val worktrees = GitWorktrees(directory.resolve("worktrees"))
+    /** Working copies made for dialogs that have no message yet; journaled with the first one. */
+    private val pendingWorktrees = java.util.concurrent.ConcurrentHashMap<String, WorktreeInfo>()
     /** Finished checks of dialogs whose engine was let go, shown again when the dialog is opened. */
     private val keptVerify = java.util.concurrent.ConcurrentHashMap<String, VerifyState>()
     private val shownEngine: Engine? get() = engines[_state.value.sessionId]
@@ -260,7 +267,7 @@ class DesktopController(
         settings.customProviders.forEach(::adoptKey)
         settings = rememberModel(settings, settings.baseUrl, settings.model)
         // A demo folder must never come back as the project on the next launch.
-        if (settings.workspace?.let(::isDemoFolder) == true) settings = settings.copy(workspace = null)
+        if (settings.workspace?.let(::isAppFolder) == true) settings = settings.copy(workspace = null)
         savedWorkspace = settings.workspace
         refreshSessions()
         _state.update { it.copy(settings = settings, allowProcesses = settings.allowProcesses, uiPreferences = preferencesStore.load()) }
@@ -417,7 +424,12 @@ class DesktopController(
         if (busy() || id == _state.value.sessionId || running(id)) return@withLock false
         val plan = deletionPlans.remove(id) ?: return@withLock false
         try {
+            val copy = runCatching { events.read(id) }.getOrNull()?.let { history ->
+                history.lastOrNull { it.type == "session.workspace" }?.payload?.get("root")?.jsonPrimitive?.contentOrNull?.let { root -> worktreeOf(history, root) }
+            }
             val result = withContext(Dispatchers.IO) { maintenance().delete(plan, setOf(_state.value.sessionId)) }
+            // The dialog's own working copy goes with it; its branch stays in the repository.
+            if (result.complete && copy != null) scope.launch { runCatching { worktrees.remove(copy) } }
             refreshSessions()
             _state.update { it.copy(sessionWorkspaces = it.sessionWorkspaces - id) }
             if (!result.complete) showError("Удаление завершено частично. Остатки данных изолированы; файлы проекта не затронуты.")
@@ -615,6 +627,7 @@ class DesktopController(
             invalidateCatalog()
             if (previousTargetCredential != nextCredential) next = next.copy(modelCatalogs = next.modelCatalogs.filterKeys { originOf(it) != originOf(next.baseUrl) })
         }
+        if (!keepSession) discardPendingWorktree()
         if (keepSession) _state.update { it.copy(settings = next) }
         else _state.update { it.copy(settings = next, sessionId = newId(), run = RunState(), verify = VerifyState()) }
         _state.update { it.copy(apiKeyConfigured = ready(), connection = if (profileChanged) connectionForUnverified() else it.connection) }
@@ -639,15 +652,16 @@ class DesktopController(
             val session = shown.sessionId
             val keep = !busy() && !shown.folderLocked && shown.settings.workspace?.let(::isDemoFolder) != true && events.findEarly(session, "session.demo") == null
             resetEngine()
+            discardPendingWorktree()
             // A dialog with turns records the folder now, so the list moves it into the project at once.
             val attach = keep && shown.run.messages.isNotEmpty()
             if (attach) events.append(session, "session.workspace", buildJsonObject { put("root", root) })
             val settings = rememberProject(shown.settings, root).copy(workspace = root)
             savedWorkspace = root
             _state.update {
-                if (keep) it.copy(settings = settings, folderLocked = attach, workspaceMissing = false, verify = VerifyState(),
+                if (keep) it.copy(settings = settings, folderLocked = attach, workspaceMissing = false, verify = VerifyState(), worktree = null,
                     sessionWorkspaces = if (attach) it.sessionWorkspaces + (session to root) else it.sessionWorkspaces)
-                else it.copy(settings = settings, sessionId = newId(), run = RunState(), verify = VerifyState(), outside = null, undoneChanges = emptySet(), folderLocked = false, workspaceMissing = false)
+                else it.copy(settings = settings, sessionId = newId(), run = RunState(), verify = VerifyState(), outside = null, undoneChanges = emptySet(), folderLocked = false, workspaceMissing = false, worktree = null)
             }
             saveSettings(settings)
             if (attach) refreshSessions()
@@ -666,9 +680,10 @@ class DesktopController(
         try {
             val canonical = root?.let { withContext(Dispatchers.IO) { Path.of(it).toRealPath() }.also { path -> require(Files.isDirectory(path)) }.toString() }
             resetEngine()
+            discardPendingWorktree()
             val settings = (canonical?.let { rememberProject(_state.value.settings, it) } ?: _state.value.settings).copy(workspace = canonical)
             savedWorkspace = canonical
-            _state.update { it.copy(settings = settings, sessionId = newId(), run = RunState(), verify = VerifyState(), outside = null, undoneChanges = emptySet(), folderLocked = false, workspaceMissing = false) }
+            _state.update { it.copy(settings = settings, sessionId = newId(), run = RunState(), verify = VerifyState(), outside = null, undoneChanges = emptySet(), folderLocked = false, workspaceMissing = false, worktree = null) }
             saveSettings(settings)
             return true
         } catch (cancelled: CancellationException) { throw cancelled }
@@ -691,21 +706,23 @@ class DesktopController(
 
     private suspend fun newSessionLocked() {
         resetEngine()
+        discardPendingWorktree()
         // Leaving the demo returns to the project the user had open, not the throwaway demo folder.
         val current = _state.value.settings.workspace
-        val workspace = (if (current != null && isDemoFolder(current)) savedWorkspace else current)?.takeIf { Files.isDirectory(Path.of(it)) }
-        _state.update { it.copy(sessionId = newId(), run = RunState(), verify = VerifyState(), outside = null, undoneChanges = emptySet(), settings = it.settings.copy(workspace = workspace), folderLocked = false, workspaceMissing = false) }
+        val workspace = (if (current != null && isAppFolder(current)) savedWorkspace else current)?.takeIf { Files.isDirectory(Path.of(it)) }
+        _state.update { it.copy(sessionId = newId(), run = RunState(), verify = VerifyState(), outside = null, undoneChanges = emptySet(), settings = it.settings.copy(workspace = workspace), folderLocked = false, workspaceMissing = false, worktree = null) }
     }
 
     /** Leaves the current project: the shown dialog loses its folder while it still can, otherwise a new dialog without one opens. */
     suspend fun closeWorkspace() = commands.withLock {
         val keep = !busy()
         resetEngine()
+        discardPendingWorktree()
         val settings = _state.value.settings.copy(workspace = null)
         savedWorkspace = null
         _state.update {
-            if (keep && !it.folderLocked) it.copy(settings = settings, verify = VerifyState(), workspaceMissing = false)
-            else it.copy(settings = settings, sessionId = newId(), run = RunState(), verify = VerifyState(), outside = null, undoneChanges = emptySet(), folderLocked = false, workspaceMissing = false)
+            if (keep && !it.folderLocked) it.copy(settings = settings, verify = VerifyState(), workspaceMissing = false, worktree = null)
+            else it.copy(settings = settings, sessionId = newId(), run = RunState(), verify = VerifyState(), outside = null, undoneChanges = emptySet(), folderLocked = false, workspaceMissing = false, worktree = null)
         }
         saveSettings(settings)
     }
@@ -743,7 +760,16 @@ class DesktopController(
         catch (_: Exception) { showError("Не удалось указать новое место папки.") }
     }
 
-    /** The app's own throwaway demo project, which is never listed as a project of the user. */
+    /** The app's own folders, demo projects and dialogs' working copies, which are never listed as projects of the user. */
+    fun isAppFolder(path: String): Boolean = isDemoFolder(path) || isUnder(path, directory.resolve("worktrees"))
+
+    private fun isUnder(path: String, base: Path): Boolean {
+        val real = runCatching { base.toRealPath() }.getOrElse { base.toAbsolutePath().normalize() }
+        val target = runCatching { Path.of(path).toRealPath() }.getOrElse { Path.of(path).toAbsolutePath().normalize() }
+        return target.startsWith(real)
+    }
+
+    /** The app's own throwaway demo project. */
     fun isDemoFolder(path: String): Boolean {
         val demo = directory.resolve("demo")
         // Real paths on both sides: on macOS /var is a link to /private/var.
@@ -755,6 +781,7 @@ class DesktopController(
     private suspend fun selectSessionLocked(id: String) {
         try {
             resetEngine()
+            if (id != _state.value.sessionId) discardPendingWorktree()
             _state.update { it.copy(notices = it.notices.filterNot { notice -> notice.sessionId == id }, unreadSessions = it.unreadSessions - id) }
             val history = events.read(id)
             // A dialog still running in the background is shown live from its engine, not restored from the journal.
@@ -762,7 +789,7 @@ class DesktopController(
             val savedRoot = history.lastOrNull { it.type == "session.workspace" }?.payload?.get("root")?.jsonPrimitive?.contentOrNull
             val missing = savedRoot != null && !withContext(Dispatchers.IO) { Files.isDirectory(Path.of(savedRoot)) }
             _state.update { it.copy(sessionId = id, settings = it.settings.copy(workspace = savedRoot), run = RunState(), verify = VerifyState(), outside = null, undoneChanges = emptySet(),
-                folderLocked = folderLocked(history), workspaceMissing = missing) }
+                folderLocked = folderLocked(history), workspaceMissing = missing, worktree = worktreeOf(history, savedRoot)) }
             // Without its folder the dialog is shown from the journal; it continues once the folder is found again.
             if (savedRoot == null || missing) {
                 val messages = projectConversation(history)
@@ -781,12 +808,100 @@ class DesktopController(
     private fun showEngine(engine: Engine, history: List<StoredEvent>) {
         val run = engine.coordinator.state.value.let { run -> run.copy(question = run.question ?: engine.questions.question.value) }
         _state.update { it.copy(sessionId = engine.sessionId, settings = it.settings.copy(workspace = engine.root), run = run, verify = engine.verify, outside = null,
-            undoneChanges = undoneChangeIds(history), folderLocked = folderLocked(history), workspaceMissing = false, activeProfile = engine.profile,
+            undoneChanges = undoneChangeIds(history), folderLocked = folderLocked(history), workspaceMissing = false, activeProfile = engine.profile, worktree = worktreeOf(history, engine.root),
             subagents = engine.supervisor.state.value) }
+    }
+
+    /** The dialog's working copy when it is still bound to it. */
+    private fun worktreeOf(history: List<StoredEvent>, root: String?): WorktreeInfo? {
+        if (root == null) return null
+        val event = history.lastOrNull { it.type == "session.worktree" } ?: return pendingWorktrees.values.firstOrNull { it.path == root }
+        if (event.payload["removed"]?.jsonPrimitive?.booleanOrNull == true) return null
+        return runCatching { json.decodeFromJsonElement(WorktreeInfo.serializer(), event.payload) }.getOrNull()?.takeIf { it.path == root }
+    }
+
+    /** A copy made for a dialog that never got a message goes away when the dialog is left or gets another folder. */
+    private fun discardPendingWorktree() {
+        val info = pendingWorktrees.remove(_state.value.sessionId) ?: return
+        scope.launch { runCatching { worktrees.discard(info) } }
+    }
+
+    /**
+     * Gives the shown, still empty dialog its own git working copy of its project, so it can run while another
+     * dialog works in the project itself. The copy starts from the project's last commit.
+     */
+    suspend fun isolateInWorktree() = commands.withLock {
+        val shown = _state.value
+        val repo = shown.settings.workspace
+        if (busy() || repo == null || shown.folderLocked || shown.worktree != null || shown.run.messages.isNotEmpty() || isAppFolder(repo)) return@withLock
+        try {
+            if (!worktrees.canIsolate(Path.of(repo))) return@withLock showError("Отдельная копия делается из корня git-репозитория, в котором есть хотя бы один коммит.")
+            val info = worktrees.create(Path.of(repo), shown.sessionId)
+            resetEngine()
+            pendingWorktrees[shown.sessionId] = info
+            _state.update { it.copy(settings = it.settings.copy(workspace = info.path), worktree = info) }
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (e: Exception) { showError("Не удалось создать отдельную копию: ${e.message?.take(300)}") }
+    }
+
+    /** Files the shown dialog changed in its copy, or null when it has none or it is busy. */
+    suspend fun worktreeChanges(): List<String>? = commands.withLock {
+        val info = _state.value.worktree ?: return@withLock null
+        if (running(_state.value.sessionId)) return@withLock null
+        runCatching { worktrees.changedFiles(info) }.getOrNull()
+    }
+
+    /** Carries the shown dialog's changes from its copy into the project, exactly or not at all. Returns what happened. */
+    suspend fun applyWorktree(): String = commands.withLock {
+        val shown = _state.value
+        val info = shown.worktree ?: return@withLock "Диалог работает не в отдельной копии"
+        if (running(shown.sessionId)) return@withLock "Дождитесь завершения задачи"
+        if (engines.values.any { it.active && it.root == info.repo }) return@withLock "В проекте идёт другая задача. Перенесите изменения, когда она закончится."
+        try {
+            when (val result = worktrees.apply(info)) {
+                is WorktreeApply.Applied -> {
+                    runCatching { events.append(shown.sessionId, "worktree.applied", buildJsonObject { put("files", result.files.size); put("paths", JsonArray(result.files.take(50).map(::JsonPrimitive))) }) }
+                    "Перенесено в проект: ${result.files.size} ${dev.chiller.app.ui.plural(result.files.size, "файл", "файла", "файлов")}"
+                }
+                WorktreeApply.Nothing -> "Изменений нет"
+                is WorktreeApply.Conflict -> {
+                    runCatching { events.append(shown.sessionId, "worktree.apply_failed", buildJsonObject { put("message", result.message.take(600)) }) }
+                    "Не накладывается чисто: в проекте эти места тоже менялись. Проект не изменён, копия и ветка ${info.branch} остаются."
+                }
+            }
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (e: Exception) { "Не удалось перенести: ${e.message?.take(300)}" }
+    }
+
+    /**
+     * Removes the shown dialog's copy and puts the dialog back into its project; paths in its history are relative,
+     * so they point at the same files there. The copy's branch stays in the repository.
+     */
+    suspend fun removeWorktree() = commands.withLock {
+        val shown = _state.value
+        val info = shown.worktree ?: return@withLock
+        if (running(shown.sessionId)) return@withLock
+        try { worktrees.remove(info) }
+        catch (cancelled: CancellationException) { throw cancelled }
+        catch (e: Exception) { return@withLock showError("Не удалось удалить копию: ${e.message?.take(300)}") }
+        resetEngine(invalidate = true)
+        if (pendingWorktrees.remove(shown.sessionId) != null) {
+            _state.update { it.copy(settings = it.settings.copy(workspace = info.repo), worktree = null) }
+            return@withLock
+        }
+        events.append(shown.sessionId, "session.worktree", buildJsonObject { put("repo", info.repo); put("path", info.path); put("branch", info.branch); put("removed", true) })
+        events.append(shown.sessionId, "session.workspace", buildJsonObject { put("root", info.repo) })
+        _state.update { it.copy(sessionOrigins = it.sessionOrigins - shown.sessionId, sessionWorkspaces = it.sessionWorkspaces + (shown.sessionId to info.repo)) }
+        refreshSessions()
+        selectSessionLocked(shown.sessionId)
     }
 
     /** Records [root] as the dialog's folder unless it already is. */
     private suspend fun bindSession(session: String, root: String) {
+        pendingWorktrees.remove(session)?.let { info ->
+            events.append(session, "session.worktree", json.encodeToJsonElement(WorktreeInfo.serializer(), info).jsonObject)
+            _state.update { it.copy(sessionOrigins = it.sessionOrigins + (session to info.repo)) }
+        }
         val bound = events.read(session).lastOrNull { it.type == "session.workspace" }?.payload?.get("root")?.jsonPrimitive?.contentOrNull
         if (bound != root) events.append(session, "session.workspace", buildJsonObject { put("root", root) })
         _state.update { it.copy(sessionWorkspaces = it.sessionWorkspaces + (session to root)) }
@@ -807,7 +922,7 @@ class DesktopController(
         // Two agents editing one folder would trip over each other's snapshots; dialogs without a folder have their own.
         val background = engines.values.filter { it.sessionId != session && it.active }
         val folder = _state.value.settings.workspace
-        if (folder != null && background.any { it.root == folder }) return rejected("В этом проекте уже идёт задача в другом диалоге. Дождитесь её или остановите.")
+        if (folder != null && background.any { it.root == folder }) return rejected("В этом проекте уже идёт задача в другом диалоге. Дождитесь её, остановите или начните диалог в отдельной копии (меню папки).")
         if (background.size >= MAX_PARALLEL_RUNS) return rejected("Одновременно идут $MAX_PARALLEL_RUNS задачи. Дождитесь одной из них.")
         if (events.findEarly(session, "session.demo") != null) return rejected("Это демо-диалог: в нём отвечает сценарий, а не модель. Начните новый диалог.")
         if (_state.value.settings.model.isBlank()) return rejected("Выберите модель в настройках подключения")
@@ -1109,7 +1224,8 @@ class DesktopController(
             val stamp = java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss"))
             val root = withContext(Dispatchers.IO) { directory.resolve("demo").resolve(stamp).resolve("chiller-demo").also { DemoScenario.createProject(it) }.toRealPath() }
             resetEngine()
-            _state.update { it.copy(settings = it.settings.copy(workspace = root.toString()), sessionId = newId(), run = RunState()) }
+            discardPendingWorktree()
+            _state.update { it.copy(settings = it.settings.copy(workspace = root.toString()), sessionId = newId(), run = RunState(), worktree = null) }
             val engine = buildEngine(DemoScenario.Provider(), DemoScenario.MODEL_ID)
             events.append(_state.value.sessionId, "session.demo", buildJsonObject { put("scenario", "all-tools") })
             val job = engine.send(DemoScenario.PROMPT, ExecutionMode.WORKSPACE_EDIT, allowProcesses = true)
@@ -1252,7 +1368,8 @@ class DesktopController(
         val sessions = events.list()
         // The listing carries each dialog's folder; a binding made since the last listing is kept until it shows up.
         val roots = _state.value.sessionWorkspaces + sessions.mapNotNull { session -> session.workspace?.let { session.id to it } }
-        _state.update { it.copy(sessions = sessions, sessionWorkspaces = roots) }
+        val origins = sessions.mapNotNull { session -> session.origin?.let { session.id to it } }.toMap()
+        _state.update { it.copy(sessions = sessions, sessionWorkspaces = roots, sessionOrigins = origins) }
     }
     private fun showError(message: String) { _state.update { it.copy(run = it.run.copy(status = "failed", error = message)) } }
     private fun cachedReceipt(requestId: String): SendReceipt? = synchronized(sendReceiptsLock) { sendReceipts[requestId] }

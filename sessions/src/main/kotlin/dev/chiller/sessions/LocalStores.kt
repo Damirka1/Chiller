@@ -113,7 +113,11 @@ class JsonlEventStore(private val directory: Path) : EventStore {
         }
         val title = renamed ?: first?.content?.takeIf { it.isNotBlank() }?.take(64) ?: first?.attachments?.firstOrNull()?.name?.take(64) ?: "Новый диалог"
         val workspace = events.lastOrNull { it.type == "session.workspace" }?.payload?.get("root")?.jsonPrimitive?.contentOrNull
-        val info = SessionInfo(id, title, events.lastOrNull()?.timestamp ?: "", workspace)
+        // A working copy counts while the dialog is still bound to it; after removal the dialog is back in the project.
+        val origin = events.lastOrNull { it.type == "session.worktree" }?.payload
+            ?.takeIf { it["path"]?.jsonPrimitive?.contentOrNull == workspace && it["removed"]?.jsonPrimitive?.booleanOrNull != true }
+            ?.get("repo")?.jsonPrimitive?.contentOrNull
+        val info = SessionInfo(id, title, events.lastOrNull()?.timestamp ?: "", workspace, origin)
         index[id] = IndexEntry(size, modified, info)
         return info
     }

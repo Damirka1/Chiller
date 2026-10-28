@@ -180,8 +180,12 @@ private fun chillerApplication() = application {
             projects = dev.chiller.app.ui.ProjectsModel(
                 pinned = state.settings.pinnedWorkspaces, hidden = state.settings.hiddenWorkspaces,
                 folderLocked = state.folderLocked, workspaceMissing = state.workspaceMissing,
-                excluded = controller::isDemoFolder,
+                excluded = controller::isAppFolder,
                 running = state.runningSessions, waiting = state.waitingSessions, unread = state.unreadSessions,
+                origins = state.sessionOrigins, worktree = state.worktree,
+                onIsolate = { scope.launch { controller.isolateInWorktree() } },
+                worktreeChanges = { controller.worktreeChanges() }, onApplyWorktree = { controller.applyWorktree() },
+                onRemoveWorktree = { scope.launch { controller.removeWorktree() } },
                 onStop = { id -> scope.launch { controller.stopSession(id) } },
                 onNewIn = { root -> scope.launch { controller.newSessionIn(root) } },
                 onPin = { root, pinned -> scope.launch { controller.pinWorkspace(root, pinned) } },

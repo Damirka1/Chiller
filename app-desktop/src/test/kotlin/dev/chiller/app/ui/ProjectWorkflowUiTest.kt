@@ -128,6 +128,31 @@ class ProjectWorkflowUiTest {
         assertEquals("relocate:demo-shop", calls.last())
     }
 
+    @Test fun aGitProjectOffersItsOwnCopyAndTheCopyCanBeAppliedOrRemoved() = runComposeUiTest {
+        Files.createDirectories(java.nio.file.Path.of(shop).resolve(".git"))
+        app(projects = model().copy(onIsolate = { calls += "isolate" }))
+        onNodeWithContentDescription("Папка диалога: demo-shop").performClick()
+        onNodeWithText("Работать в отдельной копии").performClick()
+        assertEquals("isolate", calls.last())
+    }
+
+    @Test fun theCopyBarShowsChangesAppliesAndAsksBeforeRemoving() = runComposeUiTest {
+        val copy = dev.chiller.app.di.WorktreeInfo(shop, root.resolve("copy/demo-shop").toString(), "chiller/fresh", "abc")
+        app(workspace = copy.path, projects = model().copy(worktree = copy, worktreeChanges = { listOf("src/app.kt", "README.md") },
+            onApplyWorktree = { calls += "apply"; "Перенесено в проект: 2 файла" }, onRemoveWorktree = { calls += "remove" }))
+        onNodeWithText("Отдельная копия · chiller/fresh").assertExists()
+        onNodeWithContentDescription("Папка диалога: demo-shop, отдельная копия").assertExists()
+        waitUntil { onAllNodesWithText("Изменено: 2 файла", substring = true).fetchSemanticsNodes().isNotEmpty() }
+        onNodeWithText("Перенести в проект").performClick()
+        waitUntil { onAllNodesWithText("Перенесено в проект: 2 файла").fetchSemanticsNodes().isNotEmpty() }
+        assertEquals("apply", calls.last())
+        onNodeWithContentDescription("Действия с копией").performClick()
+        onNodeWithText("Удалить копию…").performClick()
+        onNodeWithText("пропадут вместе с ней", substring = true).assertExists()
+        onNodeWithText("Удалить копию").performClick()
+        assertEquals("remove", calls.last())
+    }
+
     @Test fun noticesOpenTheirDialogAndCanBeClosed() = runComposeUiTest {
         app(notices = listOf(Notice("n1", "s2", "Тесты для парсера CSV", "Задача завершена, проверка пройдена", "positive")))
         onNodeWithText("Задача завершена, проверка пройдена").performClick()

@@ -283,8 +283,11 @@ interface ProcessService {
 @Serializable
 data class StoredEvent(val schemaVersion: Int = 1, val id: String = newId(), val sessionId: String, val seq: Long, val timestamp: String = now(), val type: String, val payload: JsonObject)
 @Serializable
-/** [workspace] is the folder the dialog is bound to (the latest `session.workspace`), null for a dialog without a folder. */
-data class SessionInfo(val id: String, val title: String, val updatedAt: String, val workspace: String? = null)
+/**
+ * [workspace] is the folder the dialog is bound to (the latest `session.workspace`), null for a dialog without a folder.
+ * [origin] is the project a dialog's own git working copy was made from, when [workspace] is that copy.
+ */
+data class SessionInfo(val id: String, val title: String, val updatedAt: String, val workspace: String? = null, val origin: String? = null)
 interface EventStore {
     suspend fun append(sessionId: String, type: String, payload: JsonObject): StoredEvent
     suspend fun read(sessionId: String): List<StoredEvent>

@@ -228,8 +228,15 @@ fun ChillerApp(
     }
     var sidebar by remember { mutableStateOf(true) }
     var switcher by remember { mutableStateOf(false) }
-    val tree = remember(sessions, sessionWorkspaces, recentWorkspaces, projects.pinned, projects.hidden, workspacePath) {
-        projectTree(sessions, sessionWorkspaces, recentWorkspaces, projects.pinned, projects.hidden, workspacePath, projects.excluded)
+    // Offered for an empty dialog in a git project; the controller checks the repository for real.
+    val canIsolate by produceState(false, workspacePath, projects.folderLocked, projects.worktree, state.messages.isEmpty()) {
+        value = workspacePath != null && projects.worktree == null && !projects.folderLocked && state.messages.isEmpty() &&
+            withContext(Dispatchers.IO) { java.nio.file.Files.exists(java.nio.file.Path.of(workspacePath).resolve(".git")) }
+    }
+    // A dialog in its own working copy is listed under the project the copy was made from.
+    val currentProject = projects.worktree?.repo ?: workspacePath
+    val tree = remember(sessions, sessionWorkspaces, projects.origins, recentWorkspaces, projects.pinned, projects.hidden, currentProject) {
+        projectTree(sessions, sessionWorkspaces + projects.origins, recentWorkspaces, projects.pinned, projects.hidden, currentProject, projects.excluded)
     }
     var settings by remember { mutableStateOf(openSettingsOnStart != null) }
     var settingsSection by remember { mutableStateOf(SettingsSection.entries.firstOrNull { it.name == openSettingsOnStart } ?: SettingsSection.CONNECTION) }
@@ -457,6 +464,7 @@ fun ChillerApp(
                                         Column(Modifier.widthIn(max = 760.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                             sendError?.let { Text(it, color = c.negative, fontSize = 12.sp, lineHeight = 18.sp) }
                                             VerifyBanner(verify, onDismissVerify)
+                                            projects.worktree?.let { WorktreeBar(it, active, projects) }
                                             if (projects.workspaceMissing && workspacePath != null)
                                                 MissingFolderBanner(workspacePath, !active, { projects.onRelocate(workspacePath) }, { projects.onNewIn(null) })
                                             ContextStatus(state)
@@ -486,6 +494,8 @@ fun ChillerApp(
                                                     onOpen = { if (!active) onOpenWorkspace(it) }, onChoose = onChooseWorkspace,
                                                     onDetach = { if (!active) { if (projects.folderLocked) projects.onNewIn(null) else onCloseWorkspace() } },
                                                     onRelocate = projects.onRelocate,
+                                                    worktree = projects.worktree,
+                                                    onIsolate = if (canIsolate) ({ projects.onIsolate() }) else null,
                                                     onContinueElsewhere = onContinueElsewhere?.let { pick -> {
                                                         if (!active) scope.launch { pick()?.let { (id, text) -> if (drafts[id].isNullOrBlank()) drafts[id] = text } }
                                                     } }))
@@ -671,7 +681,7 @@ private fun Sidebar(
             val runs = session.id in projects.running || (running && session.id == selected)
             SessionRow(session, session.id == selected, runs, true, { onSelect(session.id) }, { onRename(session) }, { onDelete(session) }, !running && !runs && session.id != selected, { onExport(session.id, it) },
                 nested = nested, project = project, waiting = session.id in projects.waiting && session.id != selected,
-                unread = session.id in projects.unread && session.id != selected,
+                unread = session.id in projects.unread && session.id != selected, isolated = session.id in projects.origins,
                 onStop = if (runs && session.id != selected) ({ projects.onStop(session.id) }) else null)
         }
         LazyColumn(Modifier.weight(1f), state = listState, verticalArrangement = Arrangement.spacedBy(1.dp)) {
@@ -744,7 +754,7 @@ private fun SidebarSearch(query: String, onQuery: (String) -> Unit, focus: Focus
 
 @Composable
 private fun SessionRow(session: SessionInfo, selected: Boolean, running: Boolean, enabled: Boolean, onSelect: () -> Unit, onRename: () -> Unit, onDelete: () -> Unit, canDelete: Boolean, onExport: (String) -> Unit,
-    nested: Boolean = false, project: String? = null, waiting: Boolean = false, onStop: (() -> Unit)? = null, unread: Boolean = false) {
+    nested: Boolean = false, project: String? = null, waiting: Boolean = false, onStop: (() -> Unit)? = null, unread: Boolean = false, isolated: Boolean = false) {
     val c = LocalChillerPalette.current
     var menu by remember(session.id) { mutableStateOf(false) }
     var closedAt by remember { mutableStateOf(0L) }
@@ -763,7 +773,8 @@ private fun SessionRow(session: SessionInfo, selected: Boolean, running: Boolean
         // Inside a project the title lines up with the project name; the icon is left for the running pulse.
         Box(Modifier.size(15.dp), contentAlignment = Alignment.Center) {
             if (waiting) Box(Modifier.size(8.dp).clip(CircleShape).background(c.focus)) else if (running) Pulse(c.accent)
-            else if (unread) Box(Modifier.size(7.dp).clip(CircleShape).background(c.accent)) else if (!nested) Icon(Icons.AutoMirrored.Outlined.Chat, null, Modifier.size(14.dp), tint = if (selected) c.muted else c.faint)
+            else if (unread) Box(Modifier.size(7.dp).clip(CircleShape).background(c.accent))
+            else if (isolated) Icon(Icons.Outlined.AccountTree, "Отдельная копия", Modifier.size(12.dp), tint = c.faint) else if (!nested) Icon(Icons.AutoMirrored.Outlined.Chat, null, Modifier.size(14.dp), tint = if (selected) c.muted else c.faint)
         }
         Spacer(Modifier.width(9.dp))
         Text(session.title.ifBlank { "Новый диалог" }, color = if (selected || !nested || unread) c.text else c.text.copy(alpha = .86f), fontSize = 12.sp, lineHeight = 18.sp,
