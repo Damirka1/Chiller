@@ -153,6 +153,26 @@ class ProjectWorkflowUiTest {
         assertEquals("remove", calls.last())
     }
 
+    @Test fun messageSearchOpensTheDialogAtTheMatch() = runComposeUiTest {
+        val messages = (1..60).map { n -> dev.chiller.contracts.AgentMessage(if (n % 2 == 1) "user" else "assistant", if (n == 5) "Здесь спрятана иголка в стоге" else "Сообщение номер $n") }
+        setContent {
+            ChillerApp(
+                RunState(status = "completed", messages = messages), sessions, "s2", api, isDemo = false,
+                providerModel = "fake-model", providerBaseUrl = "http://localhost:8000/v1", thinkingEnabled = false, apiKeyConfigured = true,
+                onSend = { _, _, id -> SendReceipt(false, "s2", id) }, onStop = {}, onNewSession = {}, onSelectSession = { calls += "select:$it" }, onChooseWorkspace = {},
+                onConfigureProvider = { _, _, _, _ -> null }, onAnswerQuestion = {}, onUndo = {}, onAllowProcessesChange = {}, allowProcesses = false,
+                preferences = UiPreferences(theme = "light", reducedMotion = true), recentWorkspaces = listOf(shop, api),
+                onSearchMessages = { query -> if ("иголк" in query) listOf(dev.chiller.sessions.SessionHit("s2", "Здесь спрятана иголка в стоге", 15, 6, 4, "user", 1)) else emptyList() },
+            )
+        }
+        onNodeWithText("Здесь спрятана иголка в стоге").assertDoesNotExist()
+        onNodeWithContentDescription("Поиск диалогов").performTextInput("иголк")
+        waitUntil(timeoutMillis = 5_000) { onAllNodesWithText("В сообщениях").fetchSemanticsNodes().isNotEmpty() }
+        onNodeWithContentDescription("Найдено в «Тесты для парсера CSV»").performClick()
+        assertEquals("select:s2", calls.last())
+        waitUntil(timeoutMillis = 5_000) { runCatching { onAllNodesWithText("Здесь спрятана иголка в стоге").onLast().assertIsDisplayed() }.isSuccess }
+    }
+
     @Test fun anAnswerOffersAllItsActionsOnHover() = runComposeUiTest {
         setContent {
             ChillerApp(

@@ -1037,6 +1037,9 @@ class DesktopController(
     }
     fun answer(text: String) { shownEngine?.questions?.answer(text) }
 
+    /** Dialogs whose user or model messages contain [query]; see [JsonlEventStore.search]. */
+    suspend fun searchMessages(query: String): List<dev.chiller.sessions.SessionHit> = runCatching { events.search(query) }.getOrDefault(emptyList())
+
     /** The user's decision on the shown dialog's waiting change; [restOfRun] approves this run's later changes too. */
     fun decideApproval(approved: Boolean, restOfRun: Boolean = false) { shownEngine?.approvals?.decide(approved, restOfRun) }
 

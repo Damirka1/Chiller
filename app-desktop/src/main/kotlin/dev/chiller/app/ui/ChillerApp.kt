@@ -184,6 +184,8 @@ fun ChillerApp(
     projects: ProjectsModel = ProjectsModel(),
     /** News from dialogs in the background; a click opens the dialog. */
     notices: List<dev.chiller.app.di.Notice> = emptyList(), onOpenNotice: (dev.chiller.app.di.Notice) -> Unit = {}, onDismissNotice: (String) -> Unit = {},
+    /** Dialogs whose messages contain the text typed into the sidebar search. */
+    onSearchMessages: suspend (String) -> List<dev.chiller.sessions.SessionHit> = { emptyList() },
     /** Whether file changes wait for the user's yes or no, with the toggle and the decision. */
     editApproval: EditApproval = EditApproval(),
     /** Picks a folder and opens a dialog there that continues the shown one; returns its id and opening draft. */
@@ -229,6 +231,8 @@ fun ChillerApp(
     }
     var sidebar by remember { mutableStateOf(true) }
     var switcher by remember { mutableStateOf(false) }
+    // A dialog opened from a message search scrolls to the first message with the text.
+    var jump by remember { mutableStateOf<Pair<String, String>?>(null) }
     // Offered for an empty dialog in a git project; the controller checks the repository for real.
     val canIsolate by produceState(false, workspacePath, projects.folderLocked, projects.worktree, state.messages.isEmpty()) {
         value = workspacePath != null && projects.worktree == null && !projects.folderLocked && state.messages.isEmpty() &&
@@ -383,6 +387,7 @@ fun ChillerApp(
                     running = active, searchFocus = sidebarSearch, titleBar = titleBar,
                     settingsOpen = settings && !active, settingsSection = settingsSection, onSettingsSection = { settingsSection = it }, onCloseSettings = { settings = false }, version = settingsData?.version,
                     onOpenPath = { onOpenWorkspace(it) },
+                    onSearchMessages = onSearchMessages, onOpenHit = { hit, text -> jump = hit.sessionId to text; onSelectSession(hit.sessionId) },
                     expansion = view.projectExpansion, onExpansion = { updateView(view.copy(projectExpansion = it)) })
                 Box(Modifier.width(1.dp).fillMaxHeight().background(c.border.copy(alpha = .7f)))
                 BoxWithConstraints(Modifier.weight(1f).fillMaxHeight()) {
@@ -453,7 +458,7 @@ fun ChillerApp(
                                         )
                                     } else {
                                         key(selectedSessionId) {
-                                            Conversation(state, reducedMotion, onAnswerQuestion, onUndo, !active,
+                                            Conversation(state, reducedMotion, onAnswerQuestion, onUndo, !active, jumpTo = jump?.takeIf { it.first == selectedSessionId }?.second, onRestoreDraft =
                                                 { text -> updateDraft(text); sendError = null }, onPreviewFile, onRevealFile,
                                                 onEdit = { index, text -> if (!active) targetMessage(index, text)?.let { messageEditTarget = it; messageEditText = text; messageActionError = null } },
                                                 onDelete = { index, text -> if (!active) targetMessage(index, text)?.let { messageDeleteTarget = it; messageActionError = null } },
@@ -621,6 +626,8 @@ private fun Sidebar(
     onSettingsSection: (SettingsSection) -> Unit = {}, onCloseSettings: () -> Unit = {}, version: String? = null,
     /** A folder dropped on the sidebar opens as a project. */
     onOpenPath: (String) -> Unit = {},
+    onSearchMessages: suspend (String) -> List<dev.chiller.sessions.SessionHit> = { emptyList() },
+    onOpenHit: (dev.chiller.sessions.SessionHit, String) -> Unit = { _, _ -> },
     /** Saved expand/collapse of projects; changes are handed back to be saved. */
     expansion: Map<String, Boolean> = emptyMap(), onExpansion: (Map<String, Boolean>) -> Unit = {},
 ) {
@@ -680,7 +687,11 @@ private fun Sidebar(
         SidebarSearch(query, { query = it }, searchFocus)
         Spacer(Modifier.height(6.dp))
         val searching = query.isNotBlank()
-        if (searching && shown.isEmpty()) Text("Нет диалогов с «${query.trim()}»", color = c.faint, fontSize = 11.sp, lineHeight = 18.sp, modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp))
+        // Messages are searched a moment after typing stops, in the app's own journals only.
+        val hits by produceState(emptyList<dev.chiller.sessions.SessionHit>(), query) {
+            value = if (query.trim().length < 2) emptyList() else { kotlinx.coroutines.delay(250); runCatching { onSearchMessages(query) }.getOrDefault(emptyList()) }
+        }
+        if (searching && shown.isEmpty() && hits.isEmpty()) Text("Ничего не найдено по «${query.trim()}»", color = c.faint, fontSize = 11.sp, lineHeight = 18.sp, modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp))
         val roots = remember(tree) { tree.projects.flatMap { group -> group.sessions.map { it.id to group.path } }.toMap() }
         val row: @Composable (SessionInfo, Boolean, String?) -> Unit = { session, nested, project ->
             val runs = session.id in projects.running || (running && session.id == selected)
@@ -698,6 +709,15 @@ private fun Sidebar(
                     }
                 }
                 items(shown, key = { it.id }) { session -> row(session, false, roots[session.id]?.let(::folderName) ?: "без папки") }
+                if (hits.isNotEmpty()) item(key = "hits-header") {
+                    Row(Modifier.fillMaxWidth().padding(start = 10.dp, end = 10.dp, top = 12.dp, bottom = 4.dp)) {
+                        Text("В сообщениях", color = c.muted, fontSize = 12.sp, modifier = Modifier.weight(1f))
+                        Text("${hits.size}", color = c.faint, fontSize = 11.sp)
+                    }
+                }
+                items(hits, key = { "hit:" + it.sessionId }) { hit ->
+                    SearchHitRow(hit, sessions.firstOrNull { it.id == hit.sessionId }?.title ?: "Диалог", roots[hit.sessionId]?.let(::folderName), hit.sessionId == selected) { onOpenHit(hit, query.trim()) }
+                }
             } else projectTreeItems(tree, workspace, selected, reduced, expanded, showAll, projects, onChoose) { session, nested -> row(session, nested, null) }
         }
         Box(Modifier.fillMaxWidth().height(1.dp).background(c.border.copy(alpha = .75f)))
@@ -1231,7 +1251,7 @@ private fun FolderToolbarChip(workspace: String?, onChoose: () -> Unit, enabled:
 }
 
 @Composable
-private fun Conversation(state: RunState, reduced: Boolean, onAnswer: (String) -> Unit, onUndo: (String) -> Unit, canUndo: Boolean, onRestoreDraft: (String) -> Unit, onPreviewFile: suspend (String) -> ByteArray?, onRevealFile: (String) -> Unit, onEdit: (Int, String) -> Unit, onDelete: (Int, String) -> Unit, onRecoverInterrupted: () -> Unit, modifier: Modifier, onRewind: (List<String>) -> Unit = {}, onContinue: () -> Unit = {}, undoneChanges: Set<String> = emptySet(), outsideChanges: dev.chiller.app.di.OutsideChanges? = null) {
+private fun Conversation(state: RunState, reduced: Boolean, onAnswer: (String) -> Unit, onUndo: (String) -> Unit, canUndo: Boolean, jumpTo: String? = null, onRestoreDraft: (String) -> Unit, onPreviewFile: suspend (String) -> ByteArray?, onRevealFile: (String) -> Unit, onEdit: (Int, String) -> Unit, onDelete: (Int, String) -> Unit, onRecoverInterrupted: () -> Unit, modifier: Modifier, onRewind: (List<String>) -> Unit = {}, onContinue: () -> Unit = {}, undoneChanges: Set<String> = emptySet(), outsideChanges: dev.chiller.app.di.OutsideChanges? = null) {
     val c = LocalChillerPalette.current
     // Begin at the tail even for restored long conversations; LazyColumn clamps to the final item.
     val scroll = rememberLazyListState(initialFirstVisibleItemIndex = Int.MAX_VALUE)
@@ -1257,6 +1277,15 @@ private fun Conversation(state: RunState, reduced: Boolean, onAnswer: (String) -
     // Sending a message always returns to the end.
     LaunchedEffect(state.messages.size) { if (state.messages.lastOrNull()?.role == "user") follow = true }
     val projection = projectConversation(state.messages, state.activities)
+    // Opened from a message search: show the first message with the text instead of the end, once.
+    var jumped by remember { mutableStateOf(false) }
+    LaunchedEffect(jumpTo, projection.entries.size) {
+        val text = jumpTo?.takeIf { it.isNotBlank() && !jumped } ?: return@LaunchedEffect
+        val position = projection.entries.indexOfFirst { it.message.content.orEmpty().contains(text, ignoreCase = true) }
+        if (position < 0) return@LaunchedEffect
+        jumped = true; follow = false; autoScrolling = true
+        try { scroll.scrollToItem(position) } finally { autoScrolling = false }
+    }
     Box(modifier, contentAlignment = Alignment.TopCenter) {
         LazyColumn(state = scroll, modifier = Modifier.widthIn(max = 816.dp).fillMaxSize(), contentPadding = PaddingValues(horizontal = 28.dp, vertical = 28.dp), verticalArrangement = Arrangement.spacedBy(if (LocalChillerCompact.current) 14.dp else 18.dp)) {
             // LazyColumn fades items in only when they are added after the first layout, and slides neighbours into place.
@@ -1682,3 +1711,34 @@ internal const val CONTINUE_PROMPT = "Продолжай с того места,
 
 /** The coordinator's message for a run stopped by the step limit (not a failure of the task itself). */
 internal fun isStepLimitError(error: String): Boolean = error.startsWith("Достигнут лимит") && "шагов" in error
+
+/** A dialog found by its messages: its title, the matching words highlighted in a snippet, and how often it matched. */
+@Composable
+private fun SearchHitRow(hit: dev.chiller.sessions.SessionHit, title: String, project: String?, selected: Boolean, onOpen: () -> Unit) {
+    val c = LocalChillerPalette.current
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    val snippet = remember(hit, c) {
+        androidx.compose.ui.text.buildAnnotatedString {
+            val end = (hit.matchStart + hit.matchLength).coerceAtMost(hit.snippet.length)
+            append(hit.snippet.substring(0, hit.matchStart.coerceIn(0, end)))
+            pushStyle(androidx.compose.ui.text.SpanStyle(color = c.text, fontWeight = FontWeight.SemiBold, background = c.accent.copy(alpha = .16f)))
+            append(hit.snippet.substring(hit.matchStart.coerceIn(0, end), end)); pop()
+            append(hit.snippet.substring(end))
+        }
+    }
+    Column(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(7.dp)).background(if (selected) c.selected else if (hovered) c.hover else androidx.compose.ui.graphics.Color.Transparent)
+            .hoverable(interaction).pointerHoverIcon(PointerIcon.Hand)
+            .clickable(interactionSource = interaction, indication = null, role = Role.Button, onClick = onOpen)
+            .semantics { contentDescription = "Найдено в «$title»" }
+            .padding(horizontal = 10.dp, vertical = 7.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(title.ifBlank { "Новый диалог" }, color = c.text, fontSize = 13.sp, lineHeight = 18.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+            if (hit.matches > 1) Text("×${hit.matches}", color = c.faint, fontSize = 11.sp, modifier = Modifier.padding(start = 6.dp))
+        }
+        Text(snippet, color = c.muted, fontSize = 11.sp, lineHeight = 16.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        Text(listOfNotNull(if (hit.role == "user") "вы" else "модель", project).joinToString(" · "), color = c.faint, fontSize = 10.sp, lineHeight = 14.sp)
+    }
+}

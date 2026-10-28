@@ -20,6 +20,13 @@ private fun safeId(id: String): String {
     return id
 }
 
+/**
+ * A dialog whose messages contain the searched text: the first match as a short [snippet] with the match at
+ * [matchStart] for [matchLength] characters, which message it is in ([messageIndex] among the user's and the model's
+ * messages) and how many messages match in all.
+ */
+data class SessionHit(val sessionId: String, val snippet: String, val matchStart: Int, val matchLength: Int, val messageIndex: Int, val role: String, val matches: Int)
+
 class JsonlEventStore(private val directory: Path) : EventStore {
     private val mutex = Mutex()
     private data class Tail(val size: Long, val seq: Long)
@@ -97,6 +104,48 @@ class JsonlEventStore(private val directory: Path) : EventStore {
             val ids = Files.list(directory).use { paths -> paths.filter { Files.isDirectory(it) && it.fileName.toString().matches(Regex("[a-zA-Z0-9_-]{1,100}")) }.map { it.fileName.toString() }.toList() }
             ids.map { id -> cachedInfo(id) }.sortedByDescending { it.updatedAt }
         }
+    }
+
+    private data class TextEntry(val size: Long, val modified: Long, val texts: List<Pair<String, String>>)
+    // The visible text of each dialog (role to content), re-read only when its journal changed.
+    private val textIndex = HashMap<String, TextEntry>()
+
+    /**
+     * Dialogs whose user or model messages contain [query], case-insensitive, newest first. Only what the dialog shows
+     * is searched: messages after edits and deletions, not tool output or reasoning.
+     */
+    suspend fun search(query: String, limit: Int = 30): List<SessionHit> = mutex.withLock {
+        val q = query.trim()
+        if (q.length < 2) return@withLock emptyList()
+        withContext(Dispatchers.IO) {
+            val ids = Files.list(directory).use { paths -> paths.filter { Files.isDirectory(it) && it.fileName.toString().matches(Regex("[a-zA-Z0-9_-]{1,100}")) }.map { it.fileName.toString() }.toList() }
+            ids.map { id -> id to cachedInfo(id).updatedAt }.sortedByDescending { it.second }.asSequence().mapNotNull { (id, _) ->
+                val texts = cachedTexts(id)
+                val found = texts.withIndex().filter { (_, text) -> text.second.contains(q, ignoreCase = true) }
+                val first = found.firstOrNull() ?: return@mapNotNull null
+                val content = first.value.second
+                val at = content.indexOf(q, ignoreCase = true)
+                // A window around the match, on one line.
+                val from = (at - 40).coerceAtLeast(0)
+                val to = (at + q.length + 80).coerceAtMost(content.length)
+                val prefix = if (from > 0) "…" else ""
+                val window = content.substring(from, to)
+                val flat = window.replace(Regex("\\s"), " ")
+                SessionHit(id, prefix + flat + if (to < content.length) "…" else "", prefix.length + (at - from), q.length, first.index, first.value.first, found.size)
+            }.take(limit).toList()
+        }
+    }
+
+    private fun cachedTexts(id: String): List<Pair<String, String>> {
+        val file = file(id)
+        val size = runCatching { Files.size(file) }.getOrDefault(0L)
+        val modified = runCatching { Files.getLastModifiedTime(file).toMillis() }.getOrDefault(0L)
+        textIndex[id]?.let { entry -> if (entry.size == size && entry.modified == modified) return entry.texts }
+        val texts = runCatching { projectConversation(readFile(file)) }.getOrDefault(emptyList())
+            .filter { it.role in setOf("user", "assistant") && !it.content.isNullOrBlank() }
+            .map { it.role to it.content!! }
+        textIndex[id] = TextEntry(size, modified, texts)
+        return texts
     }
 
     /** Session listing is recomputed only when the journal file actually changed. */
