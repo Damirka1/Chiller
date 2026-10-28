@@ -77,3 +77,36 @@ fun recentProjects(settingsRecent: List<String>, sessions: List<SessionInfo>, se
     val idle = settingsRecent.filter { it !in byRoot }.map { RecentProject(it, 0, null) }
     return (active + idle).distinctBy { it.path }.take(limit)
 }
+
+data class ProjectGroup(val path: String, val sessions: List<SessionInfo>, val pinned: Boolean, val lastActive: String?)
+
+/** The sidebar tree: projects with their dialogs, and dialogs without a folder. */
+data class ProjectTree(val projects: List<ProjectGroup>, val loose: List<SessionInfo>)
+
+/**
+ * Pinned projects in the user's order, then the others in the order they were opened, then folders known only from
+ * dialogs by their latest activity. The order changes when the user opens or pins a project, not when a dialog moves.
+ * Hidden and [excluded] folders (the demo) drop out with their dialogs unless [current] is one of them.
+ */
+fun projectTree(
+    sessions: List<SessionInfo>, roots: Map<String, String>, recent: List<String>, pinned: List<String>, hidden: List<String>,
+    current: String?, excluded: (String) -> Boolean = { false },
+): ProjectTree {
+    val byRoot = sessions.groupBy { roots[it.id] ?: it.workspace }
+    fun shown(path: String) = path == current || (path !in hidden && !excluded(path))
+    fun group(path: String) = byRoot[path].orEmpty().sortedByDescending { it.updatedAt }.let { list -> ProjectGroup(path, list, path in pinned, list.firstOrNull()?.updatedAt) }
+    val pinnedGroups = pinned.filter(::shown).map(::group)
+    val opened = (listOfNotNull(current?.takeIf { it !in recent }) + recent).filter { it !in pinned && shown(it) }.distinct().map(::group)
+    val known = byRoot.keys.filterNotNull().filter { it !in pinned && it !in recent && it != current && shown(it) }.map(::group).sortedByDescending { it.lastActive.orEmpty() }
+    return ProjectTree(pinnedGroups + opened + known, byRoot[null].orEmpty())
+}
+
+/** One or two letters for a project's tile: «chiller» → «C», «spring-boot» → «SB», «myApp» → «MA». */
+fun projectInitials(name: String): String {
+    val words = name.split(Regex("""[^\p{L}\p{N}]+|(?<=\p{Ll})(?=\p{Lu})""")).filter { it.isNotEmpty() }
+    return when {
+        words.isEmpty() -> name.take(1).uppercase()
+        words.size == 1 -> words[0].take(1).uppercase()
+        else -> (words[0].take(1) + words[1].take(1)).uppercase()
+    }
+}

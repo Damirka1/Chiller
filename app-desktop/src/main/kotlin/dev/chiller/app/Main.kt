@@ -164,6 +164,19 @@ private fun chillerApplication() = application {
             onRevealFile = { path -> scope.launch { controller.revealFile(path) } },
             onDeleteMessage = controller::deleteMessage,
             onRecoverInterrupted = { scope.launch { controller.recoverInterrupted() } },
+            projects = dev.chiller.app.ui.ProjectsModel(
+                pinned = state.settings.pinnedWorkspaces, hidden = state.settings.hiddenWorkspaces,
+                folderLocked = state.folderLocked, workspaceMissing = state.workspaceMissing,
+                excluded = controller::isDemoFolder,
+                onNewIn = { root -> scope.launch { controller.newSessionIn(root) } },
+                onPin = { root, pinned -> scope.launch { controller.pinWorkspace(root, pinned) } },
+                onRemove = { root -> scope.launch { controller.removeRecentWorkspace(root) } },
+                onReveal = { root -> runCatching { java.awt.Desktop.getDesktop().open(java.io.File(root)) } },
+                onRelocate = { root ->
+                    val parent = generateSequence(java.io.File(root)) { it.parentFile }.firstOrNull { it.isDirectory }?.path
+                    chooseDirectory(window, parent, mac)?.let { path -> scope.launch { controller.relocateWorkspace(root, path) } }
+                },
+            ),
             onEditMessage = controller::editMessage,
             onStop = { scope.launch { controller.stop() } },
             onNewSession = { scope.launch { controller.newSession() } },

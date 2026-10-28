@@ -32,11 +32,16 @@ fun main() {
     val project = root.resolve("demo-shop").also { DemoScenario.createProject(it) }.toRealPath()
     val (state, helpers) = runBlocking { runDemo(root, project) }
     val output = Path.of(System.getProperty("chiller.readmeOut") ?: "docs/images"); Files.createDirectories(output)
+    val backend = Files.createDirectories(root.resolve("backend-api")).toString()
+    val landing = Files.createDirectories(root.resolve("landing-page")).toString()
     val sessions = listOf(
-        SessionInfo("demo", "Демо: все инструменты", "2026-10-17T10:00:00Z"),
-        SessionInfo("s2", "Починить расчёт скидки", "2026-10-17T09:12:00Z"),
-        SessionInfo("s3", "Ревью модуля оплаты", "2026-10-16T18:40:00Z"),
-        SessionInfo("s4", "Тесты для парсера CSV", "2026-10-16T15:05:00Z"),
+        SessionInfo("demo", "Демо: все инструменты", "2026-10-17T10:00:00Z", project.toString()),
+        SessionInfo("s2", "Починить расчёт скидки", "2026-10-17T09:12:00Z", project.toString()),
+        SessionInfo("s3", "Ревью модуля оплаты", "2026-10-16T18:40:00Z", project.toString()),
+        SessionInfo("s4", "Тесты для парсера CSV", "2026-10-16T15:05:00Z", backend),
+        SessionInfo("s5", "Миграция на Ktor 3", "2026-10-15T11:20:00Z", backend),
+        SessionInfo("s6", "Как работает structured concurrency", "2026-10-16T21:10:00Z"),
+        SessionInfo("s7", "Письмо клиентам о релизе", "2026-10-14T08:45:00Z"),
     )
     @Composable fun app(prefs: UiPreferences, settings: String? = null) = ChillerApp(
         state, sessions, "demo", project.toString(), isDemo = false,
@@ -45,6 +50,7 @@ fun main() {
         onConfigureProvider = { _, _, _, _ -> null }, onAnswerQuestion = {}, onUndo = {}, onAllowProcessesChange = {}, allowProcesses = true,
         preferences = prefs, models = listOf("gemma-4-26b-a4b", "deepseek-flash"), subagents = helpers,
         sessionWorkspaces = mapOf("demo" to project.toString()),
+        recentWorkspaces = listOf(project.toString(), landing), projects = ProjectsModel(pinned = listOf(backend)),
         settingsData = if (settings == null) null else SettingsData("http://localhost:8000/v1", "gemma-4-26b-a4b", false, true, allowProcesses = true,
             agent = AgentOptions(), preferences = prefs),
         openSettingsOnStart = settings,

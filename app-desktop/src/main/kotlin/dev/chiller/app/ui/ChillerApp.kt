@@ -181,6 +181,8 @@ fun ChillerApp(
     onDeleteMessage: suspend (Int) -> Boolean = { false },
     onEditMessage: suspend (Int, String, ExecutionMode) -> SendReceipt = { _, _, _ -> SendReceipt(false, "", "", "Редактирование недоступно") },
     onRecoverInterrupted: () -> Unit = {},
+    /** Pinned and hidden projects, the dialog's folder state and project actions. */
+    projects: ProjectsModel = ProjectsModel(),
 ) {
     val systemDark = isSystemInDarkTheme()
     var view by remember { mutableStateOf(preferences) }
@@ -221,6 +223,10 @@ fun ChillerApp(
         return latestSession == target.sessionId && latestMessages.size == target.historySize && message != null && message.role == target.role && message.content.orEmpty() == target.content
     }
     var sidebar by remember { mutableStateOf(true) }
+    var switcher by remember { mutableStateOf(false) }
+    val tree = remember(sessions, sessionWorkspaces, recentWorkspaces, projects.pinned, projects.hidden, workspacePath) {
+        projectTree(sessions, sessionWorkspaces, recentWorkspaces, projects.pinned, projects.hidden, workspacePath, projects.excluded)
+    }
     var settings by remember { mutableStateOf(openSettingsOnStart != null) }
     var settingsSection by remember { mutableStateOf(SettingsSection.entries.firstOrNull { it.name == openSettingsOnStart } ?: SettingsSection.CONNECTION) }
     // Every way into settings starts at the connection, as before; the section is shared by the sidebar and the page.
@@ -325,6 +331,12 @@ fun ChillerApp(
                 when (it.key) {
                     Key.Enter -> { handleAction(DesktopAction.SEND); true }
                     Key.K -> { sidebar = true; runCatching { sidebarSearch.requestFocus() }; true }
+                    Key.P -> { if (!active && !settings) switcher = true; true }
+                    Key.One, Key.Two, Key.Three, Key.Four, Key.Five, Key.Six, Key.Seven, Key.Eight, Key.Nine -> {
+                        val index = listOf(Key.One, Key.Two, Key.Three, Key.Four, Key.Five, Key.Six, Key.Seven, Key.Eight, Key.Nine).indexOf(it.key)
+                        tree.projects.getOrNull(index)?.let { group -> if (!active && !settings) projects.onNewIn(group.path) }
+                        true
+                    }
                     // Without a system menu bar its accelerators live here.
                     else -> menu?.commandFor(it.key)?.let { command -> command.onClick(); true } ?: false
                 }
@@ -332,7 +344,7 @@ fun ChillerApp(
         }.focusable()) {
             val showSidebar = sidebar && maxWidth >= 740.dp
             Row(Modifier.fillMaxSize()) {
-                if (showSidebar) Sidebar(sessions, selectedSessionId, workspacePath, apiKeyConfigured, !active, onNewSession, onSelectSession, onChooseWorkspace,
+                if (showSidebar) Sidebar(sessions, tree, projects, selectedSessionId, workspacePath, apiKeyConfigured, !active, onNewSession, onSelectSession, onChooseWorkspace,
                     onSettings = { openSettings() }, onTheme = { updateView(view.copy(theme = if (dark) "light" else "dark")) }, onRename = { renameTarget = it }, onDelete = { session ->
                         if (!active && selectedSessionId != session.id && deleteTarget == null && !deletePreviewLoading && !deleteInFlight) {
                             deleteTarget = session
@@ -356,7 +368,7 @@ fun ChillerApp(
                             }
                         }
                     }, onExport = onExportSession, connection = connection, width = 248f * density.fontScale.coerceIn(1f, 1.2f),
-                    running = active, searchFocus = sidebarSearch, titleBar = titleBar, onClose = { if (!active) onCloseWorkspace() },
+                    running = active, searchFocus = sidebarSearch, titleBar = titleBar,
                     settingsOpen = settings && !active, settingsSection = settingsSection, onSettingsSection = { settingsSection = it }, onCloseSettings = { settings = false }, version = settingsData?.version)
                 Box(Modifier.width(1.dp).fillMaxHeight().background(c.border.copy(alpha = .7f)))
                 BoxWithConstraints(Modifier.weight(1f).fillMaxHeight()) {
@@ -439,6 +451,8 @@ fun ChillerApp(
                                         Column(Modifier.widthIn(max = 760.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                             sendError?.let { Text(it, color = c.negative, fontSize = 12.sp, lineHeight = 18.sp) }
                                             VerifyBanner(verify, onDismissVerify)
+                                            if (projects.workspaceMissing && workspacePath != null)
+                                                MissingFolderBanner(workspacePath, !active, { projects.onRelocate(workspacePath) }, { projects.onNewIn(null) })
                                             ContextStatus(state)
 
                                             if (demoCompleted) {
@@ -461,7 +475,11 @@ fun ChillerApp(
                                                 onAppendAttachments = appendAttachments,
                                                 onRemoveAttachment = removeAttachment,
                                                 onImportState = updateImportCount,
-                                                onImportTextAttachment = onImportTextAttachment, onImportFiles = onImportFiles, onImportImageAttachment = onImportImageAttachment)
+                                                onImportTextAttachment = onImportTextAttachment, onImportFiles = onImportFiles, onImportImageAttachment = onImportImageAttachment,
+                                                folderMenu = FolderMenu(workspacePath, tree.projects.map { it.path }, projects.folderLocked, projects.workspaceMissing,
+                                                    onOpen = { if (!active) onOpenWorkspace(it) }, onChoose = onChooseWorkspace,
+                                                    onDetach = { if (!active) { if (projects.folderLocked) projects.onNewIn(null) else onCloseWorkspace() } },
+                                                    onRelocate = projects.onRelocate))
                                         }
                                     }
                                 }
@@ -563,14 +581,15 @@ fun ChillerApp(
             },
         ) }
         if (exportPreview != null) ExportPreview(exportPreview, exportFormat, onDismissExport, onSaveExport)
+        if (switcher) ProjectSwitcher(tree.projects, workspacePath, onPick = { path -> switcher = false; projects.onNewIn(path) }, onChoose = onChooseWorkspace, onDismiss = { switcher = false; runCatching { rootFocus.requestFocus() } })
     } }
 }
 
 @Composable
 private fun Sidebar(
-    sessions: List<SessionInfo>, selected: String?, workspace: String?, connected: Boolean, enabled: Boolean,
+    sessions: List<SessionInfo>, tree: ProjectTree, projects: ProjectsModel, selected: String?, workspace: String?, connected: Boolean, enabled: Boolean,
     onNew: () -> Unit, onSelect: (String) -> Unit, onChoose: () -> Unit, onSettings: () -> Unit, onTheme: () -> Unit, onRename: (SessionInfo) -> Unit, onDelete: (SessionInfo) -> Unit, onExport: (String, String) -> Unit, connection: ConnectionState, width: Float,
-    running: Boolean, searchFocus: FocusRequester, titleBar: TitleBarSpec?, onClose: () -> Unit,
+    running: Boolean, searchFocus: FocusRequester, titleBar: TitleBarSpec?,
     settingsOpen: Boolean = false, settingsSection: SettingsSection = SettingsSection.CONNECTION,
     onSettingsSection: (SettingsSection) -> Unit = {}, onCloseSettings: () -> Unit = {}, version: String? = null,
 ) {
@@ -580,6 +599,8 @@ private fun Sidebar(
     // Kept outside the animated content so the dialog list keeps its scroll position across a settings visit.
     val listState = rememberLazyListState()
     val reduced = LocalChillerReducedMotion.current
+    val expanded = remember { mutableStateMapOf<String, Boolean>() }
+    val showAll = remember { mutableStateMapOf<String, Boolean>() }
     Column(Modifier.width(width.dp).fillMaxHeight().background(c.sidebar).padding(horizontal = 12.dp)) {
         // Room for the floating traffic lights; the strip moves the window like a title bar.
         val trafficLights = titleBar != null && titleBar.trafficLightsWidth > 0.dp
@@ -613,37 +634,24 @@ private fun Sidebar(
         else Column(Modifier.fillMaxSize()) {
         ChillerControl("Новый диалог", onNew, Modifier.fillMaxWidth(), icon = Icons.Outlined.Add, enabled = enabled, trailing = shortcut("N"))
         SidebarSearch(query, { query = it }, searchFocus)
-        Spacer(Modifier.height(10.dp))
-        if (workspace == null) {
-            ChillerControl("Открыть проект…", onChoose, Modifier.fillMaxWidth(), icon = Icons.Outlined.FolderOpen, enabled = enabled, trailing = shortcut("O"))
-        } else {
-            Text("Проект", color = c.muted, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp))
-            val branch by produceState<String?>(null, workspace) { value = withContext(Dispatchers.IO) { gitBranch(java.nio.file.Path.of(workspace)) } }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.weight(1f)) {
-                    Hint(homeRelative(workspace)) {
-                        ChillerControl(folderName(workspace), onChoose, Modifier.fillMaxWidth(), icon = Icons.Outlined.FolderOpen, style = ControlStyle.SELECTED, enabled = enabled, trailing = branch)
+        Spacer(Modifier.height(6.dp))
+        val searching = query.isNotBlank()
+        if (searching && shown.isEmpty()) Text("Нет диалогов с «${query.trim()}»", color = c.faint, fontSize = 11.sp, lineHeight = 18.sp, modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp))
+        val roots = remember(tree) { tree.projects.flatMap { group -> group.sessions.map { it.id to group.path } }.toMap() }
+        LazyColumn(Modifier.weight(1f), state = listState, verticalArrangement = Arrangement.spacedBy(1.dp)) {
+            if (searching) {
+                if (shown.isNotEmpty()) item(key = "search-header") {
+                    Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp)) {
+                        Text("Найдено", color = c.muted, fontSize = 12.sp, modifier = Modifier.weight(1f))
+                        Text("${shown.size} из ${sessions.size}", color = c.faint, fontSize = 10.sp)
                     }
                 }
-                ChillerIconButton(Icons.Outlined.Close, "Закрыть проект", onClose, Modifier.padding(start = 2.dp).size(28.dp), enabled = enabled)
-            }
-        }
-        Spacer(Modifier.height(14.dp))
-        Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text("Диалоги", color = c.muted, fontSize = 12.sp)
-            Spacer(Modifier.weight(1f))
-            if (sessions.isNotEmpty()) Text(if (query.isBlank()) "${sessions.size}" else "${shown.size} из ${sessions.size}", color = c.faint, fontSize = 10.sp)
-        }
-        when {
-            sessions.isEmpty() -> Text("Здесь появятся ваши задачи", color = c.faint, fontSize = 11.sp, lineHeight = 18.sp, modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp))
-            shown.isEmpty() -> Text("Нет диалогов с «${query.trim()}»", color = c.faint, fontSize = 11.sp, lineHeight = 18.sp, modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp))
-        }
-        LazyColumn(Modifier.weight(1f), state = listState, verticalArrangement = Arrangement.spacedBy(1.dp)) {
-            historySections(shown).forEach { section ->
-                item(key = "section-${section.title}") { Text(section.title, color = c.faint, fontSize = 11.sp, modifier = Modifier.padding(start = 10.dp, top = 12.dp, bottom = 4.dp)) }
-                items(section.sessions, key = { it.id }) { session ->
-                    SessionRow(session, session.id == selected, running && session.id == selected, enabled, { onSelect(session.id) }, { onRename(session) }, { onDelete(session) }, !running && session.id != selected, { onExport(session.id, it) })
+                items(shown, key = { it.id }) { session ->
+                    SessionRow(session, session.id == selected, running && session.id == selected, enabled, { onSelect(session.id) }, { onRename(session) }, { onDelete(session) }, !running && session.id != selected, { onExport(session.id, it) },
+                        project = roots[session.id]?.let(::folderName) ?: "без папки")
                 }
+            } else projectTreeItems(tree, workspace, selected, running, enabled, reduced, expanded, showAll, projects, onChoose) { session, nested ->
+                SessionRow(session, session.id == selected, running && session.id == selected, enabled, { onSelect(session.id) }, { onRename(session) }, { onDelete(session) }, !running && session.id != selected, { onExport(session.id, it) }, nested = nested)
             }
         }
         Box(Modifier.fillMaxWidth().height(1.dp).background(c.border.copy(alpha = .75f)))
@@ -692,7 +700,8 @@ private fun SidebarSearch(query: String, onQuery: (String) -> Unit, focus: Focus
 }
 
 @Composable
-private fun SessionRow(session: SessionInfo, selected: Boolean, running: Boolean, enabled: Boolean, onSelect: () -> Unit, onRename: () -> Unit, onDelete: () -> Unit, canDelete: Boolean, onExport: (String) -> Unit) {
+private fun SessionRow(session: SessionInfo, selected: Boolean, running: Boolean, enabled: Boolean, onSelect: () -> Unit, onRename: () -> Unit, onDelete: () -> Unit, canDelete: Boolean, onExport: (String) -> Unit,
+    nested: Boolean = false, project: String? = null) {
     val c = LocalChillerPalette.current
     var menu by remember(session.id) { mutableStateOf(false) }
     var closedAt by remember { mutableStateOf(0L) }
@@ -705,14 +714,16 @@ private fun SessionRow(session: SessionInfo, selected: Boolean, running: Boolean
             .hoverable(interaction).pointerHoverIcon(PointerIcon.Hand)
             .onFocusChanged { rowFocused = it.isFocused }
             .clickable(interactionSource = interaction, indication = null, enabled = enabled, role = Role.Button, onClick = onSelect)
-            .padding(start = 10.dp, end = 2.dp),
+            .padding(start = if (nested) 24.dp else 10.dp, end = 2.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        // Inside a project the title lines up with the project name; the icon is left for the running pulse.
         Box(Modifier.size(15.dp), contentAlignment = Alignment.Center) {
-            if (running) Pulse(c.accent) else Icon(Icons.AutoMirrored.Outlined.Chat, null, Modifier.size(14.dp), tint = if (selected) c.muted else c.faint)
+            if (running) Pulse(c.accent) else if (!nested) Icon(Icons.AutoMirrored.Outlined.Chat, null, Modifier.size(14.dp), tint = if (selected) c.muted else c.faint)
         }
         Spacer(Modifier.width(9.dp))
-        Text(session.title.ifBlank { "Новый диалог" }, color = c.text, fontSize = 12.sp, lineHeight = 18.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+        Text(session.title.ifBlank { "Новый диалог" }, color = if (selected || !nested) c.text else c.text.copy(alpha = .86f), fontSize = 12.sp, lineHeight = 18.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+        if (project != null && !hovered && !menu) Text(project, color = c.faint, fontSize = 10.sp, lineHeight = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 70.dp).padding(start = 6.dp))
         Box(Modifier.width(44.dp), contentAlignment = Alignment.CenterEnd) {
             if (hovered || menu || selected || rowFocused) {
                 Box {
@@ -784,6 +795,7 @@ private fun Composer(
     onImportTextAttachment: suspend (String, String) -> ComposerAttachment?, onImportFiles: suspend (String, List<String>) -> List<ComposerAttachment>,
     onImportImageAttachment: suspend (String, ByteArray) -> ComposerAttachment?,
     vision: Boolean = false,
+    folderMenu: FolderMenu? = null,
 ) {
     val c = LocalChillerPalette.current
     var focused by remember { mutableStateOf(false) }
@@ -937,7 +949,7 @@ private fun Composer(
         }
         Spacer(Modifier.height(4.dp))
         ComposerToolbar(mode, onMode, model, running, pending, importing, draft.isNotBlank() || attachments.isNotEmpty(), modelMenu, { if (System.currentTimeMillis() - modelClosedAt > 200) modelMenu = !modelMenu }, allowProcesses, onAllow, onSend, onStop, addFiles,
-            connectionDot, contextTokens, effectiveWindow, contextIsEstimate, workspace, onChooseWorkspace) {
+            connectionDot, contextTokens, effectiveWindow, contextIsEstimate, workspace, onChooseWorkspace, folderMenu = folderMenu) {
             ModelPickerPopover(
                 model = model, models = models, configured = configured, running = running, catalog = catalog, contextNote = contextNote,
                 onRefresh = onRefreshModels, onCancelRefresh = onCancelCatalogRefresh,
@@ -1042,6 +1054,7 @@ private fun ComposerToolbar(
     onAttach: () -> Unit,
     connectionDot: androidx.compose.ui.graphics.Color, contextTokens: Int?, contextWindow: Int?, contextIsEstimate: Boolean,
     workspace: String?, onChooseWorkspace: () -> Unit,
+    folderMenu: FolderMenu? = null,
     modelPopover: @Composable () -> Unit,
 ) {
     val c = LocalChillerPalette.current
@@ -1056,7 +1069,16 @@ private fun ComposerToolbar(
     Box(Modifier.fillMaxWidth()) {
         Layout(
             content = {
-                Box {
+                if (workspace == null) Box {
+                    ChillerControl("Разговор", toggleMode, icon = Icons.AutoMirrored.Outlined.Chat, enabled = !running, style = if (modeMenu) ControlStyle.SELECTED else ControlStyle.QUIET)
+                    if (modeMenu) ChillerPopover(onDismiss = { modeMenu = false; modeClosedAt = System.currentTimeMillis() }, width = modeMenuWidth) {
+                        Text("Диалог без папки: модель отвечает, ищет в вебе и рисует, но не видит ваших файлов и не запускает команды.",
+                            color = c.muted, fontSize = 12.sp, lineHeight = 17.sp, modifier = Modifier.padding(start = 16.dp, end = 14.dp, top = 10.dp, bottom = 6.dp))
+                        MenuDivider()
+                        MenuRow("Выбрать папку…", { modeMenu = false; onChooseWorkspace() }, subtitle = "Диалог продолжится в проекте", icon = Icons.Outlined.CreateNewFolder)
+                        Spacer(Modifier.height(6.dp))
+                    }
+                } else Box {
                     ChillerControl(if (mode == ExecutionMode.PLAN) "План" else "Изменения", toggleMode, icon = if (mode == ExecutionMode.PLAN) Icons.Outlined.Lightbulb else Icons.Outlined.Edit, enabled = !running, style = if (modeMenu) ControlStyle.SELECTED else ControlStyle.QUIET)
                     if (modeMenu) ChillerPopover(onDismiss = { modeMenu = false; modeClosedAt = System.currentTimeMillis() }, width = modeMenuWidth) {
                         Spacer(Modifier.height(6.dp))
@@ -1083,7 +1105,7 @@ private fun ComposerToolbar(
                     if (modelMenuOpen) modelPopover()
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    FolderToolbarChip(workspace, onChooseWorkspace, enabled = !running)
+                    if (folderMenu != null) FolderChip(folderMenu, enabled = !running) else FolderToolbarChip(workspace, onChooseWorkspace, enabled = !running)
                     Spacer(Modifier.width(6.dp))
                     ChillerIconButton(Icons.Outlined.AttachFile, "Добавить файлы", onAttach, enabled = !running)
                     Spacer(Modifier.width(8.dp))
@@ -1131,7 +1153,7 @@ private fun FolderToolbarChip(workspace: String?, onChoose: () -> Unit, enabled:
     ) {
         Icon(if (workspace == null) Icons.Outlined.CreateNewFolder else Icons.Outlined.Folder, null, Modifier.size(13.dp), tint = if (workspace == null) c.faint else c.muted)
         Spacer(Modifier.width(5.dp))
-        Text(workspace?.let(::folderName) ?: "Выбрать папку", color = if (workspace == null) c.faint else c.muted, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(workspace?.let(::folderName) ?: "Без папки", color = if (workspace == null) c.faint else c.muted, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
@@ -1276,7 +1298,7 @@ private fun ShimmerText(text: String, reduced: Boolean) {
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun Hint(text: String, content: @Composable () -> Unit) {
+internal fun Hint(text: String, content: @Composable () -> Unit) {
     val c = LocalChillerPalette.current
     TooltipArea(tooltip = { Text(text, color = c.text, fontSize = 12.sp, modifier = Modifier.clip(RoundedCornerShape(6.dp)).background(c.sidebar).border(1.dp, c.border, RoundedCornerShape(6.dp)).padding(8.dp)) }, content = content)
 }

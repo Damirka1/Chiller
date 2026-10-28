@@ -59,4 +59,32 @@ class HistoryPresentationTest {
         assertEquals("D:", folderName("D:\\"))
         assertEquals("/", folderName("/"))
     }
+
+    @Test fun projectTreeKeepsPinnedThenOpenedOrderAndHidesRemovedFolders() {
+        val sessions = listOf(
+            SessionInfo("a", "A", "2026-01-03T00:00:00Z", "/p/active"),
+            SessionInfo("b", "B", "2026-01-02T00:00:00Z", "/p/pinned"),
+            SessionInfo("c", "C", "2026-01-04T00:00:00Z"),
+            SessionInfo("d", "D", "2026-01-05T00:00:00Z", "/p/hidden"),
+            SessionInfo("e", "E", "2026-01-01T00:00:00Z", "/p/opened"),
+            SessionInfo("f", "F", "2026-01-06T00:00:00Z", "/data/demo/1"),
+        )
+        val tree = projectTree(sessions, emptyMap(), recent = listOf("/p/opened", "/p/empty"), pinned = listOf("/p/pinned"), hidden = listOf("/p/hidden"),
+            current = "/p/new", excluded = { it.startsWith("/data/demo") })
+        assertEquals(listOf("/p/pinned", "/p/new", "/p/opened", "/p/empty", "/p/active"), tree.projects.map { it.path })
+        assertEquals(listOf("c"), tree.loose.map { it.id })
+        assertEquals(listOf(true, false, false, false, false), tree.projects.map { it.pinned })
+        assertEquals("2026-01-01T00:00:00Z", tree.projects.single { it.path == "/p/opened" }.lastActive)
+        // A binding known before the listing catches up wins; the current folder shows even when hidden.
+        val rebound = projectTree(sessions, mapOf("c" to "/p/hidden"), emptyList(), emptyList(), listOf("/p/hidden"), current = "/p/hidden")
+        assertEquals(listOf("d", "c"), rebound.projects.single { it.path == "/p/hidden" }.sessions.map { it.id })
+    }
+
+    @Test fun projectInitialsSplitWordsAndCamelCase() {
+        assertEquals("C", projectInitials("chiller"))
+        assertEquals("SB", projectInitials("spring-boot"))
+        assertEquals("MA", projectInitials("myApp"))
+        assertEquals("П", projectInitials("проект"))
+        assertEquals(".", projectInitials("..."))
+    }
 }

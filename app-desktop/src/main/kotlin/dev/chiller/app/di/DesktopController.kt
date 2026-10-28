@@ -644,7 +644,7 @@ class DesktopController(
         resetEngine()
         // Leaving the demo returns to the project the user had open, not the throwaway demo folder.
         val current = _state.value.settings.workspace
-        val workspace = if (current != null && isDemoFolder(current)) savedWorkspace?.takeIf { Files.isDirectory(Path.of(it)) } else current
+        val workspace = (if (current != null && isDemoFolder(current)) savedWorkspace else current)?.takeIf { Files.isDirectory(Path.of(it)) }
         _state.update { it.copy(sessionId = newId(), run = RunState(), verify = VerifyState(), outside = null, undoneChanges = emptySet(), settings = it.settings.copy(workspace = workspace), folderLocked = false, workspaceMissing = false) }
     }
 
@@ -694,7 +694,8 @@ class DesktopController(
         catch (_: Exception) { showError("Не удалось указать новое место папки.") }
     }
 
-    private fun isDemoFolder(path: String): Boolean {
+    /** The app's own throwaway demo project, which is never listed as a project of the user. */
+    fun isDemoFolder(path: String): Boolean {
         val demo = directory.resolve("demo")
         // Real paths on both sides: on macOS /var is a link to /private/var.
         val base = runCatching { demo.toRealPath() }.getOrElse { demo.toAbsolutePath().normalize() }
