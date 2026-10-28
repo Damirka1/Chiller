@@ -319,6 +319,27 @@ class DesktopControllerTest {
         } finally { controller.close() }
     }
 
+    @Test fun `a dialog with a fixed folder continues elsewhere from a draft`() = runBlocking {
+        val first = java.nio.file.Files.createDirectories(directory.resolve("work/from")).toRealPath()
+        val second = java.nio.file.Files.createDirectories(directory.resolve("work/to")).toRealPath()
+        val controller = DesktopController(directory.resolve("continue"), initialCredential = null, catalogClient = OfflineCatalog)
+        try {
+            controller.initialize()
+            controller.chooseWorkspace(first)
+            assertTrue(controller.send("Сделай экспорт", ExecutionMode.PLAN).accepted)
+            val from = controller.state.value.sessionId
+            assertTrue(controller.state.value.folderLocked)
+            val (id, draft) = controller.continueInFolder(second)!!
+            assertEquals(id, controller.state.value.sessionId)
+            assertNotEquals(from, id)
+            assertEquals(second.toString(), controller.state.value.settings.workspace)
+            assertTrue(draft.contains("(папка from)") && draft.contains("- Запрос: Сделай экспорт"), draft)
+            // Nothing is sent or journaled for the new dialog until the user sends the draft.
+            assertTrue(JsonlEventStore(directory.resolve("continue").resolve("sessions")).read(id).isEmpty())
+            assertEquals(first.toString(), controller.state.value.sessions.single { it.id == from }.workspace)
+        } finally { controller.close() }
+    }
+
     @Test fun `moved project folder is found again for all its dialogs`() = runBlocking {
         val old = java.nio.file.Files.createDirectories(directory.resolve("work/old")).toRealPath()
         val controller = DesktopController(directory.resolve("relocate"), initialCredential = null, catalogClient = OfflineCatalog)

@@ -658,7 +658,9 @@ class DesktopController(
         settings.copy(recentWorkspaces = (listOf(root) + settings.recentWorkspaces).distinct().take(MAX_RECENT_WORKSPACES), hiddenWorkspaces = settings.hiddenWorkspaces - root)
 
     /** A new dialog in [root], or without a folder when [root] is null. */
-    suspend fun newSessionIn(root: String?) = commands.withLock {
+    suspend fun newSessionIn(root: String?) = commands.withLock { newSessionInLocked(root) }
+
+    private suspend fun newSessionInLocked(root: String?): Boolean {
         try {
             val canonical = root?.let { withContext(Dispatchers.IO) { Path.of(it).toRealPath() }.also { path -> require(Files.isDirectory(path)) }.toString() }
             resetEngine()
@@ -666,8 +668,23 @@ class DesktopController(
             savedWorkspace = canonical
             _state.update { it.copy(settings = settings, sessionId = newId(), run = RunState(), verify = VerifyState(), outside = null, undoneChanges = emptySet(), folderLocked = false, workspaceMissing = false) }
             saveSettings(settings)
+            return true
         } catch (cancelled: CancellationException) { throw cancelled }
-        catch (_: Exception) { showError("Папка проекта недоступна.") }
+        catch (_: Exception) { showError("Папка проекта недоступна."); return false }
+    }
+
+    /**
+     * Opens a new dialog in [path] that continues the shown one, whose folder is fixed. Returns the new dialog's id
+     * and the opening draft for its composer; the shown dialog and its history stay as they are.
+     */
+    suspend fun continueInFolder(path: Path): Pair<String, String>? = commands.withLock {
+        val from = _state.value
+        val messages = from.run.messages.ifEmpty { runCatching { projectConversation(events.read(from.sessionId)) }.getOrDefault(emptyList()) }
+        if (messages.none { it.role == "user" }) return@withLock null
+        val title = from.sessions.firstOrNull { it.id == from.sessionId }?.title ?: "Диалог"
+        val draft = dev.chiller.app.ui.continuationDraft(title, from.settings.workspace, messages)
+        if (!newSessionInLocked(path.toString())) return@withLock null
+        _state.value.sessionId to draft
     }
 
     private suspend fun newSessionLocked() {

@@ -185,6 +185,8 @@ fun ChillerApp(
     projects: ProjectsModel = ProjectsModel(),
     /** News from dialogs in the background; a click opens the dialog. */
     notices: List<dev.chiller.app.di.Notice> = emptyList(), onOpenNotice: (dev.chiller.app.di.Notice) -> Unit = {}, onDismissNotice: (String) -> Unit = {},
+    /** Picks a folder and opens a dialog there that continues the shown one; returns its id and opening draft. */
+    onContinueElsewhere: (suspend () -> Pair<String, String>?)? = null,
 ) {
     val systemDark = isSystemInDarkTheme()
     var view by remember { mutableStateOf(preferences) }
@@ -482,7 +484,10 @@ fun ChillerApp(
                                                 folderMenu = FolderMenu(workspacePath, tree.projects.map { it.path }, projects.folderLocked, projects.workspaceMissing,
                                                     onOpen = { if (!active) onOpenWorkspace(it) }, onChoose = onChooseWorkspace,
                                                     onDetach = { if (!active) { if (projects.folderLocked) projects.onNewIn(null) else onCloseWorkspace() } },
-                                                    onRelocate = projects.onRelocate))
+                                                    onRelocate = projects.onRelocate,
+                                                    onContinueElsewhere = onContinueElsewhere?.let { pick -> {
+                                                        if (!active) scope.launch { pick()?.let { (id, text) -> if (drafts[id].isNullOrBlank()) drafts[id] = text } }
+                                                    } }))
                                         }
                                     }
                                 }

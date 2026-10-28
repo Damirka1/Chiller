@@ -37,7 +37,7 @@ class ProjectWorkflowUiTest {
             onChooseWorkspace = { calls += "choose" }, onConfigureProvider = { _, _, _, _ -> null }, onAnswerQuestion = {}, onUndo = {},
             onAllowProcessesChange = {}, allowProcesses = false, preferences = UiPreferences(theme = "light", reducedMotion = true),
             recentWorkspaces = listOf(shop, api), onOpenWorkspace = { calls += "open:$it" }, onCloseWorkspace = { calls += "close" },
-            projects = projects, notices = notices, onOpenNotice = { calls += "notice:${it.sessionId}" }, onDismissNotice = { calls += "dismiss:$it" },
+            projects = projects, notices = notices, onContinueElsewhere = { calls += "continue"; null }, onOpenNotice = { calls += "notice:${it.sessionId}" }, onDismissNotice = { calls += "dismiss:$it" },
         )
     }
 
@@ -93,6 +93,9 @@ class ProjectWorkflowUiTest {
         onNodeWithText("Папка закреплена за диалогом", substring = true).assertExists()
         onAllNodesWithText("Новый диалог без папки").onLast().performClick()
         assertEquals("newIn:null", calls.last())
+        onNodeWithContentDescription("Папка диалога: demo-shop").performClick()
+        onNodeWithText("Продолжить в другой папке…").performClick()
+        waitUntil { calls.last() == "continue" }
     }
 
     @Test fun missingFolderOffersTheNewPlace() = runComposeUiTest {

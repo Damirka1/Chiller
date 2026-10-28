@@ -246,6 +246,8 @@ internal fun ProjectTile(path: String, size: Dp = 18.dp, dimmed: Boolean = false
 data class FolderMenu(
     val workspace: String?, val projects: List<String>, val locked: Boolean, val missing: Boolean,
     val onOpen: (String) -> Unit, val onChoose: () -> Unit, val onDetach: () -> Unit, val onRelocate: (String) -> Unit,
+    /** For a dialog with a fixed folder: a new dialog elsewhere that starts from a draft of this one. */
+    val onContinueElsewhere: (() -> Unit)? = null,
 )
 
 /**
@@ -283,6 +285,10 @@ internal fun FolderChip(menu: FolderMenu, enabled: Boolean) {
                 Spacer(Modifier.width(8.dp))
                 Text(if (workspace != null) "Папка закреплена за диалогом: его правки и откаты относятся к ней. Другая папка откроет новый диалог."
                     else "В диалоге уже есть файлы. Другая папка откроет новый диалог.", color = c.faint, fontSize = 11.sp, lineHeight = 15.sp)
+            }
+            if (menu.locked) menu.onContinueElsewhere?.let { continueElsewhere ->
+                MenuRow("Продолжить в другой папке…", { close(); continueElsewhere() }, subtitle = "Новый диалог с кратким пересказом этого", icon = Icons.Outlined.CreateNewFolder)
+                MenuDivider()
             }
             if (menu.missing && workspace != null) {
                 MenuRow("Указать новое место…", { close(); menu.onRelocate(workspace) }, subtitle = "Папку переместили или переименовали", icon = Icons.Outlined.WarningAmber)

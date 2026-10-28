@@ -175,6 +175,7 @@ private fun chillerApplication() = application {
             onRevealFile = { path -> scope.launch { controller.revealFile(path) } },
             onDeleteMessage = controller::deleteMessage,
             onRecoverInterrupted = { scope.launch { controller.recoverInterrupted() } },
+            onContinueElsewhere = { chooseDirectory(window, null, mac)?.let { path -> controller.continueInFolder(path) } },
             notices = state.notices, onOpenNotice = { notice -> scope.launch { controller.selectSession(notice.sessionId) } }, onDismissNotice = controller::dismissNotice,
             projects = dev.chiller.app.ui.ProjectsModel(
                 pinned = state.settings.pinnedWorkspaces, hidden = state.settings.hiddenWorkspaces,
