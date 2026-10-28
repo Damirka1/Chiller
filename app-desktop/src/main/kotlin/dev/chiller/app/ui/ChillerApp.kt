@@ -622,7 +622,7 @@ private fun Sidebar(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.weight(1f)) {
                     Hint(homeRelative(workspace)) {
-                        ChillerControl(workspace.substringAfterLast('/'), onChoose, Modifier.fillMaxWidth(), icon = Icons.Outlined.FolderOpen, style = ControlStyle.SELECTED, enabled = enabled, trailing = branch)
+                        ChillerControl(folderName(workspace), onChoose, Modifier.fillMaxWidth(), icon = Icons.Outlined.FolderOpen, style = ControlStyle.SELECTED, enabled = enabled, trailing = branch)
                     }
                 }
                 ChillerIconButton(Icons.Outlined.Close, "Закрыть проект", onClose, Modifier.padding(start = 2.dp).size(28.dp), enabled = enabled)
@@ -747,7 +747,7 @@ private fun Toolbar(titleBar: TitleBarSpec?, leadingInset: Boolean, title: Strin
         ChillerIconButton(Icons.Outlined.VerticalSplit, "Боковая панель", onSidebar)
         Spacer(Modifier.width(10.dp))
         Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
-            Text(workspace?.substringAfterLast('/') ?: "Chiller", color = c.muted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 140.dp))
+            Text(workspace?.let(::folderName) ?: "Chiller", color = c.muted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 140.dp))
             Text(" / ", color = c.faint, fontSize = 12.sp)
             Text(title?.take(44) ?: "Новый диалог", color = c.text, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
         }
@@ -1131,7 +1131,7 @@ private fun FolderToolbarChip(workspace: String?, onChoose: () -> Unit, enabled:
     ) {
         Icon(if (workspace == null) Icons.Outlined.CreateNewFolder else Icons.Outlined.Folder, null, Modifier.size(13.dp), tint = if (workspace == null) c.faint else c.muted)
         Spacer(Modifier.width(5.dp))
-        Text(workspace?.substringAfterLast('/') ?: "Выбрать папку", color = if (workspace == null) c.faint else c.muted, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(workspace?.let(::folderName) ?: "Выбрать папку", color = if (workspace == null) c.faint else c.muted, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 

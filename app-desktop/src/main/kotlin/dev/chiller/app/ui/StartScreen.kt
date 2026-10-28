@@ -314,6 +314,14 @@ internal fun homeRelative(path: String): String {
     return if (home.isNotBlank() && path.startsWith(home)) "~" + path.removePrefix(home) else path
 }
 
+/** Last segment of a folder path with either separator, so Windows roots show «Chiller» rather than the whole path. */
+internal fun folderName(path: String): String = path.trimEnd('/', '\\').substringAfterLast('/').substringAfterLast('\\').ifEmpty { path }
+
+/** What the system file manager is called, for «Показать в …» actions. */
+internal val fileManagerName: String = System.getProperty("os.name").orEmpty().let { os ->
+    when { os.startsWith("Mac") -> "Finder"; os.startsWith("Windows") -> "Проводнике"; else -> "файловом менеджере" }
+}
+
 internal fun plural(n: Int, one: String, few: String, many: String): String {
     val mod100 = n % 100; val mod10 = n % 10
     return when { mod100 in 11..14 -> many; mod10 == 1 -> one; mod10 in 2..4 -> few; else -> many }

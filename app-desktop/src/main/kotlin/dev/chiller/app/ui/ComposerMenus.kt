@@ -279,7 +279,7 @@ internal fun ContextChips(workspace: String?, onChoose: () -> Unit, enabled: Boo
         ) {
             Icon(if (workspace == null) Icons.Outlined.CreateNewFolder else Icons.Outlined.Folder, null, Modifier.size(12.dp), tint = if (workspace == null) c.faint else c.muted)
             Spacer(Modifier.width(5.dp))
-            Text(workspace?.substringAfterLast('/') ?: "Папка не выбрана", color = if (workspace == null) c.faint else c.muted, fontSize = 11.sp, lineHeight = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 220.dp))
+            Text(workspace?.let(::folderName) ?: "Папка не выбрана", color = if (workspace == null) c.faint else c.muted, fontSize = 11.sp, lineHeight = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 220.dp))
         }
         mentioned.take(6).forEach { path ->
             Row(Modifier.clip(RoundedCornerShape(6.dp)).background(c.accent.copy(alpha = .10f)).padding(start = 7.dp, end = 3.dp, top = 3.dp, bottom = 3.dp), verticalAlignment = Alignment.CenterVertically) {

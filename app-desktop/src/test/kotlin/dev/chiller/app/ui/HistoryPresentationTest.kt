@@ -51,4 +51,12 @@ class HistoryPresentationTest {
         assertEquals(listOf("/p/two", "/p/one", "/p/three"), projects.map { it.path })
         assertEquals(listOf(1, 2, 0), projects.map { it.dialogs })
     }
+
+    @Test fun folderNameHandlesBothSeparators() {
+        assertEquals("Chiller", folderName("D:\\SpringBoot\\Chiller"))
+        assertEquals("Chiller", folderName("D:\\SpringBoot\\Chiller\\"))
+        assertEquals("chiller", folderName("/Users/me/chiller/"))
+        assertEquals("D:", folderName("D:\\"))
+        assertEquals("/", folderName("/"))
+    }
 }

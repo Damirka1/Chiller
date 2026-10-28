@@ -454,7 +454,7 @@ private fun VerifyCard(data: SettingsData, actions: SettingsActions) {
         if (root == null) Text("Откройте проект, чтобы задать его команду проверки.", color = c.faint, fontSize = 11.sp)
         else {
             var command by remember(root, data.verifyCommand) { mutableStateOf(data.verifyCommand) }
-            ChillerField(command, { command = it }, "Команда проверки для ${root.substringAfterLast('/')}", data.suggestedVerifyCommand ?: "например, ./gradlew test")
+            ChillerField(command, { command = it }, "Команда проверки для ${folderName(root)}", data.suggestedVerifyCommand ?: "например, ./gradlew test")
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                 ChillerControl("Сохранить", { actions.setVerifyCommand(root, command) }, style = ControlStyle.OUTLINE, enabled = command.trim() != data.verifyCommand)
                 data.suggestedVerifyCommand?.takeIf { it != command.trim() }?.let { s -> ChillerControl("Подставить «$s»", { command = s }) }
@@ -586,10 +586,10 @@ private fun DataSection(data: SettingsData, actions: SettingsActions) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.Outlined.Folder, null, Modifier.size(15.dp), tint = c.muted); Spacer(Modifier.width(10.dp))
                 Column(Modifier.weight(1f)) {
-                    Text(path.substringAfterLast('/'), color = c.text, fontSize = 13.sp)
+                    Text(folderName(path), color = c.text, fontSize = 13.sp)
                     Text(homeRelative(path), color = c.faint, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
-                ChillerControl("Открыть в Finder", { actions.openPath(path) })
+                ChillerControl("Показать в $fileManagerName", { actions.openPath(path) })
                 ChillerControl("Убрать", { actions.removeRecent(path) })
             }
         }
