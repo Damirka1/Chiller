@@ -37,6 +37,17 @@ class StoresTest {
         assertEquals("Other", store.list().single().title)
     }
 
+    @Test fun listingCarriesTheLatestWorkspaceBinding() = runTest {
+        val root = Files.createTempDirectory("chiller-bound")
+        val store = JsonlEventStore(root)
+        store.append("s", "message", buildJsonObject { put("role", "user"); put("content", "Prompt") })
+        assertNull(store.list().single().workspace)
+        store.append("s", "session.workspace", buildJsonObject { put("root", "/p/one") })
+        assertEquals("/p/one", store.list().single().workspace)
+        store.append("s", "session.workspace", buildJsonObject { put("root", "/p/moved") })
+        assertEquals("/p/moved", JsonlEventStore(root).list().single().workspace)
+    }
+
     @Test fun corruptInteriorIsNotSkipped() = runTest {        val root = Files.createTempDirectory("chiller-session")
         Files.createDirectories(root.resolve("s1"))
         Files.writeString(root.resolve("s1/events.jsonl"), "invalid\n")

@@ -112,7 +112,8 @@ class JsonlEventStore(private val directory: Path) : EventStore {
             event.payload["title"]?.jsonPrimitive?.contentOrNull?.trim()?.takeIf { it.length in 1..120 }
         }
         val title = renamed ?: first?.content?.takeIf { it.isNotBlank() }?.take(64) ?: first?.attachments?.firstOrNull()?.name?.take(64) ?: "Новый диалог"
-        val info = SessionInfo(id, title, events.lastOrNull()?.timestamp ?: "")
+        val workspace = events.lastOrNull { it.type == "session.workspace" }?.payload?.get("root")?.jsonPrimitive?.contentOrNull
+        val info = SessionInfo(id, title, events.lastOrNull()?.timestamp ?: "", workspace)
         index[id] = IndexEntry(size, modified, info)
         return info
     }

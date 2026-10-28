@@ -283,7 +283,8 @@ interface ProcessService {
 @Serializable
 data class StoredEvent(val schemaVersion: Int = 1, val id: String = newId(), val sessionId: String, val seq: Long, val timestamp: String = now(), val type: String, val payload: JsonObject)
 @Serializable
-data class SessionInfo(val id: String, val title: String, val updatedAt: String)
+/** [workspace] is the folder the dialog is bound to (the latest `session.workspace`), null for a dialog without a folder. */
+data class SessionInfo(val id: String, val title: String, val updatedAt: String, val workspace: String? = null)
 interface EventStore {
     suspend fun append(sessionId: String, type: String, payload: JsonObject): StoredEvent
     suspend fun read(sessionId: String): List<StoredEvent>

@@ -631,7 +631,7 @@ class DesktopController(
         try {
             resetEngine()
             val history = events.read(id)
-            val savedRoot = history.firstOrNull { it.type == "session.workspace" }?.payload?.get("root")?.jsonPrimitive?.contentOrNull
+            val savedRoot = history.lastOrNull { it.type == "session.workspace" }?.payload?.get("root")?.jsonPrimitive?.contentOrNull
             _state.update { it.copy(sessionId = id, settings = it.settings.copy(workspace = savedRoot), run = RunState(), verify = VerifyState(), outside = null, undoneChanges = emptySet()) }
             if (savedRoot == null) {
                 val messages = projectConversation(history)
@@ -988,10 +988,8 @@ class DesktopController(
     }
     private suspend fun refreshSessions() {
         val sessions = events.list()
-        val known = _state.value.sessionWorkspaces
-        val roots = known + sessions.take(MAX_SESSION_ROOTS).filter { it.id !in known }.mapNotNull { session ->
-            runCatching { events.findEarly(session.id, "session.workspace")?.payload?.get("root")?.jsonPrimitive?.contentOrNull }.getOrNull()?.let { session.id to it }
-        }
+        // The listing carries each dialog's folder; a binding made since the last listing is kept until it shows up.
+        val roots = _state.value.sessionWorkspaces + sessions.mapNotNull { session -> session.workspace?.let { session.id to it } }
         _state.update { it.copy(sessions = sessions, sessionWorkspaces = roots) }
     }
     private fun showError(message: String) { _state.update { it.copy(run = it.run.copy(status = "failed", error = message)) } }
@@ -1193,7 +1191,7 @@ class DesktopController(
         else -> message
     }
 
-    private companion object { const val MAX_MODEL_LENGTH = 200; const val MAX_RECENT_WORKSPACES = 6; const val MAX_SESSION_ROOTS = 60 }
+    private companion object { const val MAX_MODEL_LENGTH = 200; const val MAX_RECENT_WORKSPACES = 6 }
 }
 
 private const val MAX_CUSTOM_PROVIDERS = 16
