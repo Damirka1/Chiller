@@ -1,6 +1,8 @@
 package dev.chiller.app.ui
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
@@ -17,12 +19,17 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.pointerHoverIcon
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -36,6 +43,8 @@ import dev.chiller.design.ChillerFonts
 import dev.chiller.design.ChillerIconButton
 import dev.chiller.design.ChillerPalette
 import dev.chiller.design.LocalChillerPalette
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * Markdown blocks outside fenced code: paragraphs, ATX headings, bullet and numbered lists with
@@ -48,6 +57,8 @@ sealed interface MdBlock {
     data class Quote(val text: String) : MdBlock
     data class Table(val headers: List<String>, val rows: List<List<String>>, val alignments: List<TableAlignment>) : MdBlock
     data object Rule : MdBlock
+    /** A line that is only `![alt](src)`: shown as the picture when [src] is a file the dialog can preview. */
+    data class Image(val alt: String, val src: String) : MdBlock
 }
 
 enum class TableAlignment { LEFT, CENTER, RIGHT }
@@ -78,6 +89,7 @@ fun parseMarkdownBlocks(text: String): List<MdBlock> {
         when {
             line.isBlank() -> flush()
             line.trim().matches(Regex("^(-{3,}|\\*{3,}|_{3,})$")) -> { flush(); blocks += MdBlock.Rule }
+            imageLine.matchEntire(line.trim()) != null -> { flush(); imageLine.matchEntire(line.trim())!!.let { blocks += MdBlock.Image(it.groupValues[1].trim(), it.groupValues[2]) } }
             h != null -> { flush(); blocks += MdBlock.Heading(h.groupValues[1].length, h.groupValues[2]) }
             b != null -> { flush(); blocks += MdBlock.ListItem("•", b.groupValues[1].length / 2, b.groupValues[3]) }
             n != null -> { flush(); blocks += MdBlock.ListItem("${n.groupValues[2]}.", n.groupValues[1].length / 2, n.groupValues[3]) }
@@ -165,7 +177,9 @@ private fun parseTableAt(lines: List<String>, start: Int): Pair<MdBlock.Table, I
     return MdBlock.Table(headers, rows, alignments) to i
 }
 
-private val inline = Regex("`([^`]+)`|\\*\\*([^*]+)\\*\\*|__([^_]+)__|(?<![\\w*])\\*([^*\\s][^*]*)\\*(?!\\w)|(?<!\\w)_([^_\\s][^_]*)_(?!\\w)|\\[([^\\]]+)]\\(([^)\\s]+)\\)")
+private val imageLine = Regex("""!\[([^\]]*)]\(([^)\s]+)(?:\s+"[^"]*")?\)""")
+
+private val inline = Regex("!\\[([^\\]]*)]\\([^)]*\\)|`([^`]+)`|\\*\\*([^*]+)\\*\\*|__([^_]+)__|(?<![\\w*])\\*([^*\\s][^*]*)\\*(?!\\w)|(?<!\\w)_([^_\\s][^_]*)_(?!\\w)|\\[([^\\]]+)]\\(([^)\\s]+)\\)")
 
 /** Inline code, bold, italic and links; everything else is literal text. */
 fun inlineMarkdown(text: String, c: ChillerPalette): AnnotatedString = buildAnnotatedString {
@@ -174,10 +188,12 @@ fun inlineMarkdown(text: String, c: ChillerPalette): AnnotatedString = buildAnno
         append(text.substring(last, m.range.first))
         val g = m.groupValues
         when {
-            g[1].isNotEmpty() -> { pushStyle(SpanStyle(fontFamily = ChillerFonts.mono, fontSize = 12.5.sp, background = c.hover, color = c.text)); append(" ${g[1]} "); pop() }
-            g[2].isNotEmpty() || g[3].isNotEmpty() -> { pushStyle(SpanStyle(fontWeight = FontWeight.SemiBold)); append(g[2].ifEmpty { g[3] }); pop() }
-            g[4].isNotEmpty() || g[5].isNotEmpty() -> { pushStyle(SpanStyle(fontStyle = FontStyle.Italic)); append(g[4].ifEmpty { g[5] }); pop() }
-            g[6].isNotEmpty() -> { pushStyle(SpanStyle(color = c.accent, textDecoration = TextDecoration.Underline)); append(g[6]); pop() }
+            // A picture inside a sentence keeps only its description; whole-line pictures are blocks.
+            m.value.startsWith("![") -> { pushStyle(SpanStyle(color = c.muted)); append(g[1].ifBlank { "изображение" }); pop() }
+            g[2].isNotEmpty() -> { pushStyle(SpanStyle(fontFamily = ChillerFonts.mono, fontSize = 12.5.sp, background = c.hover, color = c.text)); append(" ${g[2]} "); pop() }
+            g[3].isNotEmpty() || g[4].isNotEmpty() -> { pushStyle(SpanStyle(fontWeight = FontWeight.SemiBold)); append(g[3].ifEmpty { g[4] }); pop() }
+            g[5].isNotEmpty() || g[6].isNotEmpty() -> { pushStyle(SpanStyle(fontStyle = FontStyle.Italic)); append(g[5].ifEmpty { g[6] }); pop() }
+            g[7].isNotEmpty() -> { pushStyle(SpanStyle(color = c.accent, textDecoration = TextDecoration.Underline)); append(g[7]); pop() }
         }
         last = m.range.last + 1
     }
@@ -186,7 +202,7 @@ fun inlineMarkdown(text: String, c: ChillerPalette): AnnotatedString = buildAnno
 
 /** The visible text of [inlineMarkdown], for tests and plain-text uses. */
 fun inlineMarkdownPlain(text: String): String = inline.replace(text) { m -> val g = m.groupValues
-    when { g[1].isNotEmpty() -> "\u2009${g[1]}\u2009"; g[2].isNotEmpty() -> g[2]; g[3].isNotEmpty() -> g[3]; g[4].isNotEmpty() -> g[4]; g[5].isNotEmpty() -> g[5]; else -> g[6] } }
+    when { m.value.startsWith("![") -> g[1].ifBlank { "изображение" }; g[2].isNotEmpty() -> "\u2009${g[2]}\u2009"; g[3].isNotEmpty() -> g[3]; g[4].isNotEmpty() -> g[4]; g[5].isNotEmpty() -> g[5]; g[6].isNotEmpty() -> g[6]; else -> g[7] } }
 
 /** Renders markdown prose. [tail] (e.g. a streaming caret) is appended to the last block. */
 @Composable
@@ -221,6 +237,7 @@ fun MarkdownText(text: String, tail: AnnotatedString? = null) {
                 }
                 is MdBlock.Table -> MarkdownTable(block, c)
                 MdBlock.Rule -> Box(Modifier.fillMaxWidth().padding(vertical = 6.dp).height(1.dp).background(c.border))
+                is MdBlock.Image -> MarkdownImage(block)
             }
         }
     }
@@ -308,4 +325,37 @@ private fun TableGrid(table: MdBlock.Table, c: ChillerPalette) {
             if (rowIndex < table.rows.size) Box(Modifier.width(tableWidth).height(1.dp).background(c.border))
         }
     }
+}
+
+/** Reads a dialog's file for a preview: project-relative paths, its captures and attachments. Null outside a dialog. */
+val LocalFilePreview = androidx.compose.runtime.staticCompositionLocalOf<(suspend (String) -> ByteArray?)?> { null }
+
+/**
+ * A picture the answer points at. Only files the dialog may show are read; web addresses are never fetched, so they
+ * keep their description. The image opens in the viewer like a presented file.
+ */
+@Composable
+private fun MarkdownImage(block: MdBlock.Image) {
+    val c = LocalChillerPalette.current
+    val preview = LocalFilePreview.current
+    val local = !block.src.contains("://") && block.src.substringAfterLast('.').lowercase() in setOf("png", "jpg", "jpeg")
+    val bitmap by produceState(PreviewImages.get(PreviewImages.key(block.src, -1)), block.src, preview) {
+        if (value == null && local && preview != null) value = withContext(Dispatchers.IO) { runCatching { preview(block.src)?.let(::decodePreviewImage) }.getOrNull() }
+            ?.also { PreviewImages.put(PreviewImages.key(block.src, -1), it) }
+    }
+    var viewing by remember(block.src) { mutableStateOf(false) }
+    val image = bitmap
+    if (image == null) {
+        Text(inlineMarkdown("![${block.alt}](${block.src})", c), color = c.muted, fontSize = 14.sp, lineHeight = 23.sp)
+        return
+    }
+    val shape = RoundedCornerShape(10.dp)
+    val name = block.src.substringAfterLast('/').substringAfterLast('\\')
+    Column(Modifier.widthIn(max = 420.dp)) {
+        Image(image, block.alt.ifBlank { name }, contentScale = ContentScale.Fit,
+            modifier = Modifier.heightIn(max = 280.dp).clip(shape).border(1.dp, c.border, shape).pointerHoverIcon(PointerIcon.Hand)
+                .clickable(role = Role.Button, onClickLabel = "Открыть изображение") { viewing = true })
+        if (block.alt.isNotBlank()) Text(block.alt, color = c.faint, fontSize = 11.sp, lineHeight = 16.sp, modifier = Modifier.padding(top = 4.dp))
+    }
+    if (viewing) ImageViewer(dev.chiller.contracts.FilePresentation(block.src, name, "image/png", 0), image, { viewing = false })
 }

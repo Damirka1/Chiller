@@ -146,7 +146,10 @@ private fun ChangesTab(files: List<FileChanges>, onUndo: (String) -> Unit, canUn
                         if (id != null) ChillerControl("Отменить", { onUndo(id) }, icon = Icons.AutoMirrored.Outlined.Undo)
                         else Spacer(Modifier.height(28.dp))
                     }
-                    change.diff?.let { Diff(it) } ?: Text("Без диффа", color = c.faint, fontSize = 11.sp, modifier = Modifier.padding(10.dp))
+                    // A new or changed picture shows itself rather than "Binary files differ".
+                    val picture = change.diff?.takeIf { "Binary files differ" in it && current.path.substringAfterLast('.').lowercase() in setOf("png", "jpg", "jpeg") }
+                    if (picture != null && current.kind != "deleted") ChangedImage(current.path) { Diff(picture) }
+                    else change.diff?.let { Diff(it) } ?: Text("Без диффа", color = c.faint, fontSize = 11.sp, modifier = Modifier.padding(10.dp))
                 }
             }
         }
@@ -276,4 +279,20 @@ private fun EmptyState(icon: ImageVector, title: String, text: String, modifier:
             Text(text, color = c.faint, fontSize = 12.sp, lineHeight = 18.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
         }
     }
+}
+
+/** The picture a change produced, read like any presented file; [fallback] when it cannot be shown. */
+@Composable
+private fun ChangedImage(path: String, fallback: @Composable () -> Unit) {
+    val c = LocalChillerPalette.current
+    val preview = LocalFilePreview.current
+    val bitmap by produceState<androidx.compose.ui.graphics.ImageBitmap?>(null, path, preview) {
+        value = preview?.let { read -> kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { runCatching { read(path)?.let(::decodePreviewImage) }.getOrNull() } }
+    }
+    val image = bitmap ?: return fallback()
+    Box(Modifier.fillMaxWidth().background(c.sidebar.copy(alpha = .4f)).padding(10.dp), contentAlignment = Alignment.Center) {
+        androidx.compose.foundation.Image(image, path.substringAfterLast('/'), contentScale = androidx.compose.ui.layout.ContentScale.Fit,
+            modifier = Modifier.heightIn(max = 220.dp).clip(RoundedCornerShape(6.dp)))
+    }
+    Text("${image.width} × ${image.height}", color = c.faint, fontSize = 10.sp, modifier = Modifier.padding(start = 10.dp, bottom = 8.dp))
 }

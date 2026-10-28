@@ -333,7 +333,7 @@ fun ChillerApp(
     LaunchedEffect(dark, titleBar) { titleBar?.onDark?.invoke(dark) }
     // Provider-given model names (an optional extension of /models), for the composer's model button.
     val modelNames = remember(catalog.models) { catalog.models.mapNotNull { m -> m.displayName?.takeIf { it.isNotBlank() }?.let { m.id to it } }.toMap() }
-    ChillerTheme(darkTheme = dark, reducedMotion = reducedMotion, compact = compactDensity) { CompositionLocalProvider(LocalModelNames provides modelNames) {
+    ChillerTheme(darkTheme = dark, reducedMotion = reducedMotion, compact = compactDensity) { CompositionLocalProvider(LocalModelNames provides modelNames, LocalFilePreview provides onPreviewFile) {
         val c = LocalChillerPalette.current
         val menu = titleBar?.menu
         BoxWithConstraints(Modifier.fillMaxSize().then(titleBar?.hitTest ?: Modifier).background(c.canvas).focusRequester(rootFocus).chillerKeyboardFocusTracking().onPreviewKeyEvent {
