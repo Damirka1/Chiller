@@ -634,7 +634,8 @@ private fun PathRow(title: String, path: String, onOpen: () -> Unit) {
 private fun KeysSection() {
     val c = LocalChillerPalette.current
     Card {
-        listOf(shortcut("N") to "Новый диалог", shortcut("O") to "Открыть проект", shortcut("K") to "Поиск по диалогам", shortcut("↵") to "Отправить", shortcut(".") to "Остановить задачу",
+        listOf(shortcut("N") to "Новый диалог", shortcut("O") to "Открыть проект", shortcut("K") to "Поиск по диалогам и сообщениям", shortcut("P") to "Перейти к проекту",
+            (if (isMacOs) "⌘ ⇧ P" else "Ctrl+Shift+P") to "Все команды", shortcut("1…9") to "Новый диалог в проекте по номеру", shortcut("↵") to "Отправить", shortcut(".") to "Остановить задачу",
             shortcut(",") to "Настройки", "Esc" to "Закрыть меню, настройки или поиск", "↑ ↓ ↵" to "Выбор в меню модели", "↑ ↓" to "Разделы настроек", "Tab" to "Навигация с клавиатуры (видимый фокус)").forEach { (keys, label) ->
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 2.dp)) {
                 Text(label, color = c.text, fontSize = 13.sp, modifier = Modifier.weight(1f))

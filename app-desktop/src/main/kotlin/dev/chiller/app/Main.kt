@@ -277,7 +277,7 @@ private fun chillerApplication() = application {
                 openUrl = { url -> runCatching { java.awt.Desktop.getDesktop().browse(java.net.URI(url)) } },
                 deleteDemos = { scope.launch { controller.deleteDemoProjects(); demoCount = controller.demoProjectCount() } },
             ),
-            titleBar = titleBar, buildStamp = BuildStamp.value,
+            titleBar = titleBar, buildStamp = BuildStamp.value, paletteMenu = menu,
             onOpenTrace = {
                 val trace = controller.tracePath(state.sessionId).toFile()
                 runCatching {

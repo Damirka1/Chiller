@@ -153,6 +153,40 @@ class ProjectWorkflowUiTest {
         assertEquals("remove", calls.last())
     }
 
+    @Test fun commandsMatchWordStartsInAnyOrder() {
+        val commands = listOf(PaletteCommand("Новый диалог", "Файл") {}, PaletteCommand("Новый диалог без папки", "Проекты") {}, PaletteCommand("Тёмная тема", "Вид") {}, PaletteCommand("Studio", "Вид") {})
+        assertEquals(listOf("Новый диалог", "Новый диалог без папки"), matchCommands(commands, "нов диал").map { it.title })
+        assertEquals(listOf("Новый диалог без папки"), matchCommands(commands, "папк нов").map { it.title })
+        assertEquals(listOf("Тёмная тема", "Studio"), matchCommands(commands, "вид").map { it.title }, "the group counts too")
+        assertEquals(emptyList(), matchCommands(commands, "иалог"), "a word must start where the query starts")
+        assertEquals(4, matchCommands(commands, "  ").size)
+    }
+
+    @Test fun ctrlShiftPRunsACommandByName() = runComposeUiTest {
+        val menu = listOf(AppMenuSection("Файл", listOf(listOf(AppMenuItem("Экспорт Markdown…") { calls += "export" }, AppMenuItem("Отключено", enabled = false) { calls += "never" }))))
+        setContent {
+            ChillerApp(
+                RunState(), sessions, "fresh", shop, isDemo = false, providerModel = "fake-model", providerBaseUrl = "http://localhost:8000/v1", thinkingEnabled = false, apiKeyConfigured = true,
+                onSend = { _, _, id -> SendReceipt(false, "fresh", id) }, onStop = {}, onNewSession = {}, onSelectSession = {}, onChooseWorkspace = {},
+                onConfigureProvider = { _, _, _, _ -> null }, onAnswerQuestion = {}, onUndo = {}, onAllowProcessesChange = { calls += "processes:$it" }, allowProcesses = false,
+                preferences = UiPreferences(theme = "light", reducedMotion = true), recentWorkspaces = listOf(shop, api), projects = model(), paletteMenu = menu,
+            )
+        }
+        onRoot().performKeyInput { keyDown(Key.CtrlLeft); keyDown(Key.ShiftLeft); pressKey(Key.P); keyUp(Key.ShiftLeft); keyUp(Key.CtrlLeft) }
+        onNodeWithContentDescription("Поиск команды").performTextInput("экспорт")
+        onNodeWithText("Отключено").assertDoesNotExist()
+        onNodeWithContentDescription("Поиск команды").performKeyInput { pressKey(Key.Enter) }
+        assertEquals("export", calls.last())
+        onRoot().performKeyInput { keyDown(Key.CtrlLeft); keyDown(Key.ShiftLeft); pressKey(Key.P); keyUp(Key.ShiftLeft); keyUp(Key.CtrlLeft) }
+        onNodeWithContentDescription("Поиск команды").performTextInput("разреш команды")
+        onNodeWithContentDescription("Поиск команды").performKeyInput { pressKey(Key.Enter) }
+        assertEquals("processes:true", calls.last())
+        onRoot().performKeyInput { keyDown(Key.CtrlLeft); keyDown(Key.ShiftLeft); pressKey(Key.P); keyUp(Key.ShiftLeft); keyUp(Key.CtrlLeft) }
+        onNodeWithContentDescription("Поиск команды").performTextInput("нов backend")
+        onNodeWithContentDescription("Поиск команды").performKeyInput { pressKey(Key.Enter) }
+        assertEquals("newIn:backend-api", calls.last())
+    }
+
     @Test fun messageSearchOpensTheDialogAtTheMatch() = runComposeUiTest {
         val messages = (1..60).map { n -> dev.chiller.contracts.AgentMessage(if (n % 2 == 1) "user" else "assistant", if (n == 5) "Здесь спрятана иголка в стоге" else "Сообщение номер $n") }
         setContent {

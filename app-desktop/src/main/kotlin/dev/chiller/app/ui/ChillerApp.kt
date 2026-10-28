@@ -184,6 +184,8 @@ fun ChillerApp(
     projects: ProjectsModel = ProjectsModel(),
     /** News from dialogs in the background; a click opens the dialog. */
     notices: List<dev.chiller.app.di.Notice> = emptyList(), onOpenNotice: (dev.chiller.app.di.Notice) -> Unit = {}, onDismissNotice: (String) -> Unit = {},
+    /** The app menu's commands, offered in the command palette next to the window's own. */
+    paletteMenu: List<AppMenuSection> = emptyList(),
     /** Dialogs whose messages contain the text typed into the sidebar search. */
     onSearchMessages: suspend (String) -> List<dev.chiller.sessions.SessionHit> = { emptyList() },
     /** Whether file changes wait for the user's yes or no, with the toggle and the decision. */
@@ -231,6 +233,7 @@ fun ChillerApp(
     }
     var sidebar by remember { mutableStateOf(true) }
     var switcher by remember { mutableStateOf(false) }
+    var palette by remember { mutableStateOf(false) }
     // A dialog opened from a message search scrolls to the first message with the text.
     var jump by remember { mutableStateOf<Pair<String, String>?>(null) }
     // Offered for an empty dialog in a git project; the controller checks the repository for real.
@@ -347,7 +350,7 @@ fun ChillerApp(
                 when (it.key) {
                     Key.Enter -> { handleAction(DesktopAction.SEND); true }
                     Key.K -> { sidebar = true; runCatching { sidebarSearch.requestFocus() }; true }
-                    Key.P -> { if (!settings) switcher = true; true }
+                    Key.P -> { if (it.isShiftPressed) palette = true else if (!settings) switcher = true; true }
                     Key.One, Key.Two, Key.Three, Key.Four, Key.Five, Key.Six, Key.Seven, Key.Eight, Key.Nine -> {
                         val index = listOf(Key.One, Key.Two, Key.Three, Key.Four, Key.Five, Key.Six, Key.Seven, Key.Eight, Key.Nine).indexOf(it.key)
                         tree.projects.getOrNull(index)?.let { group -> if (!settings) projects.onNewIn(group.path) }
@@ -611,6 +614,24 @@ fun ChillerApp(
         // A non-focusable popup: notices float over the page without taking keyboard focus from the composer.
         if (notices.isNotEmpty()) Popup(alignment = Alignment.TopEnd, properties = PopupProperties(focusable = false)) {
             NoticeStack(notices, onOpenNotice, onDismissNotice, Modifier.padding(top = 52.dp, end = 16.dp, start = 16.dp, bottom = 16.dp))
+        }
+        if (palette) {
+            val approval = editApproval
+            val commands = remember(paletteMenu, tree, mode, approval.enabled, allowProcesses, dark, workspacePath) {
+                menuCommands(paletteMenu) + buildList {
+                    add(PaletteCommand("Перейти к проекту", "Проекты", Icons.Outlined.FolderOpen, shortcut("P")) { switcher = true })
+                    add(PaletteCommand("Новый диалог без папки", "Проекты", Icons.Outlined.Add) { projects.onNewIn(null) })
+                    tree.projects.take(9).forEach { group -> add(PaletteCommand("Новый диалог в ${folderName(group.path)}", "Проекты", Icons.Outlined.Add) { projects.onNewIn(group.path) }) }
+                    if (workspacePath != null) {
+                        add(PaletteCommand(if (mode == ExecutionMode.PLAN) "Режим: Изменения" else "Режим: План", "Диалог", if (mode == ExecutionMode.PLAN) Icons.Outlined.Edit else Icons.Outlined.Lightbulb) { mode = toggledMode(mode) })
+                        add(PaletteCommand(if (approval.enabled) "Не подтверждать правки" else "Подтверждать правки", "Диалог", Icons.Outlined.FactCheck) { approval.onChange(!approval.enabled) })
+                        add(PaletteCommand(if (allowProcesses) "Запретить команды процессов" else "Разрешить команды процессов", "Диалог", Icons.Outlined.Terminal) { onAllowProcessesChange(!allowProcesses) })
+                    }
+                    add(PaletteCommand(if (dark) "Светлая тема" else "Тёмная тема", "Вид", Icons.Outlined.Contrast) { updateView(view.copy(theme = if (dark) "light" else "dark")) })
+                    SettingsSection.entries.forEach { section -> add(PaletteCommand(section.title, "Настройки", section.icon) { settingsSection = section; settings = true }) }
+                }
+            }
+            CommandPalette(commands) { palette = false; runCatching { rootFocus.requestFocus() } }
         }
         if (switcher) ProjectSwitcher(tree.projects, workspacePath, onPick = { path -> switcher = false; projects.onNewIn(path) }, onChoose = onChooseWorkspace, onDismiss = { switcher = false; runCatching { rootFocus.requestFocus() } },
             onOpenDialog = { id -> switcher = false; onSelectSession(id) })

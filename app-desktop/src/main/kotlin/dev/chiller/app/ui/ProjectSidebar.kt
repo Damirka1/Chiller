@@ -451,7 +451,7 @@ internal fun ProjectSwitcher(projects: List<ProjectGroup>, current: String?, onP
 }
 
 @Composable
-private fun SwitcherRow(highlighted: Boolean, onClick: () -> Unit, onHover: () -> Unit, content: @Composable RowScope.() -> Unit) {
+internal fun SwitcherRow(highlighted: Boolean, onClick: () -> Unit, onHover: () -> Unit, content: @Composable RowScope.() -> Unit) {
     val c = LocalChillerPalette.current
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
