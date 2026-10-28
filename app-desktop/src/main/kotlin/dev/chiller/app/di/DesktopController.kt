@@ -104,17 +104,24 @@ data class SendReceipt(val accepted: Boolean, val sessionId: String, val clientR
 
 internal data class AutoVerifyContext(
     val sessionId: String,
-    val settings: DesktopSettings,
+    val root: String,
     val allowProcesses: Boolean,
     val processService: ProcessService,
     val command: String,
     val options: AgentOptions,
     val epoch: Long,
 ) {
-    fun isCurrent(state: DesktopState, currentProcessService: ProcessService?, currentEpoch: Long): Boolean =
-        state.sessionId == sessionId && state.settings.copy(modelCatalogs = emptyMap()) == settings.copy(modelCatalogs = emptyMap()) && state.allowProcesses == allowProcesses &&
+    /**
+     * The result still belongs to the same dialog engine and run, and the user changed nothing it depends on: the
+     * project's check command, the agent options and process permission. Which dialog is shown does not matter.
+     */
+    fun isCurrent(settings: DesktopSettings, allowProcesses: Boolean, currentProcessService: ProcessService?, currentEpoch: Long): Boolean =
+        settings.verifyCommands[root] == command && settings.agent.sanitized() == options && allowProcesses == this.allowProcesses &&
             currentProcessService === processService && currentEpoch == epoch
 }
+
+/** A short message about a dialog that is not on screen: its run ended, its check finished, or it waits for an answer. */
+data class Notice(val id: String, val sessionId: String, val title: String, val message: String, val tone: String /* positive, negative, attention, neutral */)
 data class ConnectionState(val status: String = "unverified", val message: String = "", val checkedAt: String? = null)
 data class ModelCatalogState(
     val status: String = "idle",
@@ -134,7 +141,9 @@ data class DesktopState(val run: RunState = RunState(), val sessions: List<Sessi
     /** Dialogs whose run is in progress, shown or in the background. */
     val runningSessions: Set<String> = emptySet(),
     /** Dialogs whose run waits for the user's answer. */
-    val waitingSessions: Set<String> = emptySet())
+    val waitingSessions: Set<String> = emptySet(),
+    /** News from dialogs in the background, newest last. */
+    val notices: List<Notice> = emptyList())
 
 class DesktopController(
     private val directory: Path, initialCredential: String? = LocalCredentials.load(), connectionChecker: ConnectionChecker? = null, catalogClient: ModelCatalogClient? = null,
@@ -193,8 +202,18 @@ class DesktopController(
         /** Agent settings changed since it was built: the next message rebuilds it, history restored from the journal. */
         @Volatile var stale = false
         val running: Boolean get() = coordinator.status() !in TERMINAL_STATUSES && (coordinator.isRunning || coordinator.status() in ACTIVE_STATUSES)
+        /** Runs whose after-run work (outside changes, auto-verify) has not finished yet. */
+        val followUps = java.util.concurrent.atomic.AtomicInteger()
+        /** Running, or still checking what its run did: the engine stays even when the dialog is left. */
+        val active: Boolean get() = running || followUps.get() > 0
+        // Auto-verify of this dialog. Changed only under the controller's command lock.
+        var verify = VerifyState()
+        var verifyEpoch = 0L
+        var verifyAttempt = 0
     }
     private val engines = java.util.concurrent.ConcurrentHashMap<String, Engine>()
+    /** Finished checks of dialogs whose engine was let go, shown again when the dialog is opened. */
+    private val keptVerify = java.util.concurrent.ConcurrentHashMap<String, VerifyState>()
     private val shownEngine: Engine? get() = engines[_state.value.sessionId]
     private val coordinator: AgentCoordinator? get() = shownEngine?.coordinator
     private val processService: ProcessService? get() = shownEngine?.processes
@@ -491,7 +510,7 @@ class DesktopController(
         val session = _state.value.sessionId
         val messages = projectConversation(events.read(session))
         val plan = MessageHistoryActions.planDeleteTurn(messages, index) ?: return@withLock false
-        resetEngine()
+        resetEngine(invalidate = true)
         events.append(session, "history.remove_turn", buildJsonObject { put("start", plan.start); put("end", plan.end); put("expectedCount", plan.expectedCount) })
         selectSessionLocked(session)
         refreshSessions()
@@ -504,7 +523,7 @@ class DesktopController(
         val messages = projectConversation(events.read(session))
         val plan = MessageHistoryActions.planEditTurn(messages, index, text)
             ?: return@withLock SendReceipt(false, session, request, "Сообщение нельзя изменить")
-        resetEngine()
+        resetEngine(invalidate = true)
         events.append(session, "history.replace_turn", buildJsonObject {
             put("index", plan.index)
             put("expectedCount", plan.expectedCount)
@@ -557,7 +576,7 @@ class DesktopController(
         if (coordinator?.status() in TERMINAL_STATUSES) return false
         return coordinator?.isRunning == true || listOf(_state.value.run.status, coordinator?.status()).any { it in ACTIVE_STATUSES }
     }
-    private fun running(sessionId: String): Boolean = engines[sessionId]?.running == true || (sessionId == _state.value.sessionId && busy())
+    private fun running(sessionId: String): Boolean = engines[sessionId]?.active == true || (sessionId == _state.value.sessionId && busy())
 
     private suspend fun configureLocked(url: String, model: String, thinking: Boolean, key: String?, keepSession: Boolean = false) {
         if (busy()) return
@@ -599,7 +618,7 @@ class DesktopController(
         _state.update { it.copy(apiKeyConfigured = ready(), connection = if (profileChanged) connectionForUnverified() else it.connection) }
         saveSettings(next)
         // The next message rebuilds the engine from the journal with the new model and its profile. Background runs keep theirs.
-        resetEngine()
+        resetEngine(invalidate = true)
         disposeIdle()
         if (catalogChanged) {
             restoreCachedCatalog()
@@ -684,7 +703,7 @@ class DesktopController(
      * their workspace-relative history; the journal records the new binding, nothing is copied or replayed.
      */
     suspend fun relocateWorkspace(from: String, to: Path) = commands.withLock {
-        if (engines.values.any { it.running && it.root == from }) return@withLock showError("В этом проекте идёт задача. Дождитесь её завершения.")
+        if (engines.values.any { it.active && it.root == from }) return@withLock showError("В этом проекте идёт задача. Дождитесь её завершения.")
         try {
             val root = withContext(Dispatchers.IO) { to.toRealPath() }.also { require(Files.isDirectory(it)) }.toString()
             if (root == from) return@withLock
@@ -717,6 +736,7 @@ class DesktopController(
     private suspend fun selectSessionLocked(id: String) {
         try {
             resetEngine()
+            _state.update { it.copy(notices = it.notices.filterNot { notice -> notice.sessionId == id }) }
             val history = events.read(id)
             // A dialog still running in the background is shown live from its engine, not restored from the journal.
             engines[id]?.let { engine -> return showEngine(engine, history) }
@@ -731,7 +751,8 @@ class DesktopController(
             } else {
                 // The restored history is on screen when selection returns, not only once the observer catches up.
                 val engine = buildEngine().also { it.restore() }
-                _state.update { if (it.sessionId == id) it.copy(run = engine.state.value) else it }
+                val verify = keptVerify.remove(id)?.also { kept -> shownEngine?.verify = kept } ?: VerifyState()
+                _state.update { if (it.sessionId == id) it.copy(run = engine.state.value, verify = verify) else it }
             }
             val outside = history.lastOrNull { it.type == "turn.outside_changes" }?.let { runCatching { json.decodeFromJsonElement(OutsideChanges.serializer(), it.payload) }.getOrNull() }
             _state.update { it.copy(undoneChanges = undoneChangeIds(history), outside = outside) }
@@ -740,7 +761,7 @@ class DesktopController(
 
     private fun showEngine(engine: Engine, history: List<StoredEvent>) {
         val run = engine.coordinator.state.value.let { run -> run.copy(question = run.question ?: engine.questions.question.value) }
-        _state.update { it.copy(sessionId = engine.sessionId, settings = it.settings.copy(workspace = engine.root), run = run, verify = VerifyState(), outside = null,
+        _state.update { it.copy(sessionId = engine.sessionId, settings = it.settings.copy(workspace = engine.root), run = run, verify = engine.verify, outside = null,
             undoneChanges = undoneChangeIds(history), folderLocked = folderLocked(history), workspaceMissing = false, activeProfile = engine.profile,
             subagents = engine.supervisor.state.value) }
     }
@@ -765,7 +786,7 @@ class DesktopController(
         if (coordinator?.status() in TERMINAL_STATUSES) coordinator?.awaitCompletion()
         if (busy()) return rejected("Уже выполняется другая задача")
         // Two agents editing one folder would trip over each other's snapshots; dialogs without a folder have their own.
-        val background = engines.values.filter { it.sessionId != session && it.running }
+        val background = engines.values.filter { it.sessionId != session && it.active }
         val folder = _state.value.settings.workspace
         if (folder != null && background.any { it.root == folder }) return rejected("В этом проекте уже идёт задача в другом диалоге. Дождитесь её или остановите.")
         if (background.size >= MAX_PARALLEL_RUNS) return rejected("Одновременно идут $MAX_PARALLEL_RUNS задачи. Дождитесь одной из них.")
@@ -796,33 +817,50 @@ class DesktopController(
         val folderless = _state.value.settings.workspace == null
         val runMode = if (folderless) ExecutionMode.WORKSPACE_EDIT else mode
         return try {
-            if (shownEngine?.stale == true) resetEngine()
-            val engine = coordinator ?: buildEngine().also { it.restore() }
-            val changesBefore = engine.state.value.activities.count { it.diff != null && it.status == "completed" }
-            // Metadata snapshot before an editing turn: what changes outside the file tools is reported afterwards.
-            val turnIndex = engine.state.value.messages.size
-            val stampsBefore = if (!folderless && mode == ExecutionMode.WORKSPACE_EDIT) withContext(Dispatchers.IO) { runCatching { codeService?.fileStamps() }.getOrNull() } else null
-            val stampSource = codeService
-            if (!preserveAutoVerifyAttempt) autoVerifyEpoch++
-            val runEpoch = autoVerifyEpoch
-            val accepted = CompletableDeferred<Boolean>()
-            val acceptedReceipt = SendReceipt(true, session, requestId)
-            val job = engine.send(text, runMode, _state.value.allowProcesses, allowNetwork = _state.value.settings.agent.allowNetwork, allowScreenshots = _state.value.settings.agent.allowScreenshots, attachments = attachments) {
+            if (shownEngine?.stale == true) resetEngine(invalidate = true)
+            if (coordinator == null) buildEngine().restore()
+            startRun(shownEngine!!, text, runMode, mode, requestId, attachments, preserveAutoVerifyAttempt)
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (_: Exception) { rejected("Не удалось начать задачу") }
+    }
+
+    /**
+     * Starts one turn on [engine]: the shown dialog's message, or the repair turn auto-verify sends to a dialog that
+     * may be in the background. What happens after the run is tied to this engine, not to the dialog on screen.
+     */
+    private suspend fun startRun(engine: Engine, text: String, runMode: ExecutionMode, mode: ExecutionMode, requestId: String, attachments: List<ComposerAttachment>, preserveAutoVerifyAttempt: Boolean): SendReceipt {
+        val session = engine.sessionId
+        val coordinator = engine.coordinator
+        val changesBefore = coordinator.state.value.activities.count { it.diff != null && it.status == "completed" }
+        // Metadata snapshot before an editing turn: what changes outside the file tools is reported afterwards.
+        val turnIndex = coordinator.state.value.messages.size
+        val stampsBefore = if (engine.root != null && mode == ExecutionMode.WORKSPACE_EDIT) withContext(Dispatchers.IO) { runCatching { engine.code.fileStamps() }.getOrNull() } else null
+        if (!preserveAutoVerifyAttempt) { engine.verifyEpoch++; engine.verifyAttempt = 0 }
+        val runEpoch = engine.verifyEpoch
+        val accepted = CompletableDeferred<Boolean>()
+        val acceptedReceipt = SendReceipt(true, session, requestId)
+        engine.followUps.incrementAndGet()
+        val job = try {
+            coordinator.send(text, runMode, _state.value.allowProcesses, allowNetwork = _state.value.settings.agent.allowNetwork, allowScreenshots = _state.value.settings.agent.allowScreenshots, attachments = attachments) {
                 rememberReceipt(acceptedReceipt)
                 accepted.complete(true)
             }
-            if (!preserveAutoVerifyAttempt) autoVerifyAttempt = 0
-            job.invokeOnCompletion {
-                val completedRun = engine.state.value
-                if (!accepted.isCompleted) accepted.complete(false)
-                scope.launch { refreshSessions(); commands.withLock { if (_state.value.sessionId == session) _state.update { it.copy(folderLocked = folderLocked(events.read(session))) } } }
-                scope.launch { recordOutsideChanges(session, stampSource, stampsBefore, completedRun, turnIndex) }
-                scope.launch { afterRun(session, mode, changesBefore, completedRun, runEpoch, engine) }
+        } catch (e: Exception) { engine.followUps.decrementAndGet(); throw e }
+        job.invokeOnCompletion {
+            val completedRun = coordinator.state.value
+            if (!accepted.isCompleted) accepted.complete(false)
+            scope.launch { refreshSessions(); commands.withLock { if (_state.value.sessionId == session) _state.update { it.copy(folderLocked = folderLocked(events.read(session))) } } }
+            scope.launch {
+                try {
+                    recordOutsideChanges(session, engine.code.takeIf { stampsBefore != null }, stampsBefore, completedRun, turnIndex)
+                    afterRun(engine, mode, changesBefore, completedRun, runEpoch)
+                } finally {
+                    engine.followUps.decrementAndGet()
+                    releaseBackground(session)
+                }
             }
-            val wasAccepted = accepted.await()
-            if (wasAccepted) SendReceipt(true, session, requestId) else rejected("Задача не приняла сообщение")
-        } catch (cancelled: CancellationException) { throw cancelled }
-        catch (_: Exception) { rejected("Не удалось начать задачу") }
+        }
+        return if (accepted.await()) SendReceipt(true, session, requestId) else SendReceipt(false, session, requestId, "Задача не приняла сообщение")
     }
 
     suspend fun stop() { shownEngine?.let { it.coordinator.stop(); it.questions.cancel() } }
@@ -869,9 +907,6 @@ class DesktopController(
         catch (_: Exception) { showError("Откат не выполнен. Файл мог измениться.") }
     }
 
-    private var autoVerifyAttempt = 0
-    private var autoVerifyEpoch = 0L
-
     fun setVerifyCommand(root: String, command: String) {
         scope.launch {
             commands.withLock {
@@ -898,70 +933,116 @@ class DesktopController(
         _state.update { if (it.sessionId == session) it.copy(outside = changes) else it }
     }
 
-    private suspend fun afterRun(session: String, mode: ExecutionMode, changesBefore: Int, completedRun: RunState, runEpoch: Long, engine: AgentCoordinator) {
+    /**
+     * After a run of [engine] ends: run the project's check when auto-verify applies, otherwise tell the user how a
+     * dialog in the background finished.
+     */
+    private suspend fun afterRun(engine: Engine, mode: ExecutionMode, changesBefore: Int, completedRun: RunState, runEpoch: Long) {
+        val session = engine.sessionId
         val context = commands.withLock {
             val state = _state.value
             val options = state.settings.agent.sanitized()
-            val root = state.settings.workspace ?: return@withLock null
-            val command = state.settings.verifyCommands[root]?.takeIf { it.isNotBlank() } ?: return@withLock null
-            if (state.sessionId != session || coordinator !== engine || engine.state.value != completedRun || autoVerifyEpoch != runEpoch || !options.autoVerify ||
+            val root = engine.root
+            val command = root?.let { state.settings.verifyCommands[it] }?.takeIf { it.isNotBlank() }
+            if (root == null || command == null || engines[session] !== engine || engine.coordinator.state.value != completedRun || engine.verifyEpoch != runEpoch || !options.autoVerify ||
                 mode != ExecutionMode.WORKSPACE_EDIT || !state.allowProcesses ||
-                completedRun.status != "completed" || completedRun.activities.count { it.diff != null && it.status == "completed" } <= changesBefore) return@withLock null
-            val processes = processService ?: return@withLock null
+                completedRun.status != "completed" || completedRun.activities.count { it.diff != null && it.status == "completed" } <= changesBefore) {
+                if (engines[session] === engine) noticeRunEnded(engine, completedRun)
+                return@withLock null
+            }
             val argv = runCatching { splitCommand(command) }.getOrNull()?.takeIf { it.isNotEmpty() }
                 ?: run {
-                    _state.update { it.copy(verify = VerifyState("error", command, message = "Команда проверки не разобрана: проверьте кавычки")) }
+                    setVerify(engine, VerifyState("error", command, message = "Команда проверки не разобрана: проверьте кавычки"))
+                    notice(engine, "Задача завершена, но команда проверки не разобрана", "negative")
                     return@withLock null
                 }
-            val captured = AutoVerifyContext(state.sessionId, state.settings, state.allowProcesses, processes, command, options, runEpoch)
-            val attempt = autoVerifyAttempt + 1
-            _state.update { it.copy(verify = VerifyState("running", command, attempt = attempt, maxAttempts = options.autoVerifyAttempts)) }
+            val captured = AutoVerifyContext(session, root, state.allowProcesses, engine.processes, command, options, runEpoch)
+            val attempt = engine.verifyAttempt + 1
+            setVerify(engine, VerifyState("running", command, attempt = attempt, maxAttempts = options.autoVerifyAttempts))
+            _state.update { it.copy(runningSessions = it.runningSessions + session) }
             captured to (argv to attempt)
         } ?: return
         val (captured, args) = context
         val (argv, attempt) = args
         val started = System.nanoTime()
-        val output = try {
-            captured.processService.start(StartProcessRequest(argv, ".", timeoutMs = 600_000, background = false), "verify-${newId()}")
-        } catch (e: ToolException) {
-            publishVerifyErrorIfCurrent(captured, attempt, "${e.code}: ${e.message}")
-            return
-        } catch (e: Exception) {
-            publishVerifyErrorIfCurrent(captured, attempt, "Не удалось запустить: ${e.message?.take(200)}")
-            return
+        try {
+            val output = try {
+                captured.processService.start(StartProcessRequest(argv, ".", timeoutMs = 600_000, background = false), "verify-${newId()}")
+            } catch (e: ToolException) {
+                publishVerifyErrorIfCurrent(captured, attempt, "${e.code}: ${e.message}")
+                return
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) {
+                publishVerifyErrorIfCurrent(captured, attempt, "Не удалось запустить: ${e.message?.take(200)}")
+                return
+            }
+            val duration = (System.nanoTime() - started) / 1_000_000
+            completeAutoVerify(captured, output, duration)
+        } finally {
+            _state.update { if (engine.running) it else it.copy(runningSessions = it.runningSessions - session) }
         }
-        val duration = (System.nanoTime() - started) / 1_000_000
-        completeAutoVerify(captured, output, duration)
     }
 
     internal suspend fun completeAutoVerify(context: AutoVerifyContext, output: ProcessOutput, duration: Long): Boolean = commands.withLock {
-        if (!context.isCurrent(_state.value, processService, autoVerifyEpoch)) return@withLock false
+        val engine = engines[context.sessionId]
+        if (engine == null || !context.isCurrent(_state.value.settings, _state.value.allowProcesses, engine.processes, engine.verifyEpoch)) return@withLock false
         val tail = output.output.takeLast(6000)
-        runCatching { events.append(context.sessionId, "verify.result", buildJsonObject { put("command", context.command); put("exitCode", output.exitCode); put("state", output.state); put("durationMs", duration); put("attempt", autoVerifyAttempt + 1) }) }
-        val attempt = autoVerifyAttempt + 1
+        val attempt = engine.verifyAttempt + 1
+        runCatching { events.append(context.sessionId, "verify.result", buildJsonObject { put("command", context.command); put("exitCode", output.exitCode); put("state", output.state); put("durationMs", duration); put("attempt", attempt) }) }
         if (output.exitCode == 0) {
-            autoVerifyAttempt = 0
-            _state.update { it.copy(verify = VerifyState("passed", context.command, 0, duration, attempt, context.options.autoVerifyAttempts, tail)) }
+            engine.verifyAttempt = 0
+            setVerify(engine, VerifyState("passed", context.command, 0, duration, attempt, context.options.autoVerifyAttempts, tail))
+            notice(engine, "Задача завершена, проверка пройдена", "positive")
             return@withLock true
         }
         if (attempt >= context.options.autoVerifyAttempts) {
-            autoVerifyAttempt = 0
-            _state.update { it.copy(verify = VerifyState("gave_up", context.command, output.exitCode, duration, attempt, context.options.autoVerifyAttempts, tail, "Попытки исчерпаны — посмотрите вывод")) }
+            engine.verifyAttempt = 0
+            setVerify(engine, VerifyState("gave_up", context.command, output.exitCode, duration, attempt, context.options.autoVerifyAttempts, tail, "Попытки исчерпаны — посмотрите вывод"))
+            notice(engine, "Проверка не прошла, попытки исчерпаны", "negative")
             return@withLock true
         }
-        autoVerifyAttempt = attempt
-        _state.update { it.copy(verify = VerifyState("failed", context.command, output.exitCode, duration, attempt, context.options.autoVerifyAttempts, tail, "Отправил агенту вывод ошибки")) }
-        // Validation and enqueue are atomic with respect to session/workspace/config changes.
-        sendLocked(verificationFollowUp(context.command, output.exitCode, output.state, tail, attempt, context.options.autoVerifyAttempts), ExecutionMode.WORKSPACE_EDIT, newId(), preserveAutoVerifyAttempt = true)
+        engine.verifyAttempt = attempt
+        setVerify(engine, VerifyState("failed", context.command, output.exitCode, duration, attempt, context.options.autoVerifyAttempts, tail, "Отправил агенту вывод ошибки"))
+        // The repair turn goes to the dialog that ran the check, shown or not; validation and enqueue stay under the lock.
+        startRun(engine, verificationFollowUp(context.command, output.exitCode, output.state, tail, attempt, context.options.autoVerifyAttempts),
+            ExecutionMode.WORKSPACE_EDIT, ExecutionMode.WORKSPACE_EDIT, newId(), emptyList(), preserveAutoVerifyAttempt = true)
         true
     }
 
     private suspend fun publishVerifyErrorIfCurrent(context: AutoVerifyContext, attempt: Int, message: String) = commands.withLock {
-        if (!context.isCurrent(_state.value, processService, autoVerifyEpoch)) return@withLock
-        _state.update { it.copy(verify = VerifyState("error", context.command, attempt = attempt, maxAttempts = context.options.autoVerifyAttempts, message = message)) }
+        val engine = engines[context.sessionId] ?: return@withLock
+        if (!context.isCurrent(_state.value.settings, _state.value.allowProcesses, engine.processes, engine.verifyEpoch)) return@withLock
+        setVerify(engine, VerifyState("error", context.command, attempt = attempt, maxAttempts = context.options.autoVerifyAttempts, message = message))
+        notice(engine, "Задача завершена, проверку не удалось запустить", "negative")
     }
 
-    fun dismissVerify() { _state.update { it.copy(verify = VerifyState()) } }
+    /** The dialog's verification; the screen shows it when the dialog is the shown one. */
+    private fun setVerify(engine: Engine, verify: VerifyState) {
+        engine.verify = verify
+        _state.update { if (it.sessionId == engine.sessionId) it.copy(verify = verify) else it }
+    }
+
+    private fun noticeRunEnded(engine: Engine, run: RunState) = when (run.status) {
+        "completed" -> notice(engine, "Задача завершена", "positive")
+        "failed" -> notice(engine, run.error?.take(140)?.let { "Ошибка: $it" } ?: "Задача завершилась с ошибкой", "negative")
+        "cancelled" -> notice(engine, "Задача остановлена", "neutral")
+        else -> Unit
+    }
+
+    /** One notice per dialog, only for dialogs that are not on screen; the newest replaces the older one. */
+    private fun notice(engine: Engine, message: String, tone: String) {
+        if (_state.value.sessionId == engine.sessionId) return
+        val title = _state.value.sessions.firstOrNull { it.id == engine.sessionId }?.title?.takeIf { it.isNotBlank() } ?: "Диалог"
+        val notice = Notice(newId(), engine.sessionId, title, message, tone)
+        _state.update { state -> state.copy(notices = (state.notices.filterNot { it.sessionId == engine.sessionId } + notice).takeLast(MAX_NOTICES)) }
+    }
+
+    fun dismissNotice(id: String) { _state.update { state -> state.copy(notices = state.notices.filterNot { it.id == id }) } }
+
+    fun dismissVerify() {
+        shownEngine?.verify = VerifyState()
+        _state.update { it.copy(verify = VerifyState()) }
+    }
 
     /** Outcome of rewinding a turn: how many changes were undone and why the others were not. */
     data class RewindResult(val undone: Int, val failed: List<String>)
@@ -1084,10 +1165,13 @@ class DesktopController(
         var previous = engine.state.value.status
         val id = s.sessionId
         // Only the shown dialog drives the screen; every dialog reports whether it runs or waits for an answer.
+        var asked = false
         val observer = scope.launch(start = CoroutineStart.LAZY) { combine(engine.state, questions.question) { run, question -> run.copy(question = run.question ?: question) }.collect { run ->
             val answered = live && run.status == "completed" && previous in ACTIVE_STATUSES
             val finished = previous in ACTIVE_STATUSES && run.status in TERMINAL_STATUSES
             previous = run.status
+            if (run.question != null && !asked) engines[id]?.let { notice(it, "Ждёт вашего ответа", "attention") }
+            asked = run.question != null
             _state.update {
                 val running = if (run.status in ACTIVE_STATUSES) it.runningSessions + id else it.runningSessions - id
                 val waiting = if (run.question != null && run.status in ACTIVE_STATUSES) it.waitingSessions + id else it.waitingSessions - id
@@ -1106,18 +1190,19 @@ class DesktopController(
     /** A background dialog whose run ended gives its engine back; the journal restores it when the dialog is opened. */
     private suspend fun releaseBackground(id: String) = commands.withLock {
         val engine = engines[id] ?: return@withLock
-        if (_state.value.sessionId != id && !engine.running) dispose(engine)
+        if (_state.value.sessionId != id && !engine.active) dispose(engine)
     }
 
     /**
      * Lets go of the shown dialog's engine before the screen changes: an idle one is disposed, a running one goes on in
      * the background with its own folder, processes and journal.
      */
-    private suspend fun resetEngine() {
-        autoVerifyEpoch++
+    private suspend fun resetEngine(invalidate: Boolean = false) {
         _state.update { it.copy(subagents = emptyList()) }
         val engine = shownEngine ?: return
-        if (!engine.running) dispose(engine)
+        // History or settings changed under the dialog: its pending check no longer applies and the engine is rebuilt.
+        if (invalidate) engine.verifyEpoch++
+        if (!engine.running && (invalidate || !engine.active)) dispose(engine)
     }
 
     private suspend fun dispose(engine: Engine) {
@@ -1125,11 +1210,13 @@ class DesktopController(
         engine.jobs.forEach { it.cancelAndJoin() }
         if (engine.coordinator.status() in TERMINAL_STATUSES) engine.coordinator.awaitCompletion() else engine.coordinator.stop()
         engine.processes.close()
-        _state.update { it.copy(runningSessions = it.runningSessions - engine.sessionId, waitingSessions = it.waitingSessions - engine.sessionId) }
+        if (engine.verify.status !in setOf("idle", "running")) keptVerify[engine.sessionId] = engine.verify
+        _state.update { it.copy(runningSessions = it.runningSessions - engine.sessionId, waitingSessions = it.waitingSessions - engine.sessionId,
+            verify = if (it.sessionId == engine.sessionId && engine.verify.status == "running") VerifyState() else it.verify) }
     }
 
     /** Disposes every engine that is not running, e.g. after the provider changed. */
-    private suspend fun disposeIdle() { engines.values.filter { !it.running }.forEach { dispose(it) } }
+    private suspend fun disposeIdle() { engines.values.filter { !it.active }.forEach { dispose(it) } }
 
     private suspend fun saveSettings(settings: DesktopSettings) = withContext(Dispatchers.IO) {
         Files.createDirectories(directory)
@@ -1245,7 +1332,7 @@ class DesktopController(
 
     /** Deletes the app's own throwaway demo projects, except the one shown right now. Returns how many were removed. */
     suspend fun deleteDemoProjects(): Int = commands.withLock {
-        if (busy() || engines.values.any { it.running && it.root?.let(::isDemoFolder) == true }) return@withLock 0
+        if (busy() || engines.values.any { it.active && it.root?.let(::isDemoFolder) == true }) return@withLock 0
         val current = _state.value.settings.workspace
         withContext(Dispatchers.IO) {
             val demo = directory.resolve("demo")
@@ -1353,6 +1440,7 @@ class DesktopController(
         /** Runs at once across all dialogs. */
         const val MAX_PARALLEL_RUNS = 3
         const val MAX_MODEL_LENGTH = 200
+        const val MAX_NOTICES = 4
         const val MAX_RECENT_WORKSPACES = 24
     }
 }

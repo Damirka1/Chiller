@@ -183,6 +183,8 @@ fun ChillerApp(
     onRecoverInterrupted: () -> Unit = {},
     /** Pinned and hidden projects, the dialog's folder state and project actions. */
     projects: ProjectsModel = ProjectsModel(),
+    /** News from dialogs in the background; a click opens the dialog. */
+    notices: List<dev.chiller.app.di.Notice> = emptyList(), onOpenNotice: (dev.chiller.app.di.Notice) -> Unit = {}, onDismissNotice: (String) -> Unit = {},
 ) {
     val systemDark = isSystemInDarkTheme()
     var view by remember { mutableStateOf(preferences) }
@@ -581,6 +583,10 @@ fun ChillerApp(
             },
         ) }
         if (exportPreview != null) ExportPreview(exportPreview, exportFormat, onDismissExport, onSaveExport)
+        // A non-focusable popup: notices float over the page without taking keyboard focus from the composer.
+        if (notices.isNotEmpty()) Popup(alignment = Alignment.TopEnd, properties = PopupProperties(focusable = false)) {
+            NoticeStack(notices, onOpenNotice, onDismissNotice, Modifier.padding(top = 52.dp, end = 16.dp, start = 16.dp, bottom = 16.dp))
+        }
         if (switcher) ProjectSwitcher(tree.projects, workspacePath, onPick = { path -> switcher = false; projects.onNewIn(path) }, onChoose = onChooseWorkspace, onDismiss = { switcher = false; runCatching { rootFocus.requestFocus() } })
     } }
 }
