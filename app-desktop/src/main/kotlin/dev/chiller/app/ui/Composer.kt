@@ -399,6 +399,8 @@ internal fun ComposerToolbar(
                         Text("Диалог без папки: модель отвечает, ищет в вебе и рисует, но не видит ваших файлов и не запускает команды.",
                             color = c.muted, fontSize = 12.sp, lineHeight = 17.sp, modifier = Modifier.padding(start = 16.dp, end = 14.dp, top = 10.dp, bottom = 6.dp))
                         MenuDivider()
+                        WebToggle(running)
+                        MenuDivider()
                         MenuRow("Выбрать папку…", { modeMenu = false; onChooseWorkspace() }, subtitle = "Диалог продолжится в проекте", icon = Icons.Outlined.CreateNewFolder)
                         Spacer(Modifier.height(6.dp))
                     }
@@ -427,6 +429,7 @@ internal fun ComposerToolbar(
                                 ChillerToggle(approval.enabled, { approval.onChange(it) }, "Подтверждать правки", enabled = !running)
                             }
                         }
+                        WebToggle(running)
                         MenuDivider()
                         Text("Shift+Tab в поле ввода — переключить режим", color = c.faint, fontSize = 11.sp, lineHeight = 15.sp, modifier = Modifier.padding(start = 16.dp, end = 14.dp, top = 2.dp))
                         Spacer(Modifier.height(6.dp))
@@ -487,5 +490,21 @@ internal fun FolderToolbarChip(workspace: String?, onChoose: () -> Unit, enabled
         Icon(if (workspace == null) Icons.Outlined.CreateNewFolder else Icons.Outlined.Folder, null, Modifier.size(13.dp), tint = if (workspace == null) c.faint else c.muted)
         Spacer(Modifier.width(5.dp))
         Text(workspace?.let(::folderName) ?: "Без папки", color = if (workspace == null) c.faint else c.muted, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+/** Web search and page reading for the next message; remembered for the open project. */
+@Composable
+private fun WebToggle(running: Boolean) {
+    val c = LocalChillerPalette.current
+    val access = LocalEditApproval.current
+    val change = access.onWeb ?: return
+    MenuDivider()
+    Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 14.dp, top = 2.dp, bottom = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text("Поиск в вебе", color = c.text, fontSize = 13.sp, lineHeight = 18.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text("web_search и чтение страниц", color = c.faint, fontSize = 11.sp, lineHeight = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        ChillerToggle(access.web, { change(it) }, "Поиск в вебе", enabled = !running)
     }
 }

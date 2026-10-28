@@ -55,10 +55,10 @@ data class DesktopSettings(val baseUrl: String = "https://api.deepseek.com", val
 
 /**
  * What a project remembers of how it was last worked in: the model on its endpoint (offered to new dialogs only on
- * that same endpoint) and process permission. Null means "not chosen here yet".
+ * that same endpoint), process and web permission. Null means "not chosen here yet".
  */
 @Serializable
-data class ProjectPrefs(val baseUrl: String? = null, val model: String? = null, val allowProcesses: Boolean? = null)
+data class ProjectPrefs(val baseUrl: String? = null, val model: String? = null, val allowProcesses: Boolean? = null, val allowNetwork: Boolean? = null)
 
 @Serializable
 data class CachedModelCatalog(val models: List<ProviderModel>, val fetchedAt: String)

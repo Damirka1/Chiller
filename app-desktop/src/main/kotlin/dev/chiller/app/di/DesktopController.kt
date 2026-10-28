@@ -552,6 +552,9 @@ class DesktopController(
         catch (_: Exception) { showError("Не удалось открыть рабочую папку.") }
     }
 
+    /** The project the shown dialog works for: the origin of its working copy, or its folder; never an app folder. */
+    private fun shownProject(): String? = (_state.value.worktree?.repo ?: _state.value.settings.workspace)?.takeUnless(::isAppFolder)
+
     private fun DesktopSettings.withProject(root: String, change: (ProjectPrefs) -> ProjectPrefs): DesktopSettings =
         copy(projectPrefs = (projectPrefs - root + (root to change(projectPrefs[root] ?: ProjectPrefs()))).entries.toList().takeLast(MAX_PROJECT_PREFS).associate { it.toPair() })
 
@@ -573,6 +576,12 @@ class DesktopController(
         prefs.allowProcesses?.takeIf { it != _state.value.allowProcesses }?.let { allowed ->
             val settings = _state.value.settings.copy(allowProcesses = allowed)
             _state.update { it.copy(settings = settings, allowProcesses = allowed) }
+            runCatching { saveSettings(settings) }
+        }
+        // Web permission is read at each send, so no engine needs rebuilding for it.
+        prefs.allowNetwork?.takeIf { it != _state.value.settings.agent.allowNetwork }?.let { allowed ->
+            val settings = _state.value.settings.let { it.copy(agent = it.agent.copy(allowNetwork = allowed)) }
+            _state.update { it.copy(settings = settings) }
             runCatching { saveSettings(settings) }
         }
         val current = _state.value.settings
@@ -877,7 +886,7 @@ class DesktopController(
      */
     private suspend fun startRun(engine: Engine, text: String, runMode: ExecutionMode, mode: ExecutionMode, requestId: String, attachments: List<ComposerAttachment>, preserveAutoVerifyAttempt: Boolean): SendReceipt {
         val session = engine.sessionId
-        engine.root?.takeUnless(::isAppFolder)?.let { root -> rememberProjectModel(root) }
+        (_state.value.sessionOrigins[session] ?: engine.root?.takeUnless(::isAppFolder))?.let { root -> rememberProjectModel(root) }
         val coordinator = engine.coordinator
         val changesBefore = coordinator.state.value.activities.count { it.diff != null && it.status == "completed" }
         // Metadata snapshot before an editing turn: what changes outside the file tools is reported afterwards.
@@ -950,7 +959,7 @@ class DesktopController(
             commands.withLock {
                 if (!busy()) {
                     val settings = _state.value.settings.let { current ->
-                        current.copy(allowProcesses = value).let { next -> current.workspace?.takeUnless(::isAppFolder)?.let { root -> next.withProject(root) { it.copy(allowProcesses = value) } } ?: next }
+                        current.copy(allowProcesses = value).let { next -> shownProject()?.let { root -> next.withProject(root) { it.copy(allowProcesses = value) } } ?: next }
                     }
                     try {
                         saveSettings(settings)
@@ -1330,7 +1339,11 @@ class DesktopController(
     private fun connectionForUnverified() = if (!ready()) ConnectionState("missing", "Не задан API-ключ") else ConnectionState("unverified", if (credential == null) "Локальный сервер без ключа · не проверено" else "Подключение ещё не проверено")
 
     suspend fun updateAgentOptions(options: AgentOptions) = commands.withLock {
-        val settings = _state.value.settings.copy(agent = options.sanitized())
+        val current = _state.value.settings
+        val settings = current.copy(agent = options.sanitized()).let { next ->
+            if (next.agent.allowNetwork == current.agent.allowNetwork) next
+            else shownProject()?.let { root -> next.withProject(root) { it.copy(allowNetwork = next.agent.allowNetwork) } } ?: next
+        }
         if (settings.agent != _state.value.settings.agent) engines.values.forEach { it.stale = true }
         _state.update { it.copy(settings = settings, verify = VerifyState()) }
         saveSettings(settings)

@@ -22,8 +22,12 @@ import dev.chiller.contracts.ApprovalRequest
 import dev.chiller.design.*
 import kotlinx.serialization.json.*
 
-/** Whether file changes wait for the user's yes or no, and how the composer's mode menu changes that. */
-data class EditApproval(val enabled: Boolean = false, val onChange: (Boolean) -> Unit = {}, val onDecide: (approved: Boolean, restOfRun: Boolean) -> Unit = { _, _ -> })
+/**
+ * Whether file changes wait for the user's yes or no, and how the composer's mode menu changes that; the same menu
+ * also switches web access ([web]), remembered per project like process permission.
+ */
+data class EditApproval(val enabled: Boolean = false, val onChange: (Boolean) -> Unit = {}, val onDecide: (approved: Boolean, restOfRun: Boolean) -> Unit = { _, _ -> },
+    val web: Boolean = false, val onWeb: ((Boolean) -> Unit)? = null)
 
 val LocalEditApproval = staticCompositionLocalOf { EditApproval() }
 

@@ -207,7 +207,8 @@ private fun chillerApplication() = application {
             onDeleteMessage = controller::deleteMessage,
             onRecoverInterrupted = { scope.launch { controller.recoverInterrupted() } },
             onContinueElsewhere = { chooseDirectory(window, null, mac)?.let { path -> controller.continueInFolder(path) } },
-            editApproval = dev.chiller.app.ui.EditApproval(state.settings.confirmEdits, { value -> scope.launch { controller.setConfirmEdits(value) } }, controller::decideApproval),
+            editApproval = dev.chiller.app.ui.EditApproval(state.settings.confirmEdits, { value -> scope.launch { controller.setConfirmEdits(value) } }, controller::decideApproval,
+                web = state.settings.agent.allowNetwork, onWeb = { value -> scope.launch { controller.updateAgentOptions(state.settings.agent.copy(allowNetwork = value)) } }),
             onSearchMessages = controller::searchMessages,
             notices = state.notices, onOpenNotice = { notice -> scope.launch { controller.selectSession(notice.sessionId) } }, onDismissNotice = controller::dismissNotice,
             projects = dev.chiller.app.ui.ProjectsModel(

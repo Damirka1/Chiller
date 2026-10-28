@@ -58,6 +58,15 @@ class ProjectPrefsTest {
             assertEquals("big-model", controller.state.value.settings.model)
             assertFalse(controller.state.value.allowProcesses)
 
+            // Web access follows the project too; it is read at each send, so nothing needs rebuilding.
+            controller.updateAgentOptions(controller.state.value.settings.agent.copy(allowNetwork = true))
+            controller.newSessionIn(shop)
+            controller.updateAgentOptions(controller.state.value.settings.agent.copy(allowNetwork = false))
+            controller.newSessionIn(api)
+            assertTrue(controller.state.value.settings.agent.allowNetwork)
+            controller.newSessionIn(shop)
+            assertFalse(controller.state.value.settings.agent.allowNetwork)
+
             // Another endpoint is never switched to silently.
             controller.configure("http://127.0.0.1:9/v1", "other", false, null)
             controller.newSessionIn(shop)

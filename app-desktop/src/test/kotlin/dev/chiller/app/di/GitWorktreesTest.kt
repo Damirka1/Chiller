@@ -92,6 +92,10 @@ class GitWorktreesTest {
             assertEquals(info.path, listed.workspace)
             assertEquals(repo.toString(), listed.origin)
             assertTrue(controller.isAppFolder(info.path))
+            // What is chosen in a copy is remembered for its project, not for the app's copy folder.
+            controller.allowProcesses(true)
+            kotlinx.coroutines.withTimeout(5_000) { while (controller.state.value.settings.projectPrefs[repo.toString()]?.allowProcesses != true) kotlinx.coroutines.delay(10) }
+            assertFalse(info.path in controller.state.value.settings.projectPrefs)
 
             Files.writeString(Path.of(info.path).resolve("app.txt"), "one\nTWO\nthree\n")
             assertEquals(listOf("app.txt"), controller.worktreeChanges())
