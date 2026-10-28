@@ -278,6 +278,15 @@ fun ChillerApp(
         }
     }
     var mode by remember { mutableStateOf(ExecutionMode.PLAN) }
+    // Each project keeps the mode it was last used in; a project seen for the first time keeps the current one.
+    val modeProject = projects.worktree?.repo ?: workspacePath
+    LaunchedEffect(modeProject, preferences.projectModes) {
+        preferences.projectModes[modeProject]?.let { saved -> mode = if (saved == "edit") ExecutionMode.WORKSPACE_EDIT else ExecutionMode.PLAN }
+    }
+    LaunchedEffect(mode) {
+        val code = if (mode == ExecutionMode.WORKSPACE_EDIT) "edit" else "plan"
+        if (modeProject != null && view.projectModes[modeProject] != code) updateView(view.copy(projectModes = view.projectModes + (modeProject to code)))
+    }
     val reducedMotion = view.reducedMotion
     var showCompactChanges by remember { mutableStateOf(false) }
     val inspectorWidth = view.inspectorWidth.dp

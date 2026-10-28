@@ -44,10 +44,19 @@ data class DesktopSettings(val baseUrl: String = "https://api.deepseek.com", val
     val pinnedWorkspaces: List<String> = emptyList(),
     /** Folders removed from the project list; their dialogs stay. Opening the folder again shows it again. */
     val hiddenWorkspaces: List<String> = emptyList(),
+    /** Per project folder, what it remembers; see [ProjectPrefs]. */
+    val projectPrefs: Map<String, ProjectPrefs> = emptyMap(),
     /** File changes in a project wait for the user's yes or no before they are written. */
     val confirmEdits: Boolean = false,
     /** MCP servers the user connected; their tools join every dialog's tools while the server runs. */
     val mcpServers: List<dev.chiller.tools.McpServerConfig> = emptyList())
+
+/**
+ * What a project remembers of how it was last worked in: the model on its endpoint (offered to new dialogs only on
+ * that same endpoint) and process permission. Null means "not chosen here yet".
+ */
+@Serializable
+data class ProjectPrefs(val baseUrl: String? = null, val model: String? = null, val allowProcesses: Boolean? = null)
 
 @Serializable
 data class CachedModelCatalog(val models: List<ProviderModel>, val fetchedAt: String)
@@ -684,8 +693,37 @@ class DesktopController(
             }
             saveSettings(settings)
             if (attach) refreshSessions()
+            applyProjectPrefs(root, newDialog = !attach)
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (_: Exception) { showError("Не удалось открыть рабочую папку.") }
+    }
+
+    private fun DesktopSettings.withProject(root: String, change: (ProjectPrefs) -> ProjectPrefs): DesktopSettings =
+        copy(projectPrefs = (projectPrefs - root + (root to change(projectPrefs[root] ?: ProjectPrefs()))).entries.toList().takeLast(MAX_PROJECT_PREFS).associate { it.toPair() })
+
+    private suspend fun rememberProjectModel(root: String) {
+        val current = _state.value.settings
+        val prefs = current.projectPrefs[root]
+        if (prefs?.baseUrl == current.baseUrl && prefs.model == current.model) return
+        val settings = current.withProject(root) { it.copy(baseUrl = current.baseUrl, model = current.model) }
+        _state.update { it.copy(settings = settings) }
+        runCatching { saveSettings(settings) }
+    }
+
+    /**
+     * Brings back what [root] remembers when the user turns to it: process permission always, and its model for a
+     * new dialog when that model is on the endpoint in use. Another endpoint is never switched to silently.
+     */
+    private suspend fun applyProjectPrefs(root: String?, newDialog: Boolean) {
+        val prefs = root?.let { _state.value.settings.projectPrefs[it] } ?: return
+        prefs.allowProcesses?.takeIf { it != _state.value.allowProcesses }?.let { allowed ->
+            val settings = _state.value.settings.copy(allowProcesses = allowed)
+            _state.update { it.copy(settings = settings, allowProcesses = allowed) }
+            runCatching { saveSettings(settings) }
+        }
+        val current = _state.value.settings
+        if (newDialog && prefs.model != null && prefs.baseUrl == current.baseUrl && prefs.model != current.model)
+            configureLocked(current.baseUrl, prefs.model, current.thinking, null, keepSession = true)
     }
 
     /** Puts [root] first among recent projects and shows it again if it was removed from the list. */
@@ -704,6 +742,7 @@ class DesktopController(
             savedWorkspace = canonical
             _state.update { it.copy(settings = settings, sessionId = newId(), run = RunState(), verify = VerifyState(), outside = null, undoneChanges = emptySet(), folderLocked = false, workspaceMissing = false, worktree = null) }
             saveSettings(settings)
+            applyProjectPrefs(canonical, newDialog = true)
             return true
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (_: Exception) { showError("Папка проекта недоступна."); return false }
@@ -819,6 +858,7 @@ class DesktopController(
                 val verify = keptVerify.remove(id)?.also { kept -> shownEngine?.verify = kept } ?: VerifyState()
                 _state.update { if (it.sessionId == id) it.copy(run = engine.state.value, verify = verify) else it }
             }
+            applyProjectPrefs(savedRoot?.let { root -> worktreeOf(history, root)?.repo ?: root }, newDialog = false)
             val outside = history.lastOrNull { it.type == "turn.outside_changes" }?.let { runCatching { json.decodeFromJsonElement(OutsideChanges.serializer(), it.payload) }.getOrNull() }
             _state.update { it.copy(undoneChanges = undoneChangeIds(history), outside = outside) }
         } catch (_: Exception) { showError("Сессию не удалось восстановить. Её данные сохранены для проверки.") }
@@ -983,6 +1023,7 @@ class DesktopController(
      */
     private suspend fun startRun(engine: Engine, text: String, runMode: ExecutionMode, mode: ExecutionMode, requestId: String, attachments: List<ComposerAttachment>, preserveAutoVerifyAttempt: Boolean): SendReceipt {
         val session = engine.sessionId
+        engine.root?.takeUnless(::isAppFolder)?.let { root -> rememberProjectModel(root) }
         val coordinator = engine.coordinator
         val changesBefore = coordinator.state.value.activities.count { it.diff != null && it.status == "completed" }
         // Metadata snapshot before an editing turn: what changes outside the file tools is reported afterwards.
@@ -1054,7 +1095,9 @@ class DesktopController(
         scope.launch {
             commands.withLock {
                 if (!busy()) {
-                    val settings = _state.value.settings.copy(allowProcesses = value)
+                    val settings = _state.value.settings.let { current ->
+                        current.copy(allowProcesses = value).let { next -> current.workspace?.takeUnless(::isAppFolder)?.let { root -> next.withProject(root) { it.copy(allowProcesses = value) } } ?: next }
+                    }
                     try {
                         saveSettings(settings)
                         _state.update { it.copy(settings = settings, allowProcesses = value, verify = VerifyState()) }
@@ -1638,6 +1681,7 @@ class DesktopController(
         const val MAX_MODEL_LENGTH = 200
         const val MAX_NOTICES = 4
         const val MAX_MCP_SERVERS = 16
+        const val MAX_PROJECT_PREFS = 100
         const val MAX_RECENT_WORKSPACES = 24
     }
 }

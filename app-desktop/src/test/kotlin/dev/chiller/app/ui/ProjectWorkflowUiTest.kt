@@ -153,6 +153,15 @@ class ProjectWorkflowUiTest {
         assertEquals("remove", calls.last())
     }
 
+    @Test fun eachProjectKeepsItsMode() = runComposeUiTest {
+        app(preferences = UiPreferences(theme = "light", reducedMotion = true, projectModes = mapOf(shop to "edit")))
+        onNodeWithText("Изменения").assertExists()
+        // Switching the mode is remembered for the open project.
+        onNodeWithText("Изменения").performClick()
+        onNodeWithText("Только чтение, без изменений").performClick()
+        waitUntil(timeoutMillis = 5_000) { saved.lastOrNull()?.projectModes?.get(shop) == "plan" }
+    }
+
     @Test fun commandsMatchWordStartsInAnyOrder() {
         val commands = listOf(PaletteCommand("Новый диалог", "Файл") {}, PaletteCommand("Новый диалог без папки", "Проекты") {}, PaletteCommand("Тёмная тема", "Вид") {}, PaletteCommand("Studio", "Вид") {})
         assertEquals(listOf("Новый диалог", "Новый диалог без папки"), matchCommands(commands, "нов диал").map { it.title })

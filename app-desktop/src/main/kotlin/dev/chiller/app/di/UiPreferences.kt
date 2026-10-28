@@ -22,6 +22,8 @@ data class UiPreferences(
     val windowMaximized: Boolean = false,
     /** Background news also as system notifications while the window is not in focus; needs an icon in the tray. */
     val systemNotifications: Boolean = true,
+    /** The composer mode last used in each project: "plan" or "edit". */
+    val projectModes: Map<String, String> = emptyMap(),
     /** Projects the user expanded (true) or collapsed (false) in the sidebar, by folder. */
     val projectExpansion: Map<String, Boolean> = emptyMap(),
 )
@@ -64,6 +66,7 @@ class UiPreferencesStore(private val directory: Path) {
         inspectorWidth = if (value.inspectorWidth.isFinite()) value.inspectorWidth.coerceIn(280f, 480f) else 348f,
         windowWidth = value.windowWidth.takeIf { it.isFinite() && it > 0f }?.coerceIn(320f, 16384f) ?: 1280f,
         windowHeight = value.windowHeight.takeIf { it.isFinite() && it > 0f }?.coerceIn(240f, 16384f) ?: 860f,
+        projectModes = value.projectModes.filter { (path, mode) -> path.length in 1..1024 && mode in setOf("plan", "edit") }.entries.toList().takeLast(MAX_PROJECTS).associate { it.toPair() },
         projectExpansion = value.projectExpansion.filterKeys { it.length in 1..1024 }.entries.toList().takeLast(MAX_PROJECTS).associate { it.toPair() },
     )
 
