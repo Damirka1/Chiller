@@ -166,6 +166,17 @@ class ProjectWorkflowUiTest {
         onNodeWithText("Тесты для парсера CSV").assertDoesNotExist()
     }
 
+    @Test fun theSelectedDialogIsOneStopAndOpensItsMenuFromTheKeyboard() = runComposeUiTest {
+        app(selected = "s1")
+        val row = onNode(hasText("Починить расчёт скидки") and hasClickAction())
+        row.requestFocus()
+        onRoot().performKeyInput { pressKey(Key.DirectionDown) }
+        onNodeWithContentDescription("Проект backend-api, развернуть").assertIsFocused()
+        row.requestFocus()
+        onRoot().performKeyInput { keyDown(Key.ShiftLeft); pressKey(Key.F10); keyUp(Key.ShiftLeft) }
+        onNodeWithText("Переименовать").assertExists()
+    }
+
     @Test fun eachProjectKeepsItsMode() = runComposeUiTest {
         app(preferences = UiPreferences(theme = "light", reducedMotion = true, projectModes = mapOf(shop to "edit")))
         onNodeWithText("Изменения").assertExists()

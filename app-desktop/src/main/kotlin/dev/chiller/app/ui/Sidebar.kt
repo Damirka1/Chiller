@@ -42,6 +42,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.ImageBitmap
@@ -292,6 +293,10 @@ internal fun SessionRow(session: SessionInfo, selected: Boolean, running: Boolea
             .background(when { selected -> c.selected; (hovered || (rowFocused && ChillerFocusVisibility.keyboard)) && enabled -> c.hover; else -> androidx.compose.ui.graphics.Color.Transparent })
             .hoverable(interaction).pointerHoverIcon(PointerIcon.Hand)
             .onFocusChanged { rowFocused = it.isFocused }
+            // The row is one stop for the arrows; its menu opens with the context-menu key or Shift+F10.
+            .onPreviewKeyEvent { event ->
+                if (event.type == KeyEventType.KeyDown && enabled && (event.key == Key.Menu || (event.isShiftPressed && event.key == Key.F10))) { menu = true; true } else false
+            }
             .clickable(interactionSource = interaction, indication = null, enabled = enabled, role = Role.Button, onClick = onSelect)
             .padding(start = if (nested) 24.dp else 10.dp, end = 2.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -309,7 +314,8 @@ internal fun SessionRow(session: SessionInfo, selected: Boolean, running: Boolea
         Box(Modifier.width(44.dp), contentAlignment = Alignment.CenterEnd) {
             if (hovered || menu || selected || rowFocused) {
                 Box {
-                    ChillerIconButton(Icons.Outlined.MoreHoriz, "Действия диалога", { if (System.currentTimeMillis() - closedAt > 200) menu = !menu }, Modifier.size(26.dp), enabled = enabled)
+                    ChillerIconButton(Icons.Outlined.MoreHoriz, "Действия диалога", { if (System.currentTimeMillis() - closedAt > 200) menu = !menu },
+                        Modifier.size(26.dp).focusProperties { canFocus = false }, enabled = enabled)
                     if (menu) ChillerPopover({ menu = false; closedAt = System.currentTimeMillis() }, 200.dp, below = true, alignEnd = true) {
                         Spacer(Modifier.height(5.dp))
                         onStop?.let { stop -> MenuRow("Остановить", { menu = false; stop() }, subtitle = "Задача идёт в фоне", icon = Icons.Outlined.Stop); MenuDivider() }
