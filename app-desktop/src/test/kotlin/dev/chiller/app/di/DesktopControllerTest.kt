@@ -14,6 +14,7 @@ import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Path
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import kotlin.test.assertNull
@@ -229,6 +230,80 @@ class DesktopControllerTest {
         try { restarted.initialize(); assertNull(restarted.state.value.settings.workspace) } finally { restarted.close() }
     }
 
+    @Test fun `a dialog takes a folder while it can and keeps it once bound`() = runBlocking {
+        val first = java.nio.file.Files.createDirectories(directory.resolve("work/first")).toRealPath()
+        val second = java.nio.file.Files.createDirectories(directory.resolve("work/second")).toRealPath()
+        val controller = DesktopController(directory.resolve("bind"), initialCredential = null, catalogClient = OfflineCatalog)
+        try {
+            controller.initialize()
+            controller.closeWorkspace()
+            val chat = controller.state.value.sessionId
+            // Offline: the dialog without a folder still gets its turn.
+            assertTrue(controller.send("Как устроен Flow?", ExecutionMode.PLAN).accepted)
+            assertNull(controller.state.value.settings.workspace)
+            assertFalse(controller.state.value.folderLocked)
+            // Attaching a folder keeps the dialog and records the binding.
+            controller.chooseWorkspace(first)
+            assertEquals(chat, controller.state.value.sessionId)
+            assertEquals(first.toString(), controller.state.value.settings.workspace)
+            assertTrue(controller.state.value.folderLocked)
+            assertEquals(first.toString(), controller.state.value.sessions.single { it.id == chat }.workspace)
+            // A bound dialog keeps its folder: another folder opens a new dialog.
+            controller.chooseWorkspace(second)
+            val fresh = controller.state.value.sessionId
+            assertNotEquals(chat, fresh)
+            assertEquals(second.toString(), controller.state.value.settings.workspace)
+            // An empty dialog changes its folder in place and can drop it.
+            controller.chooseWorkspace(first)
+            assertEquals(fresh, controller.state.value.sessionId)
+            controller.closeWorkspace()
+            assertEquals(fresh, controller.state.value.sessionId)
+            assertNull(controller.state.value.settings.workspace)
+            // Reopening the bound dialog brings its folder back.
+            controller.selectSession(chat)
+            assertEquals(first.toString(), controller.state.value.settings.workspace)
+            assertTrue(controller.state.value.folderLocked)
+        } finally { controller.close() }
+    }
+
+    @Test fun `moved project folder is found again for all its dialogs`() = runBlocking {
+        val old = java.nio.file.Files.createDirectories(directory.resolve("work/old")).toRealPath()
+        val controller = DesktopController(directory.resolve("relocate"), initialCredential = null, catalogClient = OfflineCatalog)
+        try {
+            controller.initialize()
+            controller.chooseWorkspace(old)
+            controller.pinWorkspace(old.toString(), true)
+            assertTrue(controller.send("Привет", ExecutionMode.PLAN).accepted)
+            controller.chooseWorkspace(old)
+            val chat = controller.state.value.sessionId
+            assertTrue(controller.send("Ещё", ExecutionMode.PLAN).accepted)
+            val moved = java.nio.file.Files.move(old, directory.resolve("work/renamed")).toRealPath()
+            controller.selectSession(chat)
+            assertTrue(controller.state.value.workspaceMissing)
+            assertFalse(controller.send("После переноса", ExecutionMode.PLAN).accepted)
+            controller.relocateWorkspace(old.toString(), moved)
+            assertFalse(controller.state.value.workspaceMissing)
+            assertEquals(moved.toString(), controller.state.value.settings.workspace)
+            assertEquals(listOf(moved.toString()), controller.state.value.settings.pinnedWorkspaces)
+            assertTrue(controller.state.value.sessions.filter { it.workspace != null }.all { it.workspace == moved.toString() })
+            assertEquals(2, controller.state.value.sessions.count { it.workspace == moved.toString() })
+        } finally { controller.close() }
+    }
+
+    @Test fun `removed project stays hidden until opened again`() = runBlocking {
+        val project = java.nio.file.Files.createDirectories(directory.resolve("work/hidden")).toRealPath().toString()
+        val controller = DesktopController(directory.resolve("hide"), initialCredential = null, catalogClient = OfflineCatalog)
+        try {
+            controller.initialize()
+            controller.newSessionIn(project)
+            controller.pinWorkspace(project, true)
+            controller.removeRecentWorkspace(project)
+            with(controller.state.value.settings) { assertTrue(project in hiddenWorkspaces); assertFalse(project in recentWorkspaces); assertFalse(project in pinnedWorkspaces) }
+            controller.newSessionIn(project)
+            with(controller.state.value.settings) { assertFalse(project in hiddenWorkspaces); assertEquals(project, recentWorkspaces.first()) }
+        } finally { controller.close() }
+    }
+
     @Test fun `keys stay with their endpoint and loopback servers need none`() = runBlocking {
         val controller = DesktopController(directory, initialCredential = "deepseek-key", namedKeys = mapOf("OPENAI_API_KEY" to "openai-key"), catalogClient = OfflineCatalog)
         try {
@@ -262,16 +337,22 @@ class DesktopControllerTest {
         } finally { controller.close() }
     }
 
-    @Test fun `configured send without workspace is rejected and leaves journal unchanged`() = runBlocking {
-        val controller = DesktopController(directory, initialCredential = "synthetic-key", catalogClient = OfflineCatalog)
+    @Test fun `configured dialog without a folder runs with chat tools and stays unbound`() = runBlocking {
+        val controller = DesktopController(directory, initialCredential = null, catalogClient = OfflineCatalog)
         try {
             controller.initialize()
+            // A closed loopback port: the request fails at once and nothing leaves the machine.
+            controller.configure("http://127.0.0.1:9/v1", "local-model", false, null)
             val id = controller.state.value.sessionId
-            val receipt = controller.send("Synthetic request", ExecutionMode.PLAN, "reject-1")
-            assertFalse(receipt.accepted)
-            assertEquals(id, receipt.sessionId)
-            assertNotNull(receipt.reason)
-            assertTrue(JsonlEventStore(directory.resolve("sessions")).read(id).isEmpty())
+            val receipt = controller.send("Synthetic request", ExecutionMode.PLAN, "chat-1")
+            assertTrue(receipt.accepted, receipt.reason)
+            kotlinx.coroutines.withTimeout(30_000) { while (controller.state.value.run.status !in setOf("completed", "failed")) kotlinx.coroutines.delay(20) }
+            val journal = JsonlEventStore(directory.resolve("sessions")).read(id)
+            assertTrue(journal.none { it.type == "session.workspace" })
+            val tools = journal.first { it.type == "context.profile" }.payload["tools"].toString().toInt()
+            assertTrue(tools in 1..dev.chiller.agent.ModelProfiles.CHAT_TOOLS.size, "tools: $tools")
+            assertNull(controller.state.value.settings.workspace)
+            assertTrue(java.nio.file.Files.isDirectory(directory.resolve("chats").resolve(id)))
         } finally { controller.close() }
     }
 

@@ -92,7 +92,7 @@ class AutoVerifyTest {
             assertTrue(controller.completeAutoVerify(context, ProcessOutput("verify", "all passed", 0, "exited", 0), 12))
             assertEquals("passed", controller.state.value.verify.status)
             val otherProject = Files.createDirectories(root.resolve("other-project"))
-            controller.chooseWorkspace(otherProject)
+            controller.newSessionIn(otherProject.toString())
             val switchedSession = controller.state.value.sessionId
             assertFalse(context.sessionId == switchedSession)
             assertEquals(otherProject.toRealPath().toString(), controller.state.value.settings.workspace)

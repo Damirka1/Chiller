@@ -39,7 +39,11 @@ data class DesktopSettings(val baseUrl: String = "https://api.deepseek.com", val
     /** Providers defined on this machine; see [CustomProvider]. */
     val customProviders: List<CustomProvider> = emptyList(),
     /** Money limit per task with the user's prices for one endpoint and model; off by default. */
-    val costBudget: CostBudgetSettings = CostBudgetSettings())
+    val costBudget: CostBudgetSettings = CostBudgetSettings(),
+    /** Projects kept at the top of the sidebar, in the user's order. */
+    val pinnedWorkspaces: List<String> = emptyList(),
+    /** Folders removed from the project list; their dialogs stay. Opening the folder again shows it again. */
+    val hiddenWorkspaces: List<String> = emptyList())
 
 @Serializable
 data class CachedModelCatalog(val models: List<ProviderModel>, val fetchedAt: String)
@@ -122,7 +126,11 @@ data class ModelCatalogState(
     /** Models that can hold a conversation; image-only models are listed for their own setting, never for chat. */
     val chatModels: List<ProviderModel> get() = models.filter { it.chat != false }
 }
-data class DesktopState(val run: RunState = RunState(), val sessions: List<SessionInfo> = emptyList(), val sessionId: String = newId(), val settings: DesktopSettings = DesktopSettings(), val apiKeyConfigured: Boolean = false, val allowProcesses: Boolean = false, val exportContent: String? = null, val exportFormat: String = "markdown", val exportSessionId: String? = null, val uiPreferences: UiPreferences = UiPreferences(), val connection: ConnectionState = ConnectionState(), val catalog: ModelCatalogState = ModelCatalogState(), val sessionWorkspaces: Map<String, String> = emptyMap(), val subagents: List<SubagentSnapshot> = emptyList(), val captureTargets: List<CaptureTarget> = emptyList(), val selectedCaptureTarget: String? = null, val activeProfile: String? = null, val verify: VerifyState = VerifyState(), val undoneChanges: Set<String> = emptySet(), val outside: OutsideChanges? = null)
+data class DesktopState(val run: RunState = RunState(), val sessions: List<SessionInfo> = emptyList(), val sessionId: String = newId(), val settings: DesktopSettings = DesktopSettings(), val apiKeyConfigured: Boolean = false, val allowProcesses: Boolean = false, val exportContent: String? = null, val exportFormat: String = "markdown", val exportSessionId: String? = null, val uiPreferences: UiPreferences = UiPreferences(), val connection: ConnectionState = ConnectionState(), val catalog: ModelCatalogState = ModelCatalogState(), val sessionWorkspaces: Map<String, String> = emptyMap(), val subagents: List<SubagentSnapshot> = emptyList(), val captureTargets: List<CaptureTarget> = emptyList(), val selectedCaptureTarget: String? = null, val activeProfile: String? = null, val verify: VerifyState = VerifyState(), val undoneChanges: Set<String> = emptySet(), val outside: OutsideChanges? = null,
+    /** The dialog's folder is fixed: it is bound and has turns, or file tools already wrote into its own folder. */
+    val folderLocked: Boolean = false,
+    /** The bound folder of the shown dialog no longer exists; it can be pointed at the new location. */
+    val workspaceMissing: Boolean = false)
 
 class DesktopController(
     private val directory: Path, initialCredential: String? = LocalCredentials.load(), connectionChecker: ConnectionChecker? = null, catalogClient: ModelCatalogClient? = null,
@@ -356,7 +364,7 @@ class DesktopController(
     }
 
     private val deletionPlans = mutableMapOf<String, SessionDeletePlan>()
-    private fun maintenance() = SessionMaintenance(directory.resolve("sessions"), directory.resolve("artifacts"), directory.resolve("traces"), listOf(directory.resolve("attachments"), directory.resolve("captures")))
+    private fun maintenance() = SessionMaintenance(directory.resolve("sessions"), directory.resolve("artifacts"), directory.resolve("traces"), listOf(directory.resolve("attachments"), directory.resolve("captures"), directory.resolve("chats")))
 
     /** Only explicitly selected inactive history is eligible; confirmation is snapshot-bound. */
     suspend fun previewSessionDeletion(id: String): String? = commands.withLock {
@@ -583,19 +591,51 @@ class DesktopController(
         }
     }
 
+    /**
+     * Opens [path] for the shown dialog when its folder can still change (an empty dialog, or one without a folder
+     * and without file changes); a dialog with a fixed folder stays as it is and a new dialog opens in [path].
+     */
     private suspend fun chooseWorkspaceLocked(path: Path) {
         if (busy()) return
         try {
-            val canonical = withContext(Dispatchers.IO) { path.toRealPath() }
-            require(Files.isDirectory(canonical))
-            val current = _state.value.settings
-            val recent = (listOf(canonical.toString()) + current.recentWorkspaces).distinct().take(MAX_RECENT_WORKSPACES)
-            val settings = current.copy(workspace = canonical.toString(), recentWorkspaces = recent)
-            savedWorkspace = canonical.toString()
+            val root = withContext(Dispatchers.IO) { path.toRealPath() }.also { require(Files.isDirectory(it)) }.toString()
+            val shown = _state.value
+            val session = shown.sessionId
+            val keep = !shown.folderLocked && shown.settings.workspace?.let(::isDemoFolder) != true && events.findEarly(session, "session.demo") == null
             resetEngine()
-            _state.update { it.copy(settings = settings, sessionId = newId(), run = RunState(), verify = VerifyState()) }
+            // A dialog with turns records the folder now, so the list moves it into the project at once.
+            val attach = keep && shown.run.messages.isNotEmpty()
+            if (attach) events.append(session, "session.workspace", buildJsonObject { put("root", root) })
+            val settings = rememberProject(shown.settings, root).copy(workspace = root)
+            savedWorkspace = root
+            _state.update {
+                if (keep) it.copy(settings = settings, folderLocked = attach, workspaceMissing = false, verify = VerifyState(),
+                    sessionWorkspaces = if (attach) it.sessionWorkspaces + (session to root) else it.sessionWorkspaces)
+                else it.copy(settings = settings, sessionId = newId(), run = RunState(), verify = VerifyState(), outside = null, undoneChanges = emptySet(), folderLocked = false, workspaceMissing = false)
+            }
             saveSettings(settings)
-        } catch (_: Exception) { showError("Не удалось открыть рабочую папку.") }
+            if (attach) refreshSessions()
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (_: Exception) { showError("Не удалось открыть рабочую папку.") }
+    }
+
+    /** Puts [root] first among recent projects and shows it again if it was removed from the list. */
+    private fun rememberProject(settings: DesktopSettings, root: String): DesktopSettings =
+        settings.copy(recentWorkspaces = (listOf(root) + settings.recentWorkspaces).distinct().take(MAX_RECENT_WORKSPACES), hiddenWorkspaces = settings.hiddenWorkspaces - root)
+
+    /** A new dialog in [root], or without a folder when [root] is null. */
+    suspend fun newSessionIn(root: String?) = commands.withLock {
+        if (coordinator?.state?.value?.status in setOf("completed", "failed", "cancelled")) coordinator?.awaitCompletion()
+        if (busy()) return@withLock
+        try {
+            val canonical = root?.let { withContext(Dispatchers.IO) { Path.of(it).toRealPath() }.also { path -> require(Files.isDirectory(path)) }.toString() }
+            resetEngine()
+            val settings = (canonical?.let { rememberProject(_state.value.settings, it) } ?: _state.value.settings).copy(workspace = canonical)
+            savedWorkspace = canonical
+            _state.update { it.copy(settings = settings, sessionId = newId(), run = RunState(), verify = VerifyState(), outside = null, undoneChanges = emptySet(), folderLocked = false, workspaceMissing = false) }
+            saveSettings(settings)
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (_: Exception) { showError("Папка проекта недоступна.") }
     }
 
     private suspend fun newSessionLocked() {
@@ -605,17 +645,53 @@ class DesktopController(
         // Leaving the demo returns to the project the user had open, not the throwaway demo folder.
         val current = _state.value.settings.workspace
         val workspace = if (current != null && isDemoFolder(current)) savedWorkspace?.takeIf { Files.isDirectory(Path.of(it)) } else current
-        _state.update { it.copy(sessionId = newId(), run = RunState(), verify = VerifyState(), outside = null, undoneChanges = emptySet(), settings = it.settings.copy(workspace = workspace)) }
+        _state.update { it.copy(sessionId = newId(), run = RunState(), verify = VerifyState(), outside = null, undoneChanges = emptySet(), settings = it.settings.copy(workspace = workspace), folderLocked = false, workspaceMissing = false) }
     }
 
-    /** Leaves the current project: a new dialog on the start screen without a folder. */
+    /** Leaves the current project: the shown dialog loses its folder while it still can, otherwise a new dialog without one opens. */
     suspend fun closeWorkspace() = commands.withLock {
         if (busy()) return@withLock
         resetEngine()
         val settings = _state.value.settings.copy(workspace = null)
         savedWorkspace = null
-        _state.update { it.copy(settings = settings, sessionId = newId(), run = RunState(), verify = VerifyState()) }
+        _state.update {
+            if (!it.folderLocked) it.copy(settings = settings, verify = VerifyState(), workspaceMissing = false)
+            else it.copy(settings = settings, sessionId = newId(), run = RunState(), verify = VerifyState(), outside = null, undoneChanges = emptySet(), folderLocked = false, workspaceMissing = false)
+        }
         saveSettings(settings)
+    }
+
+    /** Pins [root] to the top of the project list, or unpins it. */
+    suspend fun pinWorkspace(root: String, pinned: Boolean) = commands.withLock {
+        val settings = _state.value.settings.let { it.copy(pinnedWorkspaces = if (pinned) (it.pinnedWorkspaces + root).distinct() else it.pinnedWorkspaces - root, hiddenWorkspaces = it.hiddenWorkspaces - root) }
+        _state.update { it.copy(settings = settings) }
+        saveSettings(settings)
+    }
+
+    /**
+     * Points every dialog bound to [from] at [to], e.g. after the project folder was moved or renamed. Dialogs keep
+     * their workspace-relative history; the journal records the new binding, nothing is copied or replayed.
+     */
+    suspend fun relocateWorkspace(from: String, to: Path) = commands.withLock {
+        if (busy()) return@withLock
+        try {
+            val root = withContext(Dispatchers.IO) { to.toRealPath() }.also { require(Files.isDirectory(it)) }.toString()
+            if (root == from) return@withLock
+            resetEngine()
+            val bound = _state.value.sessionWorkspaces.filterValues { it == from }.keys
+            for (id in bound) events.append(id, "session.workspace", buildJsonObject { put("root", root); put("relocatedFrom", from) })
+            fun List<String>.moved() = map { if (it == from) root else it }.distinct()
+            val settings = _state.value.settings.let { s ->
+                s.copy(workspace = if (s.workspace == from) root else s.workspace, recentWorkspaces = s.recentWorkspaces.moved(), pinnedWorkspaces = s.pinnedWorkspaces.moved(),
+                    verifyCommands = s.verifyCommands[from]?.let { command -> s.verifyCommands - from + (root to command) } ?: s.verifyCommands)
+            }
+            if (savedWorkspace == from) savedWorkspace = root
+            _state.update { it.copy(settings = settings, sessionWorkspaces = it.sessionWorkspaces.mapValues { (_, path) -> if (path == from) root else path }, workspaceMissing = false) }
+            saveSettings(settings)
+            refreshSessions()
+            if (_state.value.sessionId in bound) selectSessionLocked(_state.value.sessionId)
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (_: Exception) { showError("Не удалось указать новое место папки.") }
     }
 
     private fun isDemoFolder(path: String): Boolean {
@@ -632,8 +708,11 @@ class DesktopController(
             resetEngine()
             val history = events.read(id)
             val savedRoot = history.lastOrNull { it.type == "session.workspace" }?.payload?.get("root")?.jsonPrimitive?.contentOrNull
-            _state.update { it.copy(sessionId = id, settings = it.settings.copy(workspace = savedRoot), run = RunState(), verify = VerifyState(), outside = null, undoneChanges = emptySet()) }
-            if (savedRoot == null) {
+            val missing = savedRoot != null && !withContext(Dispatchers.IO) { Files.isDirectory(Path.of(savedRoot)) }
+            _state.update { it.copy(sessionId = id, settings = it.settings.copy(workspace = savedRoot), run = RunState(), verify = VerifyState(), outside = null, undoneChanges = emptySet(),
+                folderLocked = folderLocked(history), workspaceMissing = missing) }
+            // Without its folder the dialog is shown from the journal; it continues once the folder is found again.
+            if (savedRoot == null || missing) {
                 val messages = projectConversation(history)
                 _state.update { it.copy(run = RunState(messages = messages)) }
             } else buildEngine().restore()
@@ -641,6 +720,17 @@ class DesktopController(
             _state.update { it.copy(undoneChanges = undoneChangeIds(history), outside = outside) }
         } catch (_: Exception) { showError("Сессию не удалось восстановить. Её данные сохранены для проверки.") }
     }
+
+    /** Records [root] as the dialog's folder unless it already is. */
+    private suspend fun bindSession(session: String, root: String) {
+        val bound = events.read(session).lastOrNull { it.type == "session.workspace" }?.payload?.get("root")?.jsonPrimitive?.contentOrNull
+        if (bound != root) events.append(session, "session.workspace", buildJsonObject { put("root", root) })
+        _state.update { it.copy(sessionWorkspaces = it.sessionWorkspaces + (session to root)) }
+    }
+
+    /** A bound dialog with turns keeps its folder; one without a folder keeps none once file tools wrote into its own folder. */
+    private fun folderLocked(history: List<StoredEvent>): Boolean =
+        history.any { it.type == "change.reference" } || (history.any { it.type == "session.workspace" } && history.any { it.type == "message" })
 
     private suspend fun sendLocked(text: String, mode: ExecutionMode, requestId: String, attachments: List<ComposerAttachment> = emptyList(), preserveAutoVerifyAttempt: Boolean = false): SendReceipt {
         val session = _state.value.sessionId
@@ -652,11 +742,16 @@ class DesktopController(
         if (busy()) return rejected("Уже выполняется другая задача")
         if (events.findEarly(session, "session.demo") != null) return rejected("Это демо-диалог: в нём отвечает сценарий, а не модель. Начните новый диалог.")
         if (_state.value.settings.model.isBlank()) return rejected("Выберите модель в настройках подключения")
+        if (_state.value.workspaceMissing) return rejected("Папка диалога не найдена. Укажите её новое место или начните новый диалог.")
         if (!ready()) {
             val user = AgentMessage("user", text, attachments = attachments)
             val answer = AgentMessage("assistant", "Это offline-режим Chiller. Интерфейс готов к работе; подключите API в настройках, чтобы выполнять задачи в проекте. Способ хранения ключа выбирается в настройках.", origin = MessageOrigin(MessageOriginKind.OFFLINE))
-            try { withContext(NonCancellable) { events.append(session, "message", json.encodeToJsonElement(AgentMessage.serializer(), user).jsonObject) } }
+            try { withContext(NonCancellable) {
+                _state.value.settings.workspace?.let { root -> bindSession(session, root) }
+                events.append(session, "message", json.encodeToJsonElement(AgentMessage.serializer(), user).jsonObject)
+            } }
             catch (_: Exception) { return rejected("Не удалось сохранить сообщение") }
+            _state.update { it.copy(folderLocked = it.settings.workspace != null || it.folderLocked) }
             val receipt = SendReceipt(true, session, requestId)
             rememberReceipt(receipt)
             _state.update { it.copy(run = it.run.copy(status = "preparing", messages = it.run.messages + user)) }
@@ -668,7 +763,9 @@ class DesktopController(
             }
             return receipt
         }
-        if (_state.value.settings.workspace == null) return rejected("Перед отправкой выберите рабочую папку")
+        // A dialog without a folder is a conversation: its tools write only into the dialog's own folder.
+        val folderless = _state.value.settings.workspace == null
+        val runMode = if (folderless) ExecutionMode.WORKSPACE_EDIT else mode
         return try {
             if (engineStale && coordinator != null) resetEngine()
             engineStale = false
@@ -676,13 +773,13 @@ class DesktopController(
             val changesBefore = engine.state.value.activities.count { it.diff != null && it.status == "completed" }
             // Metadata snapshot before an editing turn: what changes outside the file tools is reported afterwards.
             val turnIndex = engine.state.value.messages.size
-            val stampsBefore = if (mode == ExecutionMode.WORKSPACE_EDIT) withContext(Dispatchers.IO) { runCatching { codeService?.fileStamps() }.getOrNull() } else null
+            val stampsBefore = if (!folderless && mode == ExecutionMode.WORKSPACE_EDIT) withContext(Dispatchers.IO) { runCatching { codeService?.fileStamps() }.getOrNull() } else null
             val stampSource = codeService
             if (!preserveAutoVerifyAttempt) autoVerifyEpoch++
             val runEpoch = autoVerifyEpoch
             val accepted = CompletableDeferred<Boolean>()
             val acceptedReceipt = SendReceipt(true, session, requestId)
-            val job = engine.send(text, mode, _state.value.allowProcesses, allowNetwork = _state.value.settings.agent.allowNetwork, allowScreenshots = _state.value.settings.agent.allowScreenshots, attachments = attachments) {
+            val job = engine.send(text, runMode, _state.value.allowProcesses, allowNetwork = _state.value.settings.agent.allowNetwork, allowScreenshots = _state.value.settings.agent.allowScreenshots, attachments = attachments) {
                 rememberReceipt(acceptedReceipt)
                 accepted.complete(true)
             }
@@ -690,7 +787,7 @@ class DesktopController(
             job.invokeOnCompletion {
                 val completedRun = engine.state.value
                 if (!accepted.isCompleted) accepted.complete(false)
-                scope.launch { refreshSessions() }
+                scope.launch { refreshSessions(); commands.withLock { if (_state.value.sessionId == session) _state.update { it.copy(folderLocked = folderLocked(events.read(session))) } } }
                 scope.launch { recordOutsideChanges(session, stampSource, stampsBefore, completedRun, turnIndex) }
                 scope.launch { afterRun(session, mode, changesBefore, completedRun, runEpoch, engine) }
             }
@@ -893,7 +990,9 @@ class DesktopController(
     private suspend fun buildEngine(providerOverride: LlmProvider? = null, modelOverride: String? = null): AgentCoordinator {
         val s = _state.value
         val options = s.settings.agent.sanitized()
-        val root = Path.of(s.settings.workspace ?: throw IllegalStateException("Choose workspace"))
+        val folderless = s.settings.workspace == null
+        // A dialog without a folder gets its own folder under the app data for generated images and captures.
+        val root = s.settings.workspace?.let { Path.of(it) } ?: withContext(Dispatchers.IO) { Files.createDirectories(directory.resolve("chats").resolve(s.sessionId)) }
         // Reads scale with the model's window; a cost budget caps the prompt at its input ceiling.
         val listedWindow = s.catalog.models.firstOrNull { it.id == (modelOverride ?: s.settings.model) }?.contextWindow
         val readWindow = if (s.settings.costBudget.enabled) minOf(listedWindow ?: 32_768, s.settings.costBudget.inputTokenCeiling) else listedWindow
@@ -931,17 +1030,17 @@ class DesktopController(
         val supervisor = SubagentSupervisor(provider, builtin, events, s.sessionId, modelOverride ?: s.settings.model, scope)
         subagentService = supervisor
         // The model profile narrows the toolbox (helpers only if it keeps spawn_agent) and may cap output.
-        val helpers = options.subagents && (modelProfile.tools == null || "spawn_agent" in modelProfile.tools!!)
+        val helpers = !folderless && options.subagents && (modelProfile.tools == null || "spawn_agent" in modelProfile.tools!!)
         val delegating: ToolExecutor = if (helpers) SubagentTools(builtin, supervisor) else builtin
-        val tools: ToolExecutor = modelProfile.tools?.let { ProfiledTools(delegating, it) } ?: delegating
+        val tools: ToolExecutor = if (folderless) ProfiledTools(builtin, ModelProfiles.CHAT_TOOLS) else modelProfile.tools?.let { ProfiledTools(delegating, it) } ?: delegating
         val maxOutput = minOf(ModelProfiles.replyTokens(effectiveMaxOutput(options, modelProfile.maxOutputTokens), s.settings.thinking),
             s.catalog.models.firstOrNull { it.id == (modelOverride ?: s.settings.model) }?.maxOutputTokens?.takeIf { it > 0 } ?: Int.MAX_VALUE)
         _state.update { it.copy(activeProfile = modelProfile.id) }
         // Read once per engine: an edit to AGENTS.md applies from the next dialog.
-        val instructions = if (options.projectInstructions) withContext(Dispatchers.IO) { ProjectInstructions.load(root) } else null
-        val map = if (modelProfile.projectMap) runCatching { code.projectMap() }.getOrNull() else null
+        val instructions = if (!folderless && options.projectInstructions) withContext(Dispatchers.IO) { ProjectInstructions.load(root) } else null
+        val map = if (!folderless && modelProfile.projectMap) runCatching { code.projectMap() }.getOrNull() else null
         val engine = AgentCoordinator(provider, tools, events, processes, s.sessionId, modelOverride ?: s.settings.model, s.settings.thinking, maxRounds = options.effectiveMaxRounds, maxOutputTokens = maxOutput,
-            projectInstructions = instructions?.text, traces = traceSink(s.sessionId), subagents = supervisor.takeIf { helpers }, systemPrompt = modelProfile.systemPrompt, projectMap = map, scope = scope,
+            projectInstructions = instructions?.text, traces = traceSink(s.sessionId), subagents = supervisor.takeIf { helpers }, systemPrompt = if (folderless) ModelProfiles.CHAT_PROMPT else modelProfile.systemPrompt, projectMap = map, scope = scope,
             // With a cost budget the prompt must stay within the input ceiling its reservations assume.
             contextWindowTokens = (s.catalog.models.firstOrNull { it.id == (modelOverride ?: s.settings.model) }?.contextWindow ?: 32_768).let { window ->
                 if (cost == null) s.catalog.models.firstOrNull { it.id == (modelOverride ?: s.settings.model) }?.contextWindow
@@ -952,9 +1051,7 @@ class DesktopController(
         if (instructions != null) events.append(s.sessionId, "context.instructions", buildJsonObject {
             put("sources", JsonArray(instructions.sources.map(::JsonPrimitive))); put("truncated", instructions.truncated)
         })
-        if (events.read(s.sessionId).none { it.type == "session.workspace" })
-            events.append(s.sessionId, "session.workspace", buildJsonObject { put("root", workspace.root) })
-        _state.update { it.copy(sessionWorkspaces = it.sessionWorkspaces + (s.sessionId to workspace.root)) }
+        if (!folderless) bindSession(s.sessionId, workspace.root)
         // A turn the real provider finished is proof the connection works, so it counts as a check without an extra request.
         val live = providerOverride == null
         var previous = engine.state.value.status
@@ -1081,8 +1178,9 @@ class DesktopController(
         null
     }
 
+    /** Removes [path] from the project lists; the folder and its dialogs stay. */
     suspend fun removeRecentWorkspace(path: String) = commands.withLock {
-        val settings = _state.value.settings.let { it.copy(recentWorkspaces = it.recentWorkspaces - path) }
+        val settings = _state.value.settings.let { it.copy(recentWorkspaces = it.recentWorkspaces - path, pinnedWorkspaces = it.pinnedWorkspaces - path, hiddenWorkspaces = (it.hiddenWorkspaces + path).distinct()) }
         _state.update { it.copy(settings = settings) }
         saveSettings(settings)
     }
@@ -1191,7 +1289,7 @@ class DesktopController(
         else -> message
     }
 
-    private companion object { const val MAX_MODEL_LENGTH = 200; const val MAX_RECENT_WORKSPACES = 6 }
+    private companion object { const val MAX_MODEL_LENGTH = 200; const val MAX_RECENT_WORKSPACES = 24 }
 }
 
 private const val MAX_CUSTOM_PROVIDERS = 16
