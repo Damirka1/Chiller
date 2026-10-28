@@ -547,6 +547,19 @@ class AgentCoordinatorTest {
         assertTrue(tools.executed.isEmpty())
     }
 
+    @Test fun planModeOffersOnlyReadOnlyServerTools() = runTest {
+        val offered = mutableListOf<List<String>>()
+        val tools = object : ToolExecutor {
+            override val specs = listOf(ToolSpec("mcp__gh__search", "", JsonObject(emptyMap()), ToolEffect.READ), ToolSpec("mcp__gh__create_issue", "", JsonObject(emptyMap()), ToolEffect.EXTERNAL))
+            override suspend fun execute(call: ToolCall, context: ToolContext) = ToolResult(true)
+        }
+        val provider = ScriptedProvider { request -> offered += request.tools.map { it.name }; flow { emit(ModelEvent.Completed(AgentMessage("assistant", "ok"), "stop")) } }
+        val f = fixture(provider, tools, dispatcher = StandardTestDispatcher(testScheduler))
+        f.coordinator.send("plan", ExecutionMode.PLAN); advanceUntilIdle()
+        f.coordinator.send("edit", ExecutionMode.WORKSPACE_EDIT); advanceUntilIdle()
+        assertEquals(listOf(listOf("mcp__gh__search"), listOf("mcp__gh__search", "mcp__gh__create_issue")), offered)
+    }
+
     @Test fun stoppingWhileOnlyAQuestionWaitsRestoresAsStopped() = runTest {
         suspend fun stopWhileWaiting(calls: List<ToolCall>): RunState {
             val events = MemoryEvents()

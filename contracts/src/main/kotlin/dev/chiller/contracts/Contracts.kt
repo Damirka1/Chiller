@@ -31,7 +31,8 @@ data class AgentMessage(
 )
 
 @Serializable
-enum class ToolEffect { READ, FILE_WRITE, PROCESS, USER_INTERACTION, NETWORK, SCREEN_CAPTURE }
+/** [EXTERNAL]: a tool of a connected MCP server whose effects outside Chiller are unknown; never offered in Plan mode. */
+enum class ToolEffect { READ, FILE_WRITE, PROCESS, USER_INTERACTION, NETWORK, SCREEN_CAPTURE, EXTERNAL }
 
 @Serializable
 data class ToolSpec(val name: String, val description: String, val parameters: JsonObject, val effect: ToolEffect)

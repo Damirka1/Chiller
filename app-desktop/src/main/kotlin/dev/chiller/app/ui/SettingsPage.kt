@@ -59,6 +59,8 @@ data class SettingsData(
     val captureTargets: List<CaptureTarget> = emptyList(), val selectedCaptureTarget: String? = null, val screenshotSupported: Boolean = false,
     /** The open project, its saved check command and a suggestion from its build files. */
     val workspace: String? = null, val verifyCommand: String = "", val suggestedVerifyCommand: String? = null,
+    /** Connected MCP servers and their states by server id. */
+    val mcpServers: List<dev.chiller.tools.McpServerConfig> = emptyList(), val mcpStates: Map<String, dev.chiller.tools.McpServerState> = emptyMap(),
 )
 
 class SettingsActions(
@@ -76,10 +78,12 @@ class SettingsActions(
     /** Saves the cost budget; the callback gets why it was refused, or null. Unwired, it refuses. */
     val costBudget: (CostBudgetSettings, (String?) -> Unit) -> Unit = { _, done -> done("Сохранение недоступно") },
     val refreshCaptureTargets: () -> Unit = {}, val selectCaptureTarget: (String) -> Unit = {},
+    /** Saves the MCP servers; the callback gets why they were refused, or null. Unwired, it refuses. */
+    val saveMcpServers: (List<dev.chiller.tools.McpServerConfig>, (String?) -> Unit) -> Unit = { _, done -> done("Сохранение недоступно") },
 )
 
 internal enum class SettingsSection(val title: String, val icon: ImageVector) {
-    CONNECTION("Подключение", Icons.Outlined.Cable), AGENT("Агент", Icons.Outlined.SmartToy), APPEARANCE("Внешний вид", Icons.Outlined.Palette),
+    CONNECTION("Подключение", Icons.Outlined.Cable), AGENT("Агент", Icons.Outlined.SmartToy), MCP("Инструменты MCP", Icons.Outlined.Extension), APPEARANCE("Внешний вид", Icons.Outlined.Palette),
     DATA("Проекты и данные", Icons.Outlined.FolderOpen), KEYS("Клавиши", Icons.Outlined.Keyboard), ABOUT("О программе", Icons.Outlined.Info),
 }
 
@@ -133,6 +137,7 @@ internal fun SettingsPage(
                     when (current) {
                         SettingsSection.CONNECTION -> ConnectionSection(data, actions)
                         SettingsSection.AGENT -> AgentSection(data, actions)
+                        SettingsSection.MCP -> McpSection(data.mcpServers, data.mcpStates, actions.saveMcpServers)
                         SettingsSection.APPEARANCE -> AppearanceSection(data, actions)
                         SettingsSection.DATA -> DataSection(data, actions)
                         SettingsSection.KEYS -> KeysSection()

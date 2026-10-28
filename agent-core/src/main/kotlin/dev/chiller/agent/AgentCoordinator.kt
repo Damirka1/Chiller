@@ -348,7 +348,7 @@ class AgentCoordinator(
         appendMessage(AgentMessage("user", text, attachments = attachments))
         onAccepted()
         val enabled = tools.specs.filter {
-            (mode != ExecutionMode.PLAN || it.effect !in setOf(ToolEffect.FILE_WRITE, ToolEffect.PROCESS)) &&
+            (mode != ExecutionMode.PLAN || it.effect !in setOf(ToolEffect.FILE_WRITE, ToolEffect.PROCESS, ToolEffect.EXTERNAL)) &&
                 (it.effect != ToolEffect.NETWORK || allowNetwork) && (it.effect != ToolEffect.SCREEN_CAPTURE || allowScreenshots)
         }
         val delegation = if (enabled.any { it.name == "spawn_agent" }) "\n- For independent investigations (several areas to explore, a review in parallel) start read-only helpers with spawn_agent, keep working, then collect them with wait_agents and agent_result. Helpers cannot edit files; verify their claims before relying on them." else ""

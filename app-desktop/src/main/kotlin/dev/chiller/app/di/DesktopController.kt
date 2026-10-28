@@ -43,7 +43,9 @@ data class DesktopSettings(val baseUrl: String = "https://api.deepseek.com", val
     /** Projects kept at the top of the sidebar, in the user's order. */
     val pinnedWorkspaces: List<String> = emptyList(),
     /** Folders removed from the project list; their dialogs stay. Opening the folder again shows it again. */
-    val hiddenWorkspaces: List<String> = emptyList())
+    val hiddenWorkspaces: List<String> = emptyList(),
+    /** MCP servers the user connected; their tools join every dialog's tools while the server runs. */
+    val mcpServers: List<dev.chiller.tools.McpServerConfig> = emptyList())
 
 @Serializable
 data class CachedModelCatalog(val models: List<ProviderModel>, val fetchedAt: String)
@@ -149,7 +151,9 @@ data class DesktopState(val run: RunState = RunState(), val sessions: List<Sessi
     /** The project each dialog in its own working copy was made from, by dialog id. */
     val sessionOrigins: Map<String, String> = emptyMap(),
     /** The shown dialog's own working copy, when it has one. */
-    val worktree: WorktreeInfo? = null)
+    val worktree: WorktreeInfo? = null,
+    /** Each MCP server's state by its id, for the settings page. */
+    val mcp: Map<String, dev.chiller.tools.McpServerState> = emptyMap())
 
 class DesktopController(
     private val directory: Path, initialCredential: String? = LocalCredentials.load(), connectionChecker: ConnectionChecker? = null, catalogClient: ModelCatalogClient? = null,
@@ -219,6 +223,8 @@ class DesktopController(
     }
     private val engines = java.util.concurrent.ConcurrentHashMap<String, Engine>()
     private val worktrees = GitWorktrees(directory.resolve("worktrees"))
+    /** MCP servers run once for the app; `${NAME}` in their environment comes from the environment or .env. */
+    private val mcp = dev.chiller.tools.McpHub({ name -> keyLookup(name) }, Path.of(System.getProperty("user.home")), BuildInfo.displayVersion, scope)
     /** Working copies made for dialogs that have no message yet; journaled with the first one. */
     private val pendingWorktrees = java.util.concurrent.ConcurrentHashMap<String, WorktreeInfo>()
     /** Finished checks of dialogs whose engine was let go, shown again when the dialog is opened. */
@@ -271,6 +277,16 @@ class DesktopController(
         savedWorkspace = settings.workspace
         refreshSessions()
         _state.update { it.copy(settings = settings, allowProcesses = settings.allowProcesses, uiPreferences = preferencesStore.load()) }
+        // A server that became ready or went away changes the tools: dialogs pick them up from their next message.
+        scope.launch {
+            var ready = emptySet<String>()
+            mcp.states.collect { states ->
+                val now = states.filterValues { it.status == "ready" }.keys
+                if (now != ready) { ready = now; engines.values.forEach { it.stale = true } }
+                _state.update { it.copy(mcp = states) }
+            }
+        }
+        mcp.configure(settings.mcpServers)
         _state.update { it.copy(apiKeyConfigured = ready(), connection = connectionForUnverified()) }
         saveSettings(settings)
         restoreCachedCatalog()
@@ -1277,7 +1293,9 @@ class DesktopController(
         // The model profile narrows the toolbox (helpers only if it keeps spawn_agent) and may cap output.
         val helpers = !folderless && options.subagents && (modelProfile.tools == null || "spawn_agent" in modelProfile.tools!!)
         val delegating: ToolExecutor = if (helpers) SubagentTools(builtin, supervisor) else builtin
-        val tools: ToolExecutor = if (folderless) ProfiledTools(builtin, ModelProfiles.CHAT_TOOLS) else modelProfile.tools?.let { ProfiledTools(delegating, it) } ?: delegating
+        val own: ToolExecutor = if (folderless) ProfiledTools(builtin, ModelProfiles.CHAT_TOOLS) else modelProfile.tools?.let { ProfiledTools(delegating, it) } ?: delegating
+        // Connected MCP servers add their tools after the profile's narrowing; the scripted demo keeps its own set.
+        val tools: ToolExecutor = mcp.executor()?.takeIf { providerOverride == null }?.let { dev.chiller.tools.CombinedTools(listOf(own, it)) } ?: own
         val maxOutput = minOf(ModelProfiles.replyTokens(effectiveMaxOutput(options, modelProfile.maxOutputTokens), s.settings.thinking),
             s.catalog.models.firstOrNull { it.id == (modelOverride ?: s.settings.model) }?.maxOutputTokens?.takeIf { it > 0 } ?: Int.MAX_VALUE)
         _state.update { it.copy(activeProfile = modelProfile.id) }
@@ -1460,6 +1478,23 @@ class DesktopController(
         null
     }
 
+    /** Saves the MCP servers and starts, stops or restarts what changed. Returns why the list was refused, or null. */
+    suspend fun saveMcpServers(servers: List<dev.chiller.tools.McpServerConfig>): String? = commands.withLock {
+        val clean = servers.map { it.copy(name = it.name.trim(), command = it.command.trim(), args = it.args.map(String::trim).filter(String::isNotEmpty)) }
+        when {
+            clean.size > MAX_MCP_SERVERS -> return@withLock "Не больше $MAX_MCP_SERVERS серверов"
+            clean.any { it.name.isEmpty() || it.command.isEmpty() } -> return@withLock "У сервера нужны название и команда"
+            clean.map { it.id }.toSet().size != clean.size -> return@withLock "Названия серверов должны различаться"
+            clean.any { server -> server.env.keys.any { !isVariableName(it) } } -> return@withLock "Имена переменных окружения: заглавные латинские буквы, цифры и _"
+        }
+        val settings = _state.value.settings.copy(mcpServers = clean)
+        _state.update { it.copy(settings = settings) }
+        saveSettings(settings)
+        mcp.configure(clean)
+        engines.values.forEach { it.stale = true }
+        null
+    }
+
     /** Removes [path] from the project lists; the folder and its dialogs stay. */
     suspend fun removeRecentWorkspace(path: String) = commands.withLock {
         val settings = _state.value.settings.let { it.copy(recentWorkspaces = it.recentWorkspaces - path, pinnedWorkspaces = it.pinnedWorkspaces - path, hiddenWorkspaces = (it.hiddenWorkspaces + path).distinct()) }
@@ -1553,7 +1588,7 @@ class DesktopController(
         }
         pendingCheck?.cancelAndJoin()
         synchronized(catalogLifecycleLock) { catalogRevision.incrementAndGet(); catalogJob?.cancel(); catalogJob = null }
-        engines.values.toList().forEach { dispose(it) }; (checker as? AutoCloseable)?.close(); http.close(); credentials.clear(); scope.cancel()
+        engines.values.toList().forEach { dispose(it) }; mcp.close(); (checker as? AutoCloseable)?.close(); http.close(); credentials.clear(); scope.cancel()
     }
 
     private fun localizeConnectionMessage(message: String): String = when {
@@ -1578,6 +1613,7 @@ class DesktopController(
         const val MAX_PARALLEL_RUNS = 3
         const val MAX_MODEL_LENGTH = 200
         const val MAX_NOTICES = 4
+        const val MAX_MCP_SERVERS = 16
         const val MAX_RECENT_WORKSPACES = 24
     }
 }

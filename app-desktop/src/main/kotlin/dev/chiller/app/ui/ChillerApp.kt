@@ -418,7 +418,7 @@ fun ChillerApp(
                                 removeRecent = base.removeRecent, openPath = base.openPath, openUrl = base.openUrl, deleteDemos = base.deleteDemos,
                                 saveCredential = base.saveCredential, deleteCredential = base.deleteCredential,
                                 saveCustomProvider = base.saveCustomProvider, deleteCustomProvider = base.deleteCustomProvider, costBudget = base.costBudget,
-                                refreshCaptureTargets = base.refreshCaptureTargets, selectCaptureTarget = base.selectCaptureTarget,
+                                refreshCaptureTargets = base.refreshCaptureTargets, selectCaptureTarget = base.selectCaptureTarget, saveMcpServers = base.saveMcpServers,
                                 openComparison = comparison?.let { { settings = false; comparing = true } },
                                 setVerifyCommand = base.setVerifyCommand,
                                 close = { settings = false },
