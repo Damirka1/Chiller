@@ -150,6 +150,8 @@ internal fun Conversation(state: RunState, reduced: Boolean, onAnswer: (String) 
                 item(key = key) {
                     val previous = projection.entries.getOrNull(position - 1)?.message?.role
                     Column(entryModifier(key).widthIn(max = 760.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        // Each step's reasoning sits before what it led to: the reply text and the step's tools.
+                        entry.message.reasoning?.takeIf { entry.message.role == "assistant" && it.isNotBlank() }?.let { ReasoningStep(it, live = false, reduced = reduced) }
                         if (!entry.message.content.isNullOrBlank() || entry.message.attachments.isNotEmpty()) Message(entry.message, showHeader = !(entry.message.role == "assistant" && previous == "assistant"),
                             onPreviewFile = onPreviewFile,
                             onEdit = if (canUndo) ({ _ -> onEdit(entry.index, entry.message.content.orEmpty()) }) else null,
@@ -159,6 +161,11 @@ internal fun Conversation(state: RunState, reduced: Boolean, onAnswer: (String) 
                         ToolGroup(entry.activities, reduced, onUndo, canUndo, onPreviewFile, onRevealFile)
                     }
                 }
+            }
+            // The step being thought right now; once the step ends, its reasoning moves into that step's message.
+            val thinking = state.reasoning.isNotBlank() && state.messages.lastOrNull()?.reasoning != state.reasoning && state.status in setOf("preparing", "streaming")
+            if (thinking) item(key = "reasoning-live") {
+                Box(entryModifier("reasoning-live").widthIn(max = 760.dp).fillMaxWidth()) { ReasoningStep(state.reasoning, live = true, reduced = reduced) }
             }
             // The streamed reply takes the key of the message it becomes, so completion does not flash.
             if (state.streamingText.isNotBlank()) item(key = "message-${state.messages.size}") {
@@ -173,22 +180,15 @@ internal fun Conversation(state: RunState, reduced: Boolean, onAnswer: (String) 
                     projection.unlinked.forEach { ToolRow(it, reduced, onUndo, canUndo, onPreviewFile = onPreviewFile, onRevealFile = onRevealFile) }
                 }
             }
-            if (state.reasoning.isNotBlank()) item(key = "reasoning") {
-                var open by remember { mutableStateOf(false) }
-                Column(entryModifier("reasoning")) {
-                    ChillerControl(if (open) "Скрыть рассуждения" else "Рассуждения модели", { open = !open }, icon = Icons.Outlined.Psychology)
-                    AnimatedVisibility(open, enter = if (reduced) EnterTransition.None else expandVertically(tween(180)) + fadeIn(tween(160)), exit = if (reduced) ExitTransition.None else shrinkVertically(tween(150)) + fadeOut(tween(100))) {
-                        Text(state.reasoning, color = c.muted, fontSize = 12.sp, lineHeight = 20.sp, modifier = Modifier.padding(start = 34.dp, top = 6.dp, end = 10.dp))
-                    }
-                }
-            }
             // The model's checklist for this turn, kept under the latest messages and updated live.
             currentTurnPlan(state.messages)?.takeUnless {
                 state.status in setOf("completed", "failed", "cancelled", "interrupted") && !turnResult(state, undoneChanges).isEmpty
             }?.let { steps ->
                 item(key = "turn-plan") { PlanChecklist(steps, running = state.status in setOf("preparing", "streaming", "executing"), modifier = entryModifier("turn-plan")) }
             }
-            if (state.status in setOf("preparing", "streaming", "executing")) item(key = "run-status") {
+            // The live reasoning row already shows that the model is working; a retry notice still gets its line.
+            val statusShownByThinking = thinking && state.streamingText.isBlank() && state.recoveryNotice == null && state.question == null && state.approval == null
+            if (state.status in setOf("preparing", "streaming", "executing") && !statusShownByThinking) item(key = "run-status") {
                 val label = runProgressLabel(state).orEmpty()
                 Row(entryModifier("run-status").padding(start = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                     val waiting = state.question != null || state.approval != null

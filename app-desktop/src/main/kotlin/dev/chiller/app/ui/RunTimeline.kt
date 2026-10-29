@@ -36,6 +36,7 @@ import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -200,6 +201,45 @@ internal fun ToolRow(activity: Activity, reduced: Boolean, onUndo: (String) -> U
                 if (id != null) Box(Modifier.fillMaxWidth().padding(5.dp), contentAlignment = Alignment.CenterEnd) {
                     ChillerControl("Отменить правку", { onUndo(id) }, icon = Icons.AutoMirrored.Outlined.Undo)
                 }
+            }
+        }
+    }
+}
+
+/**
+ * One step's reasoning, shaped like a tool row: collapsed it shows one line (the opening thought, or the newest one while
+ * the model is still thinking); opened, the full text in a bounded box that scrolls on its own.
+ */
+@Composable
+internal fun ReasoningStep(text: String, live: Boolean, reduced: Boolean, initiallyOpen: Boolean = false) {
+    val c = LocalChillerPalette.current
+    var open by remember { mutableStateOf(initiallyOpen) }
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    val shape = RoundedCornerShape(8.dp)
+    val lines = text.lineSequence().map { it.trim().trimStart('#', '*', '-', ' ') }.filter { it.isNotBlank() }
+    val preview = (if (live) lines.lastOrNull() else lines.firstOrNull()).orEmpty()
+    Column(Modifier.fillMaxWidth().clip(shape).border(1.dp, c.border, shape)) {
+        Row(
+            Modifier.fillMaxWidth().background(if (hovered) c.hover.copy(alpha = .5f) else Color.Transparent).hoverable(interaction).pointerHoverIcon(PointerIcon.Hand)
+                .clickable(interactionSource = interaction, indication = null, role = Role.Button, onClickLabel = if (open) "Свернуть рассуждение" else "Показать рассуждение") { open = !open }
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(Modifier.size(16.dp), contentAlignment = Alignment.Center) {
+                if (live) Pulse(c.accent) else Icon(Icons.Outlined.Psychology, null, Modifier.size(15.dp), tint = c.muted)
+            }
+            Spacer(Modifier.width(9.dp))
+            Text(if (live) "Думает" else "Рассуждение", color = c.muted, fontSize = 12.sp, lineHeight = 18.sp)
+            Spacer(Modifier.width(8.dp))
+            Text(if (open) "" else preview, color = c.faint, fontSize = 12.sp, lineHeight = 18.sp, fontStyle = FontStyle.Italic, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+            Spacer(Modifier.width(8.dp))
+            Icon(if (open) Icons.Outlined.KeyboardArrowUp else Icons.Outlined.KeyboardArrowDown, null, Modifier.size(15.dp), tint = c.faint)
+        }
+        AnimatedVisibility(open, enter = if (reduced) EnterTransition.None else expandVertically(tween(180)) + fadeIn(tween(120)), exit = if (reduced) ExitTransition.None else shrinkVertically(tween(160)) + fadeOut(tween(100))) {
+            SelectionContainer {
+                Text(text.trim(), color = c.muted, fontSize = 12.sp, lineHeight = 19.sp,
+                    modifier = Modifier.fillMaxWidth().background(c.sidebar.copy(alpha = .5f)).heightIn(max = 320.dp).verticalScroll(rememberScrollState()).padding(horizontal = 14.dp, vertical = 10.dp))
             }
         }
     }

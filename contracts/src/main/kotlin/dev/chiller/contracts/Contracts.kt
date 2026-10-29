@@ -28,6 +28,8 @@ data class AgentMessage(
     val replay: JsonObject = JsonObject(emptyMap()),
     val origin: MessageOrigin? = null,
     val attachments: List<ComposerAttachment> = emptyList(),
+    /** What the model reasoned before this reply, kept for the user to read; providers never send it back. */
+    val reasoning: String? = null,
 )
 
 @Serializable

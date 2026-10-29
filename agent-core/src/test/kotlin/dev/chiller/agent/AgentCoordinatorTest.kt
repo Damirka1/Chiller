@@ -32,6 +32,29 @@ class AgentCoordinatorTest {
         }
     }
 
+    @Test fun eachStepKeepsItsOwnReasoningInTheJournal() = runTest {
+        val tools = RecordingTools()
+        val requests = mutableListOf<ModelRequest>()
+        val provider = ScriptedProvider { request -> flow {
+            requests += request
+            if (requests.size == 1) {
+                emit(ModelEvent.ReasoningDelta("Need to read the file first."))
+                emit(ModelEvent.Completed(AgentMessage("assistant", null, listOf(ToolCall("r1", "read", "{}"))), "tool_calls"))
+            } else {
+                emit(ModelEvent.ReasoningDelta("The file is fine; answer."))
+                emit(ModelEvent.Completed(AgentMessage("assistant", "All good."), "stop"))
+            }
+        } }
+        val events = MemoryEvents()
+        val fixture = fixture(provider, tools, eventStore = events, dispatcher = StandardTestDispatcher(testScheduler))
+        fixture.coordinator.send("check", ExecutionMode.WORKSPACE_EDIT)
+        advanceUntilIdle()
+        val replies = fixture.coordinator.state.value.messages.filter { it.role == "assistant" }
+        assertEquals(listOf("Need to read the file first.", "The file is fine; answer."), replies.map { it.reasoning })
+        assertEquals(listOf("Need to read the file first.", "The file is fine; answer."),
+            events.records.filter { it.type == "message" && it.payload["role"]?.jsonPrimitive?.content == "assistant" }.map { it.payload["reasoning"]?.jsonPrimitive?.content })
+    }
+
     @Test fun incompleteModelStreamNeverExecutesToolCalls() = runTest {
         val tools = RecordingTools()
         val provider = ScriptedProvider { _ -> flow {

@@ -317,6 +317,8 @@ class AgentCoordinator(
     /** Calls waiting for the user's approval right now; nothing of theirs has run. */
     private val awaitingApproval: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
 
+    private fun roundReasoning(): String? = _state.value.reasoning.takeIf { it.isNotBlank() }
+
     private suspend fun appendMessage(message: AgentMessage) {
         events.append(sessionId, "message", json.encodeToJsonElement(message).jsonObject)
         _state.update { it.copy(messages = it.messages + message) }
@@ -501,7 +503,7 @@ class AgentCoordinator(
                 events.append(sessionId, "run.truncated", buildJsonObject {
                     put("runId", id); put("round", round + 1); put("kind", if (truncatedCall) "tool_call" else if (exhaustedThinking) "reasoning" else "text"); put("maxOutputTokens", reserve)
                 })
-                if (truncatedText && !exhaustedThinking) completion?.let { partial -> appendMessage(partial.copy(origin = MessageOrigin(MessageOriginKind.MODEL, model))) }
+                if (truncatedText && !exhaustedThinking) completion?.let { partial -> appendMessage(partial.copy(origin = MessageOrigin(MessageOriginKind.MODEL, model), reasoning = roundReasoning())) }
                 thinkingPaused = exhaustedThinking
                 truncationNotice = AgentMessage("user", when {
                     truncatedCall -> truncatedCallNotice(reserve, enabled.map { it.name }.toSet(), again = truncations > 1)
@@ -525,7 +527,8 @@ class AgentCoordinator(
             truncations = 0
             _state.update { it.copy(recoveryNotice = null) }
             val response = completion ?: throw IllegalStateException("Stream interrupted before completion; no tool was executed")
-            appendMessage(response.copy(origin = MessageOrigin(MessageOriginKind.MODEL, model)))
+            // Each step keeps its own reasoning, so the dialog shows it next to that step's reply and tools.
+            appendMessage(response.copy(origin = MessageOrigin(MessageOriginKind.MODEL, model), reasoning = roundReasoning()))
             _state.update { it.copy(streamingText = "") }
             if (response.toolCalls.isEmpty()) {
                 val open = openPlanSteps(_state.value.messages)
