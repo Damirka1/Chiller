@@ -278,7 +278,7 @@ private fun ConnectionSection(data: SettingsData, actions: SettingsActions) {
         val otherChanges = url.trimEnd('/') != data.baseUrl || thinking != data.thinking || key.isNotEmpty() || customChanged
         if (connected) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Модель · " + catalogLine(data.catalog, data.keyConfigured), color = c.text, fontSize = 13.sp, modifier = Modifier.weight(1f))
+                Text("Модель · " + catalogLine(data.catalog, data.keyConfigured, strings.composer), color = c.text, fontSize = 13.sp, modifier = Modifier.weight(1f))
                 ChillerControl("Обновить список", actions.refreshModels, icon = Icons.Outlined.Refresh, enabled = data.catalog.status != "loading")
             }
             if (listed.isNotEmpty()) ChipFlow(listed.map { it.id }.take(24), model, listed.associate { it.id to (it.displayName?.let { name -> "$name · ${it.id}" } ?: it.id) }) { picked ->

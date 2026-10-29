@@ -1,5 +1,6 @@
 package dev.chiller.app.ui
 
+import dev.chiller.app.i18n.*
 import androidx.compose.animation.*
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -176,7 +177,7 @@ internal fun Conversation(state: RunState, reduced: Boolean, onAnswer: (String) 
             }
             if (projection.unlinked.isNotEmpty()) item(key = "unlinked-activities") {
                 Column(entryModifier("unlinked-activities"), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Действия сессии", color = c.muted, fontSize = 12.sp)
+                    Text(strings.conversation.sessionActions, color = c.muted, fontSize = 12.sp)
                     projection.unlinked.forEach { ToolRow(it, reduced, onUndo, canUndo, onPreviewFile = onPreviewFile, onRevealFile = onRevealFile) }
                 }
             }
@@ -194,7 +195,7 @@ internal fun Conversation(state: RunState, reduced: Boolean, onAnswer: (String) 
                     val waiting = state.question != null || state.approval != null
                     if (!waiting) Pulse(c.accent) else Icon(if (state.approval != null) Icons.Outlined.FactCheck else Icons.Outlined.Chat, null, Modifier.size(15.dp), tint = c.accent)
                     Spacer(Modifier.width(10.dp))
-                    if (!waiting) ShimmerText(label, reduced) else Text(if (state.approval != null) "Ждёт подтверждения правки" else label, color = c.accent, fontSize = 12.sp)
+                    if (!waiting) ShimmerText(label, reduced) else Text(if (state.approval != null) strings.conversation.waitingApproval else label, color = c.accent, fontSize = 12.sp)
                 }
             }
             // A turn that did something ends with a card of facts; a plain answer keeps the short status line.
@@ -218,15 +219,15 @@ internal fun Conversation(state: RunState, reduced: Boolean, onAnswer: (String) 
                 Text(runErrorDescription(error), color = c.negative, fontSize = 12.sp, lineHeight = 20.sp)
             }
                 if (isStepLimitError(error)) Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    ChillerControl("Продолжить", onContinue, icon = Icons.Outlined.PlayArrow, style = ControlStyle.OUTLINE)
-                    Text("Шагов не хватило: агент продолжит ту же задачу. Лимит меняется в Настройки → Агент.", color = c.faint, fontSize = 11.sp, lineHeight = 16.sp, modifier = Modifier.align(Alignment.CenterVertically))
+                    ChillerControl(strings.conversation.continueRun, onContinue, icon = Icons.Outlined.PlayArrow, style = ControlStyle.OUTLINE)
+                    Text(strings.conversation.stepsRanOut, color = c.faint, fontSize = 11.sp, lineHeight = 16.sp, modifier = Modifier.align(Alignment.CenterVertically))
                 }
-                else state.messages.lastOrNull { it.role == "user" }?.content?.let { text -> ChillerControl("Вернуть текст в поле", { onRestoreDraft(text) }) }
+                else state.messages.lastOrNull { it.role == "user" }?.content?.let { text -> ChillerControl(strings.conversation.restoreDraft, { onRestoreDraft(text) }) }
             } } }
             if (!canUndo && needsRecovery(state)) item(key = "recover-interrupted") {
                 Column(entryModifier("recover-interrupted").padding(start = 34.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                    Text("Неизвестные действия не повторяются; агент сначала проверит состояние.", color = c.muted, fontSize = 11.sp, lineHeight = 16.sp)
-                    ChillerControl("Проверить и продолжить", onRecoverInterrupted, icon = Icons.Outlined.Refresh, style = ControlStyle.OUTLINE)
+                    Text(strings.conversation.unknownNotRepeated, color = c.muted, fontSize = 11.sp, lineHeight = 16.sp)
+                    ChillerControl(strings.conversation.checkAndContinue, onRecoverInterrupted, icon = Icons.Outlined.Refresh, style = ControlStyle.OUTLINE)
                 }
             }
             item(key = "tail") { Spacer(Modifier.height(2.dp)) }
@@ -235,7 +236,7 @@ internal fun Conversation(state: RunState, reduced: Boolean, onAnswer: (String) 
             enter = if (reduced) EnterTransition.None else fadeIn(tween(150)) + slideInVertically(tween(180)) { it / 2 },
             exit = if (reduced) ExitTransition.None else fadeOut(tween(120)) + slideOutVertically(tween(150)) { it / 2 }) {
             Box(Modifier.shadow(8.dp, CircleShape).clip(CircleShape).background(c.surface).border(1.dp, c.border, CircleShape)) {
-                ChillerIconButton(Icons.Outlined.ArrowDownward, "К последнему сообщению", {
+                ChillerIconButton(Icons.Outlined.ArrowDownward, strings.conversation.toLatest, {
                     follow = true
                     scope.launch { autoScrolling = true; try { scroll.animateScrollToItem((scroll.layoutInfo.totalItemsCount - 1).coerceAtLeast(0)) } finally { autoScrolling = false } }
                 })
@@ -290,12 +291,12 @@ internal fun Message(message: AgentMessage, showHeader: Boolean = true, streamin
                     if (onRewind != null && rewindCount > 0) {
                         var confirm by remember(rewindCount) { mutableStateOf(false) }
                         LaunchedEffect(confirm) { if (confirm) { kotlinx.coroutines.delay(4000); confirm = false } }
-                        if (confirm) ChillerControl("Откатить $rewindCount ${plural(rewindCount, "правку", "правки", "правок")}?", { confirm = false; onRewind() }, icon = Icons.Outlined.History, style = ControlStyle.OUTLINE)
-                        else ChillerIconButton(Icons.Outlined.History, "Откатить изменения файлов этого хода", { confirm = true }, Modifier.size(26.dp))
+                        if (confirm) ChillerControl(strings.conversation.rewindConfirm(rewindCount), { confirm = false; onRewind() }, icon = Icons.Outlined.History, style = ControlStyle.OUTLINE)
+                        else ChillerIconButton(Icons.Outlined.History, strings.conversation.rewindTurn, { confirm = true }, Modifier.size(26.dp))
                     }
-                    onEdit?.let { ChillerIconButton(Icons.Outlined.Edit, "Изменить сообщение", { it(content) }, Modifier.size(26.dp)) }
-                    onDelete?.let { ChillerIconButton(Icons.Outlined.DeleteOutline, "Удалить ход диалога", { it(content) }, Modifier.size(26.dp)) }
-                    ChillerIconButton(Icons.Outlined.ContentCopy, "Копировать", { clipboard.setText(AnnotatedString(content)) }, Modifier.size(26.dp))
+                    onEdit?.let { ChillerIconButton(Icons.Outlined.Edit, strings.conversation.editMessage, { it(content) }, Modifier.size(26.dp)) }
+                    onDelete?.let { ChillerIconButton(Icons.Outlined.DeleteOutline, strings.conversation.deleteTurn, { it(content) }, Modifier.size(26.dp)) }
+                    ChillerIconButton(Icons.Outlined.ContentCopy, strings.conversation.copy, { clipboard.setText(AnnotatedString(content)) }, Modifier.size(26.dp))
                 }
             }
             Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -343,9 +344,9 @@ internal fun Message(message: AgentMessage, showHeader: Boolean = true, streamin
                     val pill = RoundedCornerShape(8.dp)
                     Row(Modifier.shadow(6.dp, pill, ambientColor = androidx.compose.ui.graphics.Color.Black.copy(alpha = .08f), spotColor = androidx.compose.ui.graphics.Color.Black.copy(alpha = .12f))
                         .clip(pill).background(c.surface).border(1.dp, c.border, pill).padding(2.dp)) {
-                        ChillerIconButton(if (copied) Icons.Outlined.Check else Icons.Outlined.ContentCopy, if (copied) "Скопировано" else "Копировать ответ", { clipboard.setText(AnnotatedString(content)); copied = true }, Modifier.size(26.dp))
-                        if (onEdit != null) ChillerIconButton(Icons.Outlined.Edit, "Изменить сообщение", { onEdit.invoke(content) }, Modifier.size(26.dp))
-                        if (onDelete != null) ChillerIconButton(Icons.Outlined.DeleteOutline, "Удалить ход диалога", { onDelete.invoke(content) }, Modifier.size(26.dp))
+                        ChillerIconButton(if (copied) Icons.Outlined.Check else Icons.Outlined.ContentCopy, if (copied) strings.conversation.copied else strings.conversation.copyReply, { clipboard.setText(AnnotatedString(content)); copied = true }, Modifier.size(26.dp))
+                        if (onEdit != null) ChillerIconButton(Icons.Outlined.Edit, strings.conversation.editMessage, { onEdit.invoke(content) }, Modifier.size(26.dp))
+                        if (onDelete != null) ChillerIconButton(Icons.Outlined.DeleteOutline, strings.conversation.deleteTurn, { onDelete.invoke(content) }, Modifier.size(26.dp))
                     }
                 }
             }
@@ -375,10 +376,10 @@ internal fun CodeBlock(code: String, language: String) {
     val shape = RoundedCornerShape(10.dp)
     Column(Modifier.fillMaxWidth().clip(shape).border(1.dp, c.border, shape).background(c.sidebar)) {
         Row(Modifier.fillMaxWidth().padding(start = 12.dp, end = 4.dp, top = 2.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(language.ifBlank { "код" }, color = c.faint, fontSize = 11.sp, fontFamily = ChillerFonts.mono)
+            Text(language.ifBlank { strings.conversation.code }, color = c.faint, fontSize = 11.sp, fontFamily = ChillerFonts.mono)
             Spacer(Modifier.weight(1f))
-            if (copied) Text("Скопировано", color = c.muted, fontSize = 11.sp, modifier = Modifier.padding(end = 2.dp))
-            ChillerIconButton(if (copied) Icons.Outlined.Check else Icons.Outlined.ContentCopy, "Копировать код", { clipboard.setText(AnnotatedString(code)); copied = true }, Modifier.size(26.dp))
+            if (copied) Text(strings.conversation.copied, color = c.muted, fontSize = 11.sp, modifier = Modifier.padding(end = 2.dp))
+            ChillerIconButton(if (copied) Icons.Outlined.Check else Icons.Outlined.ContentCopy, strings.conversation.copyCode, { clipboard.setText(AnnotatedString(code)); copied = true }, Modifier.size(26.dp))
         }
         Text(code, color = c.text, fontFamily = ChillerFonts.mono, fontSize = 12.5.sp, lineHeight = 20.sp,
             modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(start = 12.dp, end = 12.dp, bottom = 12.dp))
@@ -393,11 +394,11 @@ internal fun Question(question: UserQuestion, onAnswer: (String) -> Unit, canAns
         Text(question.question, color = c.text, fontSize = 13.sp, lineHeight = 21.sp)
         if (canAnswer) {
         question.options.forEach { ChillerControl(it, { onAnswer(it) }, icon = Icons.AutoMirrored.Outlined.ArrowForward, style = ControlStyle.OUTLINE) }
-        ChillerField(answer, { answer = it }, "Ваш ответ")
-        ChillerControl("Продолжить", { if (answer.isNotBlank()) onAnswer(answer) }, style = ControlStyle.PRIMARY, enabled = answer.isNotBlank())
+        ChillerField(answer, { answer = it }, strings.conversation.yourAnswer)
+        ChillerControl(strings.conversation.continueRun, { if (answer.isNotBlank()) onAnswer(answer) }, style = ControlStyle.PRIMARY, enabled = answer.isNotBlank())
         } else {
             question.options.forEach { Text("• $it", color = c.muted, fontSize = 12.sp) }
-            Text("Вопрос сохранён после прерывания. Проверьте историю и начните новый диалог; прежняя операция не будет запущена повторно.", color = c.muted, fontSize = 12.sp)
+            Text(strings.conversation.questionAfterInterrupt, color = c.muted, fontSize = 12.sp)
         }
     }
 }

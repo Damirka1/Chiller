@@ -57,7 +57,7 @@ class RunTimelineTest {
         val prompt = promptWithAttachments(" inspect ", listOf(ComposerAttachment("att-1", "a.png", "image/png", 42)))
         assertTrue(prompt.startsWith("inspect"))
         assertTrue(prompt.contains("artifact_id=att-1"))
-        assertTrue(prompt.contains("содержимое изображения не передано"))
+        assertTrue(prompt.contains("the image content was not sent"))
     }
 
     @Test fun `presented files are independent of group expansion and exclude failed operations`() {

@@ -27,6 +27,8 @@ interface Strings {
     val common: CommonStrings
     val sidebar: SidebarStrings
     val projects: ProjectStrings
+    val composer: ComposerStrings
+    val conversation: ConversationStrings
     // groups
 }
 
@@ -163,6 +165,91 @@ interface ProjectStrings {
     fun deleteCopyConfirmChanges(branch: String): String
     val deleteCopy: String
     // end projects
+}
+
+interface ComposerStrings {
+    val sendingAttachLater: String
+    val attachFailed: String
+    val tooManyAttachments: String
+    val addFiles: String
+    val clipboardFailed: String
+    val clipboardUnsupported: String
+    fun imageScaled(width: Int, height: Int): String
+    val placeholderWithFiles: String
+    val placeholder: String
+    val addingAttachment: String
+    val visionOn: String
+    val visionOff: String
+    fun preparing(label: String): String
+    fun remove(name: String): String
+    val conversation: String
+    val conversationHint: String
+    val chooseFolder: String
+    val chooseFolderHint: String
+    val plan: String
+    val planHint: String
+    val changes: String
+    val changesHint: String
+    val processCommands: String
+    val processCommandsHint: String
+    val confirmEdits: String
+    val confirmEditsHint: String
+    val modeShortcutHint: String
+    val chooseModel: String
+    val savingMessage: String
+    val stop: String
+    val addingAttachmentA11y: String
+    val send: String
+    val webSearch: String
+    val webSearchHint: String
+    val modelSearchA11y: String
+    val findModel: String
+    val cancelListLoad: String
+    val refreshModels: String
+    val manual: String
+    fun nothingFoundModel(query: String): String
+    val noModelsFromProvider: String
+    val otherProviders: String
+    val connectAndPickFirst: String
+    val connectionSettings: String
+    val switchNote: String
+    val catalogLoading: String
+    val catalogFailed: String
+    val catalogEmpty: String
+    fun catalogCount(n: Int): String
+    fun catalogStale(line: String): String
+    val catalogNotLoaded: String
+    val noApiKey: String
+    fun contextWindow(tokens: String): String
+    fun outputLimit(tokens: String): String
+    val noFolderChosen: String
+    val mentionHint: String
+    fun contextA11y(estimated: Boolean, tokens: Int, window: Int?): String
+    val tokensShort: String
+    // end composer
+}
+
+interface ConversationStrings {
+    val sessionActions: String
+    val waitingApproval: String
+    val continueRun: String
+    val stepsRanOut: String
+    val restoreDraft: String
+    val unknownNotRepeated: String
+    val checkAndContinue: String
+    val toLatest: String
+    fun rewindConfirm(n: Int): String
+    val rewindTurn: String
+    val editMessage: String
+    val deleteTurn: String
+    val copy: String
+    val copied: String
+    val copyReply: String
+    val code: String
+    val copyCode: String
+    val yourAnswer: String
+    val questionAfterInterrupt: String
+    // end conversation
 }
 
 // interfaces
