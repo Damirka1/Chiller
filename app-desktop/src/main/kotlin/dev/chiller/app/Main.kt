@@ -62,8 +62,8 @@ private fun chillerApplication() = application {
         icon = androidx.compose.ui.res.painterResource("chiller-icon.png"), state = trayState, tooltip = "Chiller",
         onAction = { raise.tryEmit(lastNotice) },
         menu = {
-            Item("Открыть Chiller") { raise.tryEmit(null) }
-            Item("Выход") { scope.launch { controller.close(); exitApplication() } }
+            Item(strings.app.openChiller) { raise.tryEmit(null) }
+            Item(strings.app.quit) { scope.launch { controller.close(); exitApplication() } }
         },
     )
     val windowState = rememberWindowState(
@@ -152,30 +152,30 @@ private fun chillerApplication() = application {
             Unit
         }
         val menu = listOf(
-            AppMenuSection("Файл", listOf(
+            AppMenuSection(strings.app.menuFile, listOf(
                 listOf(
                     // A running dialog goes on in the background, so these stay available.
-                    AppMenuItem("Новый диалог", Key.N, "N") { actions.tryEmit(DesktopAction.NEW_CHAT) },
-                    AppMenuItem("Открыть проект…", Key.O, "O", onClick = chooseWorkspace),
-                    AppMenuItem("Закрыть проект", enabled = state.settings.workspace != null) { scope.launch { controller.closeWorkspace() } },
+                    AppMenuItem(strings.app.menuNewDialog, Key.N, "N") { actions.tryEmit(DesktopAction.NEW_CHAT) },
+                    AppMenuItem(strings.app.menuOpenProject, Key.O, "O", onClick = chooseWorkspace),
+                    AppMenuItem(strings.app.menuCloseProject, enabled = state.settings.workspace != null) { scope.launch { controller.closeWorkspace() } },
                 ),
                 listOf(
-                    AppMenuItem("Экспорт Markdown…", enabled = !active && state.run.messages.isNotEmpty()) { scope.launch { controller.prepareExport("markdown") } },
-                    AppMenuItem("Экспорт JSON…", enabled = !active && state.run.messages.isNotEmpty()) { scope.launch { controller.prepareExport("json") } },
+                    AppMenuItem(strings.app.menuExportMarkdown, enabled = !active && state.run.messages.isNotEmpty()) { scope.launch { controller.prepareExport("markdown") } },
+                    AppMenuItem(strings.app.menuExportJson, enabled = !active && state.run.messages.isNotEmpty()) { scope.launch { controller.prepareExport("json") } },
                 ),
-                listOf(AppMenuItem("Настройки…", Key.Comma, ",", enabled = !active) { actions.tryEmit(DesktopAction.SETTINGS) }),
+                listOf(AppMenuItem(strings.app.menuSettings, Key.Comma, ",", enabled = !active) { actions.tryEmit(DesktopAction.SETTINGS) }),
             )),
-            AppMenuSection("Диалог", listOf(listOf(
-                AppMenuItem("Отправить", Key.Enter, "↵", enabled = !active) { actions.tryEmit(DesktopAction.SEND) },
-                AppMenuItem("Остановить", Key.Period, ".", enabled = active) { actions.tryEmit(DesktopAction.STOP) },
+            AppMenuSection(strings.app.menuDialog, listOf(listOf(
+                AppMenuItem(strings.app.menuSend, Key.Enter, "↵", enabled = !active) { actions.tryEmit(DesktopAction.SEND) },
+                AppMenuItem(strings.app.menuStop, Key.Period, ".", enabled = active) { actions.tryEmit(DesktopAction.STOP) },
             ))),
-            AppMenuSection("Вид", listOf(listOf(
+            AppMenuSection(strings.app.menuView, listOf(listOf(
                 AppMenuItem("Focus") { actions.tryEmit(DesktopAction.FOCUS) },
                 AppMenuItem("Studio") { actions.tryEmit(DesktopAction.STUDIO) },
-                AppMenuItem("Боковая панель") { actions.tryEmit(DesktopAction.SIDEBAR) },
+                AppMenuItem(strings.app.menuSidebar) { actions.tryEmit(DesktopAction.SIDEBAR) },
             ))),
-            AppMenuSection("Инструменты", listOf(listOf(AppMenuItem("Сравнение моделей", enabled = !active) { actions.tryEmit(DesktopAction.COMPARE) }))),
-            AppMenuSection("Справка", listOf(listOf(AppMenuItem("Демо: все инструменты", enabled = !active) { scope.launch { controller.startDemo() } }))),
+            AppMenuSection(strings.app.menuTools, listOf(listOf(AppMenuItem(strings.app.menuCompare, enabled = !active) { actions.tryEmit(DesktopAction.COMPARE) }))),
+            AppMenuSection(strings.app.menuHelp, listOf(listOf(AppMenuItem(strings.app.menuDemo, enabled = !active) { scope.launch { controller.startDemo() } }))),
         )
         // Windows on the JetBrains Runtime: the app draws its own title bar under the native caption buttons, and the menu
         // moves into the toolbar. Anywhere else the system frame and menu bar stay.
@@ -315,7 +315,7 @@ private fun chillerApplication() = application {
             onDismissExport = controller::dismissExport,
             onSaveExport = {
                 val extension = if (state.exportFormat == "json") "json" else "md"
-                val picker = FileDialog(window, "Сохранить экспорт", FileDialog.SAVE)
+                val picker = FileDialog(window, I18n.current.app.saveExport, FileDialog.SAVE)
                 picker.file = "chiller-${(state.exportSessionId ?: state.sessionId).take(8)}.$extension"
                 picker.isVisible = true
                 val path = picker.files.firstOrNull()?.toPath()
@@ -337,7 +337,7 @@ private fun chooseDirectory(owner: Frame, current: String?, mac: Boolean): Path?
     val previous = System.getProperty(key)
     return try {
         System.setProperty(key, "true")
-        val picker = FileDialog(owner, "Открыть проект", FileDialog.LOAD)
+        val picker = FileDialog(owner, I18n.current.app.openProject, FileDialog.LOAD)
         picker.directory = current ?: System.getProperty("user.home")
         picker.isVisible = true
         val result = picker.files.firstOrNull()?.toPath()

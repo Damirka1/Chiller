@@ -1,5 +1,6 @@
 package dev.chiller.app.ui
 
+import dev.chiller.app.i18n.*
 import dev.chiller.contracts.AgentMessage
 
 /**
@@ -12,12 +13,13 @@ fun continuationDraft(title: String, folder: String?, messages: List<AgentMessag
     val answer = messages.lastOrNull { it.role == "assistant" && !it.content.isNullOrBlank() }?.content?.trim()
     fun String.short(limit: Int) = replace(Regex("\\s+"), " ").let { if (it.length <= limit) it else it.take(limit - 1).trimEnd() + "…" }
     return buildString {
-        append("Продолжаем задачу из диалога «").append(title.short(80)).append("»")
-        folder?.let { append(" (папка ").append(folderName(it)).append(")") }
-        append(". Что было:\n")
-        requests.firstOrNull()?.let { append("- Запрос: ").append(it.short(300)).append('\n') }
-        requests.drop(1).takeLast(3).forEach { append("- Затем: ").append(it.short(200)).append('\n') }
-        answer?.let { append("- Итог: ").append(it.short(800)).append('\n') }
-        append("\nЧто сделать здесь: ")
+        val s = I18n.current.screens
+        append(s.draftIntro(title.short(80)))
+        folder?.let { append(s.draftFolder(folderName(it))) }
+        append(s.draftWhatWas)
+        requests.firstOrNull()?.let { append(s.draftRequest).append(it.short(300)).append('\n') }
+        requests.drop(1).takeLast(3).forEach { append(s.draftThen).append(it.short(200)).append('\n') }
+        answer?.let { append(s.draftResult).append(it.short(800)).append('\n') }
+        append(s.draftWhatHere)
     }
 }

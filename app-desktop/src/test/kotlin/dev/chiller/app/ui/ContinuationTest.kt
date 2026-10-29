@@ -6,6 +6,10 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 class ContinuationTest {
+    // Helpers read the global language; these checks are written against the Russian texts.
+    @kotlin.test.BeforeTest fun russian() { dev.chiller.app.i18n.I18n.current = dev.chiller.app.i18n.RuStrings }
+    @kotlin.test.AfterTest fun english() { dev.chiller.app.i18n.I18n.current = dev.chiller.app.i18n.EnStrings }
+
     @Test fun draftKeepsFirstAndLatestRequestsAndTheLastAnswer() {
         val messages = listOf(
             AgentMessage("user", "Добавь   экспорт\nв CSV"),

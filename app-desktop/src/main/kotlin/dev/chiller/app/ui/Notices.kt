@@ -1,5 +1,6 @@
 package dev.chiller.app.ui
 
+import dev.chiller.app.i18n.*
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.core.MutableTransitionState
@@ -75,7 +76,7 @@ private fun NoticeCard(notice: Notice, onOpen: () -> Unit, onDismiss: () -> Unit
                 .clip(shape).background(if (hovered) c.sidebar else c.surface).border(1.dp, c.border, shape)
                 .hoverable(interaction).pointerHoverIcon(PointerIcon.Hand)
                 .clickable(interactionSource = interaction, indication = null, role = Role.Button, onClick = onOpen)
-                .semantics { contentDescription = "${notice.title}: ${notice.message}. Открыть диалог" }
+                .semantics { contentDescription = I18n.current.screens.noticeA11y(notice.title, notice.message) }
                 .padding(start = 12.dp, end = 6.dp, top = 10.dp, bottom = 10.dp),
             verticalAlignment = Alignment.Top,
         ) {
@@ -87,7 +88,7 @@ private fun NoticeCard(notice: Notice, onOpen: () -> Unit, onDismiss: () -> Unit
                 Text(notice.title, color = c.text, fontSize = 13.sp, lineHeight = 18.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(notice.message, color = c.muted, fontSize = 12.sp, lineHeight = 17.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
-            ChillerIconButton(Icons.Outlined.Close, "Скрыть уведомление", onDismiss, Modifier.size(24.dp))
+            ChillerIconButton(Icons.Outlined.Close, strings.screens.hideNotice, onDismiss, Modifier.size(24.dp))
         }
     }
 }

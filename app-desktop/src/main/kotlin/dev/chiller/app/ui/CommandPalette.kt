@@ -1,5 +1,6 @@
 package dev.chiller.app.ui
 
+import dev.chiller.app.i18n.*
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
@@ -98,12 +99,12 @@ internal fun CommandPalette(commands: List<PaletteCommand>, onDismiss: () -> Uni
                 Spacer(Modifier.width(10.dp))
                 BasicTextField(query, { query = it }, singleLine = true,
                     textStyle = TextStyle(color = c.text, fontSize = 14.sp, lineHeight = 20.sp), cursorBrush = SolidColor(c.text),
-                    modifier = Modifier.weight(1f).focusRequester(focus).semantics { contentDescription = "Поиск команды" },
-                    decorationBox = { inner -> Box { if (query.isEmpty()) Text("Команда…", color = c.faint, fontSize = 14.sp, lineHeight = 20.sp); inner() } })
+                    modifier = Modifier.weight(1f).focusRequester(focus).semantics { contentDescription = I18n.current.screens.commandSearchA11y },
+                    decorationBox = { inner -> Box { if (query.isEmpty()) Text(strings.screens.commandPlaceholder, color = c.faint, fontSize = 14.sp, lineHeight = 20.sp); inner() } })
                 Text("Esc", color = c.faint, fontSize = 11.sp)
             }
             Box(Modifier.fillMaxWidth().height(1.dp).background(c.border))
-            if (matches.isEmpty()) Text("Нет команд с «${query.trim()}»", color = c.faint, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 18.dp, vertical = 14.dp))
+            if (matches.isEmpty()) Text(strings.screens.noCommands(query.trim()), color = c.faint, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 18.dp, vertical = 14.dp))
             LazyColumn(Modifier.heightIn(max = 400.dp).padding(vertical = 6.dp), state = list) {
                 itemsIndexed(matches, key = { _, command -> command.group + "/" + command.title }) { index, command ->
                     SwitcherRow(index == highlight, { run(index) }, { highlight = index }) {
@@ -116,7 +117,7 @@ internal fun CommandPalette(commands: List<PaletteCommand>, onDismiss: () -> Uni
                 }
             }
             Box(Modifier.fillMaxWidth().height(1.dp).background(c.border))
-            Text("↑↓ — выбрать · Enter — выполнить · Ctrl+P — к проекту", color = c.faint, fontSize = 11.sp, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+            Text(strings.screens.paletteHint, color = c.faint, fontSize = 11.sp, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
         }
     }
 }

@@ -180,7 +180,7 @@ fun ChillerApp(
     onImportImageAttachment: suspend (String, ByteArray) -> ComposerAttachment? = { _, _ -> null },
     onSendWithAttachments: (suspend (String, ExecutionMode, String, List<ComposerAttachment>) -> SendReceipt)? = null,
     onDeleteMessage: suspend (Int) -> Boolean = { false },
-    onEditMessage: suspend (Int, String, ExecutionMode) -> SendReceipt = { _, _, _ -> SendReceipt(false, "", "", "Редактирование недоступно") },
+    onEditMessage: suspend (Int, String, ExecutionMode) -> SendReceipt = { _, _, _ -> SendReceipt(false, "", "", I18n.current.app.editUnavailable) },
     onRecoverInterrupted: () -> Unit = {},
     /** Pinned and hidden projects, the dialog's folder state and project actions. */
     projects: ProjectsModel = ProjectsModel(),
@@ -297,7 +297,7 @@ fun ChillerApp(
     val active = pendingSend || state.status in setOf("preparing", "streaming", "executing")
     val demoCompleted = isCompletedDemo(isDemo, state.status)
     val empty = state.messages.none { it.role in setOf("user", "assistant") } && state.activities.isEmpty() && state.error == null
-    val contextNote = state.contextEstimatedTokens?.let { tokens -> "Оценка входа ≈ $tokens токенов${state.contextOutputReserve?.let { "; резерв ответа: $it" }.orEmpty()}${state.contextReportedTokens?.let { "; провайдер: $it" }.orEmpty()}${if (state.droppedContextMessages > 0 || state.prunedContextResults > 0) " · контекст сокращён" else ""}" }
+    val contextNote = state.contextEstimatedTokens?.let { tokens -> strings.app.contextNote(tokens, state.contextOutputReserve, state.contextReportedTokens, state.droppedContextMessages > 0 || state.prunedContextResults > 0) }
     // "Продолжить" after the step limit: the same task goes on in the current mode, with its history.
     val continueTask: () -> Unit = {
         if (!active && !pendingSend) {
@@ -305,9 +305,9 @@ fun ChillerApp(
             scope.launch {
                 try {
                     val receipt = onSend(CONTINUE_PROMPT, mode, newId())
-                    if (!receipt.accepted && latestSession == receipt.sessionId) sendError = receipt.reason ?: "Сообщение не принято"
+                    if (!receipt.accepted && latestSession == receipt.sessionId) sendError = receipt.reason ?: I18n.current.app.messageNotAccepted
                 } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
-                catch (_: Exception) { sendError = "Не удалось продолжить." }
+                catch (_: Exception) { sendError = I18n.current.app.continueFailed }
                 finally { pendingSend = false }
             }
         }
@@ -327,9 +327,9 @@ fun ChillerApp(
                             if (drafts[sentKey] == sentText) drafts[sentKey] = ""
                             if (attachmentsBySession[sentKey] == sentAttachments) attachmentsBySession.remove(sentKey)
                         }
-                    } else if (latestSession == receipt.sessionId) sendError = receipt.reason ?: "Сообщение не принято"
+                    } else if (latestSession == receipt.sessionId) sendError = receipt.reason ?: I18n.current.app.messageNotAccepted
                 } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
-                catch (_: Exception) { sendError = "Не удалось отправить сообщение. Текст сохранён." }
+                catch (_: Exception) { sendError = I18n.current.app.sendFailed }
                 finally { pendingSend = false }
             }
         }
@@ -389,12 +389,12 @@ fun ChillerApp(
                                 try {
                                     val preview = onPreviewDeleteSession(session.id)
                                     if (deleteRequestVersion == requestVersion && deleteTarget?.id == session.id) {
-                                        if (preview.isNullOrBlank()) deletePreviewError = "Не удалось подготовить предварительный просмотр удаления."
+                                        if (preview.isNullOrBlank()) deletePreviewError = I18n.current.app.deletePreviewFailed
                                         else deletePreview = preview
                                     }
                                 } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
                                 catch (_: Exception) {
-                                    if (deleteRequestVersion == requestVersion && deleteTarget?.id == session.id) deletePreviewError = "Не удалось загрузить сведения для удаления."
+                                    if (deleteRequestVersion == requestVersion && deleteTarget?.id == session.id) deletePreviewError = I18n.current.app.deleteDetailsFailed
                                 } finally {
                                     if (deleteRequestVersion == requestVersion && deleteTarget?.id == session.id) deletePreviewLoading = false
                                 }
@@ -468,9 +468,9 @@ fun ChillerApp(
                                             onCloseProject = { if (!active) onCloseWorkspace() },
                                             connection = when {
                                                 connection.status == "verified" -> null
-                                                !apiKeyConfigured -> ConnectionPrompt("Добавить ключ") { openSettings() }
+                                                !apiKeyConfigured -> ConnectionPrompt(strings.app.addKey) { openSettings() }
                                                 connection.status == "checking" -> null
-                                                else -> ConnectionPrompt("Проверить") { onCheckConnection() }
+                                                else -> ConnectionPrompt(strings.app.check) { onCheckConnection() }
                                             },
                                         )
                                     } else {
@@ -498,10 +498,10 @@ fun ChillerApp(
                                                     Icon(Icons.Outlined.CheckCircleOutline, null, Modifier.size(17.dp), tint = c.positive)
                                                     Spacer(Modifier.width(9.dp))
                                                     Column(Modifier.weight(1f)) {
-                                                        Text(if (state.status == "completed") "Демо завершено" else "Демо остановлено", color = c.text, fontSize = 13.sp, fontWeight = FontWeight.Medium)
-                                                        Text("История учебная и не отправляет новые запросы", color = c.muted, fontSize = 11.sp, lineHeight = 16.sp)
+                                                        Text(if (state.status == "completed") strings.app.demoDone else strings.app.demoStopped, color = c.text, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                                                        Text(strings.app.demoNote, color = c.muted, fontSize = 11.sp, lineHeight = 16.sp)
                                                     }
-                                                    ChillerControl("Начать обычный диалог", { if (!active) onNewSession() }, icon = Icons.AutoMirrored.Outlined.ArrowForward, style = ControlStyle.PRIMARY, enabled = !active)
+                                                    ChillerControl(strings.app.startNormalDialog, { if (!active) onNewSession() }, icon = Icons.AutoMirrored.Outlined.ArrowForward, style = ControlStyle.PRIMARY, enabled = !active)
                                                 }
                                             } else Composer(draft, updateDraft, mode, { mode = it }, providerModel, active, send, onStop, { openSettings() }, Modifier.fillMaxWidth(), apiKeyConfigured, models, { selected ->
                                                 val oldDraft = draft
@@ -539,7 +539,7 @@ fun ChillerApp(
                                 exit = if (reducedMotion) ExitTransition.None else shrinkHorizontally(tween(180)) + fadeOut(tween(110)),
                             ) {
                                 Row(if (compact) Modifier.fillMaxSize() else Modifier.width(inspectorWidth).fillMaxHeight()) {
-                                    if (!compact) Box(Modifier.width(10.dp).fillMaxHeight().background(c.sidebar).pointerHoverIcon(PointerIcon(java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.E_RESIZE_CURSOR))).semantics { contentDescription = "Ширина панели изменений" }.draggable(inspectorResize, Orientation.Horizontal, onDragStopped = { onPreferences(view) }))
+                                    if (!compact) Box(Modifier.width(10.dp).fillMaxHeight().background(c.sidebar).pointerHoverIcon(PointerIcon(java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.E_RESIZE_CURSOR))).semantics { contentDescription = I18n.current.app.changesPanelWidth }.draggable(inspectorResize, Orientation.Horizontal, onDragStopped = { onPreferences(view) }))
                                     StudioPanel(state, subagents, onUndo, !active, reducedMotion, onCancelSubagent, onOpenTrace, Modifier.weight(1f).fillMaxHeight())
                                 }
                             }
@@ -571,7 +571,7 @@ fun ChillerApp(
             onDelete = {
                 if (!deleteInFlight && deletePreview != null && !deletePreviewLoading) {
                     if (latestActive || latestSelectedSession == target.id) {
-                        deletePreviewError = "Текущий или выполняющийся диалог нельзя удалить."
+                        deletePreviewError = I18n.current.app.cannotDeleteCurrent
                     } else {
                         deleteInFlight = true
                         deletePreviewError = null
@@ -581,9 +581,9 @@ fun ChillerApp(
                                     deleteTarget = null
                                     deletePreview = null
                                     deletePreviewError = null
-                                } else deletePreviewError = "Удаление не завершено. Обновите предварительный просмотр и попробуйте снова."
+                                } else deletePreviewError = I18n.current.app.deleteNotFinished
                             } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
-                            catch (_: Exception) { deletePreviewError = "Не удалось завершить удаление. Обновите предварительный просмотр и попробуйте снова." }
+                            catch (_: Exception) { deletePreviewError = I18n.current.app.deleteFailed }
                             finally { deleteInFlight = false }
                         }
                     }
@@ -594,17 +594,17 @@ fun ChillerApp(
             text = messageEditText, error = messageActionError, busy = messageActionBusy,
             onText = { messageEditText = it }, onDismiss = { if (!messageActionBusy) { messageEditTarget = null; messageActionError = null } },
             onSubmit = {
-                if (!targetStillCurrent(target)) messageActionError = "История диалога изменилась. Закройте это окно и выберите сообщение снова."
+                if (!targetStillCurrent(target)) messageActionError = I18n.current.app.historyChanged
                 if (!messageActionBusy && !latestActive && targetStillCurrent(target)) {
                     messageActionBusy = true; messageActionError = null
                     scope.launch {
                         try {
-                            if (!targetStillCurrent(target)) { messageActionError = "История диалога изменилась. Закройте это окно и выберите сообщение снова."; return@launch }
+                            if (!targetStillCurrent(target)) { messageActionError = I18n.current.app.historyChanged; return@launch }
                             val receipt = onEditMessage(target.index, messageEditText, mode)
                             if (receipt.accepted && receipt.sessionId == target.sessionId) { messageEditTarget = null; messageActionError = null }
-                            else messageActionError = receipt.reason ?: "Не удалось изменить сообщение в исходном диалоге. Текст сохранён."
+                            else messageActionError = receipt.reason ?: I18n.current.app.editFailedSource
                         } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
-                        catch (_: Exception) { messageActionError = "Не удалось изменить сообщение. Текст сохранён." }
+                        catch (_: Exception) { messageActionError = I18n.current.app.editFailed }
                         finally { messageActionBusy = false }
                     }
                 }
@@ -614,16 +614,16 @@ fun ChillerApp(
             text = target.content, error = messageActionError, busy = messageActionBusy,
             onDismiss = { if (!messageActionBusy) { messageDeleteTarget = null; messageActionError = null } },
             onDelete = {
-                if (!targetStillCurrent(target)) messageActionError = "История диалога изменилась. Закройте это окно и выберите сообщение снова."
+                if (!targetStillCurrent(target)) messageActionError = I18n.current.app.historyChanged
                 if (!messageActionBusy && !latestActive && targetStillCurrent(target)) {
                     messageActionBusy = true; messageActionError = null
                     scope.launch {
                         try {
-                            if (!targetStillCurrent(target)) { messageActionError = "История диалога изменилась. Закройте это окно и выберите сообщение снова."; return@launch }
-                            if (onDeleteMessage(target.index)) messageDeleteTarget = null else messageActionError = "Не удалось удалить ход диалога."
+                            if (!targetStillCurrent(target)) { messageActionError = I18n.current.app.historyChanged; return@launch }
+                            if (onDeleteMessage(target.index)) messageDeleteTarget = null else messageActionError = I18n.current.app.deleteTurnFailed
                         }
                         catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
-                        catch (_: Exception) { messageActionError = "Не удалось удалить ход диалога." }
+                        catch (_: Exception) { messageActionError = I18n.current.app.deleteTurnFailed }
                         finally { messageActionBusy = false }
                     }
                 }
@@ -638,15 +638,15 @@ fun ChillerApp(
             val approval = editApproval
             val commands = remember(paletteMenu, tree, mode, approval.enabled, allowProcesses, dark, workspacePath) {
                 menuCommands(paletteMenu) + buildList {
-                    add(PaletteCommand("Перейти к проекту", "Проекты", Icons.Outlined.FolderOpen, shortcut("P")) { switcher = true })
-                    add(PaletteCommand("Новый диалог без папки", "Проекты", Icons.Outlined.Add) { projects.onNewIn(null) })
-                    tree.projects.take(9).forEach { group -> add(PaletteCommand("Новый диалог в ${folderName(group.path)}", "Проекты", Icons.Outlined.Add) { projects.onNewIn(group.path) }) }
+                    add(PaletteCommand(strings.app.goToProject, strings.app.groupProjects, Icons.Outlined.FolderOpen, shortcut("P")) { switcher = true })
+                    add(PaletteCommand(strings.app.newDialogNoFolder, strings.app.groupProjects, Icons.Outlined.Add) { projects.onNewIn(null) })
+                    tree.projects.take(9).forEach { group -> add(PaletteCommand(strings.app.newDialogIn(folderName(group.path)), strings.app.groupProjects, Icons.Outlined.Add) { projects.onNewIn(group.path) }) }
                     if (workspacePath != null) {
-                        add(PaletteCommand(if (mode == ExecutionMode.PLAN) "Режим: Изменения" else "Режим: План", "Диалог", if (mode == ExecutionMode.PLAN) Icons.Outlined.Edit else Icons.Outlined.Lightbulb) { mode = toggledMode(mode) })
-                        add(PaletteCommand(if (approval.enabled) "Не подтверждать правки" else "Подтверждать правки", "Диалог", Icons.Outlined.FactCheck) { approval.onChange(!approval.enabled) })
-                        add(PaletteCommand(if (allowProcesses) "Запретить команды процессов" else "Разрешить команды процессов", "Диалог", Icons.Outlined.Terminal) { onAllowProcessesChange(!allowProcesses) })
+                        add(PaletteCommand(if (mode == ExecutionMode.PLAN) strings.app.modeChanges else strings.app.modePlan, strings.app.groupDialog, if (mode == ExecutionMode.PLAN) Icons.Outlined.Edit else Icons.Outlined.Lightbulb) { mode = toggledMode(mode) })
+                        add(PaletteCommand(if (approval.enabled) strings.app.stopConfirmingEdits else strings.app.confirmEdits, strings.app.groupDialog, Icons.Outlined.FactCheck) { approval.onChange(!approval.enabled) })
+                        add(PaletteCommand(if (allowProcesses) strings.app.forbidProcesses else strings.app.allowProcesses, strings.app.groupDialog, Icons.Outlined.Terminal) { onAllowProcessesChange(!allowProcesses) })
                     }
-                    add(PaletteCommand(if (dark) "Светлая тема" else "Тёмная тема", "Вид", Icons.Outlined.Contrast) { updateView(view.copy(theme = if (dark) "light" else "dark")) })
+                    add(PaletteCommand(if (dark) strings.app.lightTheme else strings.app.darkTheme, strings.app.groupView, Icons.Outlined.Contrast) { updateView(view.copy(theme = if (dark) "light" else "dark")) })
                     SettingsSection.entries.forEach { section -> add(PaletteCommand(section.title(strings.settings), strings.settings.title, section.icon) { settingsSection = section; settings = true }) }
                 }
             }
@@ -669,24 +669,24 @@ internal fun Toolbar(titleBar: TitleBarSpec?, leadingInset: Boolean, title: Stri
     val end = titleBar?.captionButtonsWidth?.takeIf { it > 0.dp }?.plus(6.dp) ?: 15.dp
     Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(start = if (leadingInset) titleBar!!.trafficLightsWidth else 15.dp, end = end, top = 4.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
         if (showMenu) titleBar?.menu?.let { AppMenuButton(it); Spacer(Modifier.width(2.dp)) }
-        ChillerIconButton(Icons.Outlined.VerticalSplit, "Боковая панель", onSidebar)
+        ChillerIconButton(Icons.Outlined.VerticalSplit, strings.app.sidebar, onSidebar)
         Spacer(Modifier.width(10.dp))
         Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
             Text(workspace?.let(::folderName) ?: "Chiller", color = c.muted, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 140.dp))
             Text(" / ", color = c.faint, fontSize = 13.sp)
-            Text(title?.take(44) ?: "Новый диалог", color = c.text, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+            Text(title?.take(44) ?: strings.common.newDialog, color = c.text, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
         }
-        if (active) { Text(if (waitingForUser) "Ждёт ответа" else statusLabel(status), color = c.muted, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 120.dp).padding(end = 12.dp)) }
+        if (active) { Text(if (waitingForUser) strings.app.waitingAnswer else statusLabel(status), color = c.muted, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 120.dp).padding(end = 12.dp)) }
         Row(Modifier.clip(RoundedCornerShape(7.dp)).background(c.sidebar).padding(2.dp), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
             ChillerControl("Focus", { onLayout(WorkspaceLayout.FOCUS) }, style = if (layout == WorkspaceLayout.FOCUS) ControlStyle.SELECTED else ControlStyle.QUIET)
             ChillerControl("Studio", { onLayout(WorkspaceLayout.STUDIO) }, style = if (layout == WorkspaceLayout.STUDIO) ControlStyle.SELECTED else ControlStyle.QUIET)
         }
         if (compact && layout == WorkspaceLayout.STUDIO) {
             Spacer(Modifier.width(5.dp))
-            ChillerIconButton(if (compactChanges) Icons.AutoMirrored.Outlined.Chat else Icons.Outlined.Difference, "Диалог / изменения", onCompactChanges)
+            ChillerIconButton(if (compactChanges) Icons.AutoMirrored.Outlined.Chat else Icons.Outlined.Difference, strings.app.dialogOrChanges, onCompactChanges)
         }
         Spacer(Modifier.width(7.dp))
-        ChillerIconButton(Icons.Outlined.Tune, "Настройки подключения", onSettings, enabled = canConfigure)
+        ChillerIconButton(Icons.Outlined.Tune, strings.app.connectionSettings, onSettings, enabled = canConfigure)
     }
     }
 }
@@ -699,18 +699,18 @@ internal fun formatCheckTime(value: String?): String = runCatching {
 internal fun connectionSummary(connection: ConnectionState, configured: Boolean): Pair<String, androidx.compose.ui.graphics.Color> {
     val c = LocalChillerPalette.current
     return when (connection.status) {
-        "verified" -> "подключено" to c.positive
-        "checking" -> "проверяю…" to c.muted
-        "reachable" -> "сервер отвечает" to c.positive
-        "failed" -> "ошибка подключения" to c.negative
+        "verified" -> I18n.current.app.connVerified to c.positive
+        "checking" -> I18n.current.app.connChecking to c.muted
+        "reachable" -> I18n.current.app.connReachable to c.positive
+        "failed" -> I18n.current.app.connFailed to c.negative
         // Set up but not exercised yet: nothing is wrong, the first answer or an explicit check will confirm it.
-        else -> if (configured) "настроено" to c.faint else "нет ключа API" to c.negative
+        else -> if (configured) I18n.current.app.connConfigured to c.faint else I18n.current.app.connNoKey to c.negative
     }
 }
 
-internal fun friendlyModel(model: String) = modelLabel(model).ifBlank { "Выбрать модель" }
+internal fun friendlyModel(model: String) = modelLabel(model).ifBlank { I18n.current.app.chooseModel }
 
-internal fun statusLabel(status: String) = when (status) { "preparing" -> "Подготовка…"; "streaming" -> "Работает…"; "executing" -> "Выполняет действие…"; else -> "" }
+internal fun statusLabel(status: String) = I18n.current.app.headerStatus(status)
 internal fun changeId(output: String): String? = runCatching { Json.parseToJsonElement(output).jsonObject["data"]?.jsonObject?.get("id")?.jsonPrimitive?.content }.getOrNull()
 internal fun prettyOutput(output: String): String = runCatching {
     val root = Json.parseToJsonElement(output).jsonObject
@@ -719,7 +719,7 @@ internal fun prettyOutput(output: String): String = runCatching {
         val code = error["code"]?.jsonPrimitive?.contentOrNull.orEmpty()
         val message = error["message"]?.jsonPrimitive?.contentOrNull.orEmpty()
         val recovery = error["recovery"]?.jsonPrimitive?.contentOrNull
-        return@runCatching listOfNotNull("$code · $message", recovery?.let { "Подсказка: $it" }).joinToString("\n")
+        return@runCatching listOfNotNull("$code · $message", recovery?.let { I18n.current.app.hint(it) }).joinToString("\n")
     }
     val data = root["data"]
     (data as? JsonObject)?.get("output")?.jsonPrimitive?.content ?: Json { prettyPrint = true }.encodeToString(JsonElement.serializer(), data ?: JsonPrimitive(output))
@@ -731,7 +731,7 @@ internal fun toolLabel(name: String) = I18n.current.run.toolLabel(name)
 internal fun toggledMode(mode: ExecutionMode): ExecutionMode = if (mode == ExecutionMode.PLAN) ExecutionMode.WORKSPACE_EDIT else ExecutionMode.PLAN
 
 /** What "Продолжить" sends after the step limit stopped a run. */
-internal const val CONTINUE_PROMPT = "Продолжай с того места, где остановился."
+internal val CONTINUE_PROMPT: String get() = I18n.current.app.continuePrompt
 
 /** The coordinator's message for a run stopped by the step limit (not a failure of the task itself). */
 internal fun isStepLimitError(error: String): Boolean = error.startsWith("Достигнут лимит") && "шагов" in error

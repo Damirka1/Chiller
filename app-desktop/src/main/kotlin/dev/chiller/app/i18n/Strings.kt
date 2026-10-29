@@ -33,6 +33,8 @@ interface Strings {
     val turn: TurnStrings
     val studio: StudioStrings
     val dialogs: DialogStrings
+    val app: AppStrings
+    val screens: ScreenStrings
     // groups
 }
 
@@ -659,6 +661,144 @@ interface DialogStrings {
     val exportNote: String
     val saveFile: String
     // end dialogs
+}
+
+interface AppStrings {
+    val editUnavailable: String
+    fun contextNote(tokens: Int, reserve: Int?, reported: Long?, shortened: Boolean): String
+    val messageNotAccepted: String
+    val continueFailed: String
+    val sendFailed: String
+    val deletePreviewFailed: String
+    val deleteDetailsFailed: String
+    val addKey: String
+    val check: String
+    val demoDone: String
+    val demoStopped: String
+    val demoNote: String
+    val startNormalDialog: String
+    val changesPanelWidth: String
+    val cannotDeleteCurrent: String
+    val deleteNotFinished: String
+    val deleteFailed: String
+    val historyChanged: String
+    val editFailedSource: String
+    val editFailed: String
+    val deleteTurnFailed: String
+    val goToProject: String
+    val groupProjects: String
+    val newDialogNoFolder: String
+    fun newDialogIn(name: String): String
+    val modeChanges: String
+    val modePlan: String
+    val groupDialog: String
+    val stopConfirmingEdits: String
+    val confirmEdits: String
+    val forbidProcesses: String
+    val allowProcesses: String
+    val lightTheme: String
+    val darkTheme: String
+    val groupView: String
+    val sidebar: String
+    val waitingAnswer: String
+    val dialogOrChanges: String
+    val connectionSettings: String
+    val connVerified: String
+    val connChecking: String
+    val connReachable: String
+    val connFailed: String
+    val connConfigured: String
+    val connNoKey: String
+    val chooseModel: String
+    fun headerStatus(status: String): String
+    fun hint(text: String): String
+    val continuePrompt: String
+    val openChiller: String
+    val quit: String
+    val menuFile: String
+    val menuNewDialog: String
+    val menuOpenProject: String
+    val menuCloseProject: String
+    val menuExportMarkdown: String
+    val menuExportJson: String
+    val menuSettings: String
+    val menuDialog: String
+    val menuSend: String
+    val menuStop: String
+    val menuView: String
+    val menuSidebar: String
+    val menuTools: String
+    val menuCompare: String
+    val menuHelp: String
+    val menuDemo: String
+    val saveExport: String
+    val openProject: String
+    // end app
+}
+
+interface ScreenStrings {
+    val whatToBuild: String
+    val openOrDrop: String
+    val openProject: String
+    val continueLabel: String
+    val recentProjects: String
+    val openAnother: String
+    val watchDemo: String
+    fun whatInProject(name: String): String
+    val startWithTask: String
+    fun folderMissing(path: String): String
+    val open: String
+    val hintProject: String
+    val hintSearch: String
+    val hintNewDialog: String
+    val hintSend: String
+    val change: String
+    val close: String
+    val lookingAtProject: String
+    fun moreFiles(n: Int): String
+    val editMode: String
+    val planMode: String
+    val starterStructure: String
+    val starterStructureHint: String
+    fun starterStructurePrompt(name: String): String
+    val starterWeakSpots: String
+    val starterWeakSpotsHint: String
+    val starterWeakSpotsPrompt: String
+    val starterTests: String
+    fun starterTestsHintCommand(command: String): String
+    val starterTestsHint: String
+    fun starterTestsPrompt(command: String?): String
+    val starterModule: String
+    val starterModuleHint: String
+    val starterModulePrompt: String
+    val commandSearchA11y: String
+    val commandPlaceholder: String
+    fun noCommands(query: String): String
+    val paletteHint: String
+    val menu: String
+    fun noticeA11y(title: String, message: String): String
+    val hideNotice: String
+    fun draftIntro(title: String): String
+    fun draftFolder(name: String): String
+    val draftWhatWas: String
+    val draftRequest: String
+    val draftThen: String
+    val draftResult: String
+    val draftWhatHere: String
+    val demoScenario: String
+    val you: String
+    val assistant: String
+    val image: String
+    val copied: String
+    val copyTable: String
+    val openImage: String
+    fun filesRead(n: Int): String
+    fun filesChanged(n: Int): String
+    fun actionsCount(n: Int): String
+    fun pastedImage(width: Int, height: Int): String
+    val pastedImagePlain: String
+    fun pastedText(size: String): String
+    // end screens
 }
 
 // interfaces

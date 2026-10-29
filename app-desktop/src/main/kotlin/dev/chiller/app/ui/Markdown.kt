@@ -1,5 +1,6 @@
 package dev.chiller.app.ui
 
+import dev.chiller.app.i18n.*
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -189,7 +190,7 @@ fun inlineMarkdown(text: String, c: ChillerPalette): AnnotatedString = buildAnno
         val g = m.groupValues
         when {
             // A picture inside a sentence keeps only its description; whole-line pictures are blocks.
-            m.value.startsWith("![") -> { pushStyle(SpanStyle(color = c.muted)); append(g[1].ifBlank { "изображение" }); pop() }
+            m.value.startsWith("![") -> { pushStyle(SpanStyle(color = c.muted)); append(g[1].ifBlank { I18n.current.screens.image }); pop() }
             g[2].isNotEmpty() -> { pushStyle(SpanStyle(fontFamily = ChillerFonts.mono, fontSize = 12.5.sp, background = c.hover, color = c.text)); append(" ${g[2]} "); pop() }
             g[3].isNotEmpty() || g[4].isNotEmpty() -> { pushStyle(SpanStyle(fontWeight = FontWeight.SemiBold)); append(g[3].ifEmpty { g[4] }); pop() }
             g[5].isNotEmpty() || g[6].isNotEmpty() -> { pushStyle(SpanStyle(fontStyle = FontStyle.Italic)); append(g[5].ifEmpty { g[6] }); pop() }
@@ -202,7 +203,7 @@ fun inlineMarkdown(text: String, c: ChillerPalette): AnnotatedString = buildAnno
 
 /** The visible text of [inlineMarkdown], for tests and plain-text uses. */
 fun inlineMarkdownPlain(text: String): String = inline.replace(text) { m -> val g = m.groupValues
-    when { m.value.startsWith("![") -> g[1].ifBlank { "изображение" }; g[2].isNotEmpty() -> "\u2009${g[2]}\u2009"; g[3].isNotEmpty() -> g[3]; g[4].isNotEmpty() -> g[4]; g[5].isNotEmpty() -> g[5]; g[6].isNotEmpty() -> g[6]; else -> g[7] } }
+    when { m.value.startsWith("![") -> g[1].ifBlank { I18n.current.screens.image }; g[2].isNotEmpty() -> "\u2009${g[2]}\u2009"; g[3].isNotEmpty() -> g[3]; g[4].isNotEmpty() -> g[4]; g[5].isNotEmpty() -> g[5]; g[6].isNotEmpty() -> g[6]; else -> g[7] } }
 
 /** Renders markdown prose. [tail] (e.g. a streaming caret) is appended to the last block. */
 @Composable
@@ -288,7 +289,7 @@ private fun MarkdownTable(table: MdBlock.Table, c: ChillerPalette) {
         Box(Modifier.weight(1f, fill = false)) { TableGrid(table, c) }
         Spacer(Modifier.width(4.dp))
         Box(Modifier.size(26.dp).alpha(if (hovered || copied) 1f else 0f)) {
-            ChillerIconButton(if (copied) Icons.Outlined.Check else Icons.Outlined.ContentCopy, if (copied) "Скопировано" else "Копировать таблицу", { copied = copyTable(table) }, Modifier.size(26.dp))
+            ChillerIconButton(if (copied) Icons.Outlined.Check else Icons.Outlined.ContentCopy, if (copied) strings.screens.copied else strings.screens.copyTable, { copied = copyTable(table) }, Modifier.size(26.dp))
         }
     }
 }
@@ -354,7 +355,7 @@ private fun MarkdownImage(block: MdBlock.Image) {
     Column(Modifier.widthIn(max = 420.dp)) {
         Image(image, block.alt.ifBlank { name }, contentScale = ContentScale.Fit,
             modifier = Modifier.heightIn(max = 280.dp).clip(shape).border(1.dp, c.border, shape).pointerHoverIcon(PointerIcon.Hand)
-                .clickable(role = Role.Button, onClickLabel = "Открыть изображение") { viewing = true })
+                .clickable(role = Role.Button, onClickLabel = strings.screens.openImage) { viewing = true })
         if (block.alt.isNotBlank()) Text(block.alt, color = c.faint, fontSize = 11.sp, lineHeight = 16.sp, modifier = Modifier.padding(top = 4.dp))
     }
     if (viewing) ImageViewer(dev.chiller.contracts.FilePresentation(block.src, name, "image/png", 0), image, { viewing = false })

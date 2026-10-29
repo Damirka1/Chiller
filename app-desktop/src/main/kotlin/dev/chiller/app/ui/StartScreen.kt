@@ -77,46 +77,46 @@ internal fun StartScreen(
                 Spacer(Modifier.height(if (workspacePath == null) 18.dp else 14.dp))
             }
             if (workspacePath == null) {
-                Text("Что будем создавать?", fontSize = if (tight) 22.sp else 26.sp, lineHeight = if (tight) 30.sp else 34.sp, letterSpacing = (-.6).sp, fontWeight = FontWeight.Medium, color = c.text, textAlign = TextAlign.Center)
+                Text(strings.screens.whatToBuild, fontSize = if (tight) 22.sp else 26.sp, lineHeight = if (tight) 30.sp else 34.sp, letterSpacing = (-.6).sp, fontWeight = FontWeight.Medium, color = c.text, textAlign = TextAlign.Center)
                 if (!hasHistory) {
                     Spacer(Modifier.height(8.dp))
-                    Text("Откройте папку проекта — или перетащите её в окно", color = c.muted, fontSize = 13.sp, lineHeight = 20.sp, textAlign = TextAlign.Center)
+                    Text(strings.screens.openOrDrop, color = c.muted, fontSize = 13.sp, lineHeight = 20.sp, textAlign = TextAlign.Center)
                     Spacer(Modifier.height(20.dp))
-                    ChillerControl("Открыть проект…", onOpenFolder, icon = Icons.Outlined.FolderOpen, style = ControlStyle.OUTLINE, trailing = shortcut("O"), inlineTrailing = true)
+                    ChillerControl(strings.screens.openProject, onOpenFolder, icon = Icons.Outlined.FolderOpen, style = ControlStyle.OUTLINE, trailing = shortcut("O"), inlineTrailing = true)
                 }
                 Spacer(Modifier.height(if (tight) 18.dp else 26.dp))
                 resume?.let { item ->
-                    SectionLabel("Продолжить")
+                    SectionLabel(strings.screens.continueLabel)
                     ResumeCard(item) { onResume(item.sessionId) }
                     Spacer(Modifier.height(16.dp))
                 }
                 if (recent.isNotEmpty()) {
                     Row(Modifier.fillMaxWidth().padding(bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text("Недавние проекты", color = c.muted, fontSize = 12.sp, lineHeight = 18.sp, modifier = Modifier.weight(1f).padding(start = 4.dp))
-                        ChillerControl("Открыть другой…", onOpenFolder, icon = Icons.Outlined.FolderOpen, trailing = shortcut("O"), inlineTrailing = true)
+                        Text(strings.screens.recentProjects, color = c.muted, fontSize = 12.sp, lineHeight = 18.sp, modifier = Modifier.weight(1f).padding(start = 4.dp))
+                        ChillerControl(strings.screens.openAnother, onOpenFolder, icon = Icons.Outlined.FolderOpen, trailing = shortcut("O"), inlineTrailing = true)
                     }
                     Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(c.surface).border(1.dp, c.border, RoundedCornerShape(12.dp)).padding(4.dp)) {
                         recent.take(if (tight) 3 else 5).forEach { project -> RecentProjectRow(project) { onOpenPath(project.path) } }
                     }
                     Spacer(Modifier.height(16.dp))
                 } else if (hasHistory) {
-                    ChillerControl("Открыть проект…", onOpenFolder, icon = Icons.Outlined.FolderOpen, style = ControlStyle.OUTLINE, trailing = shortcut("O"), inlineTrailing = true)
+                    ChillerControl(strings.screens.openProject, onOpenFolder, icon = Icons.Outlined.FolderOpen, style = ControlStyle.OUTLINE, trailing = shortcut("O"), inlineTrailing = true)
                     Spacer(Modifier.height(16.dp))
                 }
                 connection?.let { ConnectionRow(modelName, connectionLine, connectionColor, it); Spacer(Modifier.height(16.dp)) }
                 onDemo?.let {
-                    ChillerControl("Посмотреть демо: все инструменты на тестовом проекте", it, icon = Icons.Outlined.PlayCircleOutline)
+                    ChillerControl(strings.screens.watchDemo, it, icon = Icons.Outlined.PlayCircleOutline)
                     Spacer(Modifier.height(10.dp))
                 }
                 if (!tight) ShortcutHints()
             } else {
                 val name = Path.of(workspacePath).fileName?.toString() ?: workspacePath
-                Text("Что сделаем в $name?", fontSize = 24.sp, lineHeight = 32.sp, letterSpacing = (-.6).sp, fontWeight = FontWeight.Medium, color = c.text, textAlign = TextAlign.Center, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Text(strings.screens.whatInProject(name), fontSize = 24.sp, lineHeight = 32.sp, letterSpacing = (-.6).sp, fontWeight = FontWeight.Medium, color = c.text, textAlign = TextAlign.Center, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 Spacer(Modifier.height(18.dp))
                 val overview by produceState<ProjectOverview?>(null, workspacePath) { value = withContext(Dispatchers.IO) { runCatching { inspectProject(Path.of(workspacePath)) }.getOrNull() } }
                 ProjectCard(workspacePath, overview, onOpenFolder, onCloseProject)
                 Spacer(Modifier.height(14.dp))
-                SectionLabel("Начать с задачи")
+                SectionLabel(strings.screens.startWithTask)
                 val tasks = overview?.let(::starters) ?: starters(ProjectOverview(name, workspacePath, null, emptyList(), null, 0))
                 tasks.chunked(2).forEach { pair ->
                     Row(Modifier.fillMaxWidth().padding(bottom = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -165,9 +165,9 @@ private fun RecentProjectRow(project: RecentProject, onClick: () -> Unit) {
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Text(Path.of(project.path).fileName?.toString() ?: project.path, color = if (exists) c.text else c.faint, fontSize = 13.sp, lineHeight = 18.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(if (exists) homeRelative(project.path) else "Папка не найдена · ${homeRelative(project.path)}", color = c.faint, fontSize = 11.sp, lineHeight = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(if (exists) homeRelative(project.path) else strings.screens.folderMissing(homeRelative(project.path)), color = c.faint, fontSize = 11.sp, lineHeight = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
-        if (project.dialogs > 0) Text("${project.dialogs} ${plural(project.dialogs, "диалог", "диалога", "диалогов")}" + (project.lastActive?.let { relativeAge(it, strings.common) }?.takeIf { it.isNotEmpty() }?.let { " · $it" } ?: ""),
+        if (project.dialogs > 0) Text(strings.common.dialogs(project.dialogs) + (project.lastActive?.let { relativeAge(it, strings.common) }?.takeIf { it.isNotEmpty() }?.let { " · $it" } ?: ""),
             color = c.faint, fontSize = 11.sp, lineHeight = 15.sp, modifier = Modifier.padding(start = 8.dp))
         if (exists) { Spacer(Modifier.width(10.dp)); Icon(Icons.AutoMirrored.Outlined.ArrowForward, null, Modifier.size(14.dp), tint = c.faint) }
     }
@@ -194,11 +194,11 @@ private fun ResumeCard(item: ResumeItem, onClick: () -> Unit) {
         }
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
-            Text(item.title.ifBlank { "Новый диалог" }, color = c.text, fontSize = 13.sp, lineHeight = 18.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(item.title.ifBlank { strings.common.newDialog }, color = c.text, fontSize = 13.sp, lineHeight = 18.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(listOfNotNull(relativeAge(item.updatedAt, strings.common).takeIf { it.isNotEmpty() }, item.project?.let { Path.of(it).fileName?.toString() }).joinToString(" · "),
                 color = c.faint, fontSize = 11.sp, lineHeight = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
-        Text("Открыть", color = c.muted, fontSize = 12.sp)
+        Text(strings.screens.open, color = c.muted, fontSize = 12.sp)
         Spacer(Modifier.width(6.dp))
         Icon(Icons.AutoMirrored.Outlined.ArrowForward, null, Modifier.size(14.dp), tint = c.muted)
     }
@@ -226,7 +226,7 @@ private fun ConnectionRow(modelName: String, line: String, color: Color, prompt:
 private fun ShortcutHints() {
     val c = LocalChillerPalette.current
     Row(horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically) {
-        listOf(shortcut("O") to "проект", shortcut("K") to "поиск", shortcut("N") to "новый диалог", shortcut("↵") to "отправить").forEach { (keys, label) ->
+        listOf(shortcut("O") to strings.screens.hintProject, shortcut("K") to strings.screens.hintSearch, shortcut("N") to strings.screens.hintNewDialog, shortcut("↵") to strings.screens.hintSend).forEach { (keys, label) ->
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(keys, color = c.muted, fontSize = 11.sp, lineHeight = 15.sp, modifier = Modifier.clip(RoundedCornerShape(5.dp)).border(1.dp, c.border, RoundedCornerShape(5.dp)).padding(horizontal = 5.dp, vertical = 1.dp))
                 Spacer(Modifier.width(6.dp))
@@ -250,16 +250,16 @@ private fun ProjectCard(path: String, overview: ProjectOverview?, onChange: () -
                 Text(overview?.name ?: Path.of(path).fileName.toString(), color = c.text, fontSize = 14.sp, lineHeight = 20.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(homeRelative(path), color = c.faint, fontSize = 11.sp, lineHeight = 15.sp, fontFamily = ChillerFonts.mono, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
-            ChillerControl("Сменить", onChange)
-            ChillerControl("Закрыть", onClose)
+            ChillerControl(strings.screens.change, onChange)
+            ChillerControl(strings.screens.close, onClose)
         }
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
             when {
-                overview == null -> Fact(Icons.Outlined.HourglassEmpty, "Смотрю проект…")
+                overview == null -> Fact(Icons.Outlined.HourglassEmpty, strings.screens.lookingAtProject)
                 else -> {
                     overview.branch?.let { Fact(Icons.Outlined.AccountTree, it) }
                     overview.stack.take(2).forEach { Fact(Icons.Outlined.Code, it) }
-                    Fact(Icons.Outlined.Description, overview.files?.let { "$it ${plural(it, "файл", "файла", "файлов")}" } ?: "больше ${overview.limit} файлов")
+                    Fact(Icons.Outlined.Description, overview.files?.let { strings.common.files(it) } ?: strings.screens.moreFiles(overview.limit))
                 }
             }
         }
@@ -291,7 +291,7 @@ private fun StarterCard(starter: Starter, modifier: Modifier, onClick: () -> Uni
         // Every task says how it will run: reading only (Plan) or changing files.
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(30.dp).clip(RoundedCornerShape(8.dp)).background(if (starter.needsEdits) c.accent.copy(alpha = .10f) else c.hover), contentAlignment = Alignment.Center) {
-                Icon(if (starter.needsEdits) Icons.Outlined.Edit else Icons.Outlined.Lightbulb, if (starter.needsEdits) "Режим изменений" else "Режим плана",
+                Icon(if (starter.needsEdits) Icons.Outlined.Edit else Icons.Outlined.Lightbulb, if (starter.needsEdits) strings.screens.editMode else strings.screens.planMode,
                     Modifier.size(15.dp), tint = if (starter.needsEdits) c.accent else c.muted)
             }
             Spacer(Modifier.width(11.dp))
@@ -324,11 +324,6 @@ internal fun homeRelative(path: String): String {
 
 /** Last segment of a folder path with either separator, so Windows roots show «Chiller» rather than the whole path. */
 internal fun folderName(path: String): String = path.trimEnd('/', '\\').substringAfterLast('/').substringAfterLast('\\').ifEmpty { path }
-
-/** What the system file manager is called, for «Показать в …» actions. */
-internal val fileManagerName: String = System.getProperty("os.name").orEmpty().let { os ->
-    when { os.startsWith("Mac") -> "Finder"; os.startsWith("Windows") -> "Проводнике"; else -> "файловом менеджере" }
-}
 
 internal fun plural(n: Int, one: String, few: String, many: String): String {
     val mod100 = n % 100; val mod10 = n % 10

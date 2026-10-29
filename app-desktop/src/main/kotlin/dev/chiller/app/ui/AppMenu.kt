@@ -1,5 +1,6 @@
 package dev.chiller.app.ui
 
+import dev.chiller.app.i18n.*
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -35,7 +36,7 @@ internal fun List<AppMenuSection>.commandFor(key: Key): AppMenuItem? =
 internal fun AppMenuButton(menu: List<AppMenuSection>) {
     var open by remember { mutableStateOf(false) }
     Box {
-        ChillerIconButton(Icons.Outlined.Menu, "Меню", { open = !open })
+        ChillerIconButton(Icons.Outlined.Menu, strings.screens.menu, { open = !open })
         if (open) ChillerPopover(onDismiss = { open = false }, width = 264.dp, below = true) {
             AppMenuContent(menu) { open = false }
         }

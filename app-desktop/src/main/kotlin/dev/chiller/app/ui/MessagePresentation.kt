@@ -1,10 +1,11 @@
 package dev.chiller.app.ui
 
+import dev.chiller.app.i18n.*
 import dev.chiller.contracts.*
 
 fun modelLabel(id: String): String = when (id) {
     "deepseek-flash" -> "DeepSeek V4.1 Flash"
-    "chiller-demo" -> "Демо-сценарий"
+    "chiller-demo" -> I18n.current.screens.demoScenario
     else -> id.substringAfterLast('/').ifBlank { id }
 }
 
@@ -17,10 +18,10 @@ val LocalModelNames = androidx.compose.runtime.staticCompositionLocalOf<Map<Stri
 fun modelName(id: String): String = LocalModelNames.current[id] ?: modelLabel(id)
 
 fun authorLabel(message: AgentMessage): String = when {
-    message.role == "user" -> "Вы"
+    message.role == "user" -> I18n.current.screens.you
     message.role != "assistant" -> "Chiller"
     message.origin?.kind == MessageOriginKind.OFFLINE -> "Chiller · offline"
     message.origin?.kind == MessageOriginKind.APPLICATION -> "Chiller"
-    message.origin?.kind == MessageOriginKind.MODEL -> message.origin?.modelId?.let(::modelLabel) ?: "Ассистент"
-    else -> "Ассистент"
+    message.origin?.kind == MessageOriginKind.MODEL -> message.origin?.modelId?.let(::modelLabel) ?: I18n.current.screens.assistant
+    else -> I18n.current.screens.assistant
 }

@@ -1,5 +1,6 @@
 package dev.chiller.app.ui
 
+import dev.chiller.app.i18n.*
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.io.path.isDirectory
@@ -67,13 +68,13 @@ fun starters(project: ProjectOverview): List<Starter> {
         else -> null
     }
     return listOf(
-        Starter("Разобрать структуру", "Модули, точки входа, зависимости", "Разбери структуру проекта ${project.name}: модули, точки входа, ключевые зависимости. Дай краткую карту."),
-        Starter("Найти слабые места", "Ошибки, риски, долги", "Просмотри код проекта и найди вероятные ошибки и рискованные места. Для каждого укажи файл, строку и почему это проблема."),
+        Starter(I18n.current.screens.starterStructure, I18n.current.screens.starterStructureHint, I18n.current.screens.starterStructurePrompt(project.name)),
+        Starter(I18n.current.screens.starterWeakSpots, I18n.current.screens.starterWeakSpotsHint, I18n.current.screens.starterWeakSpotsPrompt),
         Starter(
-            "Починить тесты", tests?.let { "Запустит $it и исправит падения" } ?: "Найдёт и исправит падающие тесты",
-            "Запусти тесты${tests?.let { " ($it)" } ?: ""}, разберись в падениях и исправь их. Перед правками объясни причину.", needsEdits = true,
+            I18n.current.screens.starterTests, tests?.let { I18n.current.screens.starterTestsHintCommand(it) } ?: I18n.current.screens.starterTestsHint,
+            I18n.current.screens.starterTestsPrompt(tests), needsEdits = true,
         ),
-        Starter("Объяснить модуль", "Как устроена выбранная часть", "Объясни, как устроен модуль "),
+        Starter(I18n.current.screens.starterModule, I18n.current.screens.starterModuleHint, I18n.current.screens.starterModulePrompt),
     )
 }
 
