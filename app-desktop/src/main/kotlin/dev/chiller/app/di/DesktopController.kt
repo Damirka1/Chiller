@@ -419,15 +419,18 @@ class DesktopController(
         val messages = projectConversation(events.read(session))
         val plan = MessageHistoryActions.planEditTurn(messages, index, text)
             ?: return@withLock SendReceipt(false, session, request, "Сообщение нельзя изменить")
+        // The edited message is sent as a new turn: history is cut before it, and the normal send path answers it.
         resetEngine(invalidate = true)
-        events.append(session, "history.replace_turn", buildJsonObject {
-            put("index", plan.index)
-            put("expectedCount", plan.expectedCount)
-            put("message", json.encodeToJsonElement(AgentMessage.serializer(), plan.replacement))
-        })
+        events.append(session, "history.truncate", buildJsonObject { put("count", plan.index); put("expectedCount", plan.expectedCount) })
         selectSessionLocked(session)
+        val receipt = sendLocked(text, mode, request, plan.replacement.attachments)
+        if (!receipt.accepted) {
+            // Keep the edit even when no turn could start, so the text is not lost from the dialog.
+            events.append(session, "message", json.encodeToJsonElement(AgentMessage.serializer(), plan.replacement).jsonObject)
+            selectSessionLocked(session)
+        }
         refreshSessions()
-        SendReceipt(true, session, request)
+        receipt
     }
 
     fun checkConnection(): Job = synchronized(connectionLifecycleLock) {

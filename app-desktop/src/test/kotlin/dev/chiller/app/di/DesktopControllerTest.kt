@@ -46,7 +46,7 @@ class DesktopControllerTest {
         } finally { controller.close() }
     }
 
-    @Test fun `message delete and edit project history without replaying effects`() = runBlocking {
+    @Test fun `message delete and edit project history and an edit is answered as a new turn`() = runBlocking {
         val controller = DesktopController(directory, initialCredential = null, catalogClient = OfflineCatalog)
         try {
             controller.initialize()
@@ -58,15 +58,15 @@ class DesktopControllerTest {
             assertEquals(listOf("first"), controller.state.value.run.messages.filter { it.role == "user" }.map { it.content })
             val historyBeforeEdit = JsonlEventStore(directory.resolve("sessions")).read(session)
             val messagesBeforeEdit = historyBeforeEdit.count { it.type == "message" }
-            val runsBeforeEdit = historyBeforeEdit.count { it.type == "run.started" }
             assertTrue(controller.editMessage(0, "edited", ExecutionMode.PLAN).accepted)
-            assertEquals(listOf("edited"), controller.state.value.run.messages.filter { it.role == "user" }.map { it.content })
+            // Offline, the edited message gets the offline answer: the turn is sent again, not left without a reply.
+            assertEquals(listOf("user", "assistant"), controller.state.value.run.messages.map { it.role })
+            assertEquals("edited", controller.state.value.run.messages.first().content)
             val historyAfterEdit = JsonlEventStore(directory.resolve("sessions")).read(session)
-            assertEquals(messagesBeforeEdit, historyAfterEdit.count { it.type == "message" })
-            assertEquals(runsBeforeEdit, historyAfterEdit.count { it.type == "run.started" })
-            assertEquals("history.replace_turn", historyAfterEdit.last().type)
+            assertEquals(messagesBeforeEdit + 2, historyAfterEdit.count { it.type == "message" })
+            assertEquals(1, historyAfterEdit.count { it.type == "history.truncate" })
             controller.selectSession(session)
-            assertEquals(listOf("edited"), controller.state.value.run.messages.filter { it.role == "user" }.map { it.content })
+            assertEquals(listOf("user", "assistant"), controller.state.value.run.messages.map { it.role })
         } finally { controller.close() }
     }
 
