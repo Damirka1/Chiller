@@ -54,6 +54,9 @@ import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.window.PopupProperties
 import dev.chiller.app.di.ModelCatalogState
+import dev.chiller.app.di.PickerProvider
+import androidx.compose.material.icons.outlined.ChevronRight
+import androidx.compose.material.icons.outlined.ExpandMore
 import dev.chiller.design.LocalChillerPalette
 import dev.chiller.design.LocalChillerReducedMotion
 
@@ -148,9 +151,10 @@ internal fun MenuDivider() {
 internal fun ModelPickerPopover(
     model: String, models: List<String>, configured: Boolean, running: Boolean, catalog: ModelCatalogState, contextNote: String?,
     onRefresh: () -> Unit, onCancelRefresh: () -> Unit, onClose: () -> Unit, onModel: (String) -> Unit, onSettings: () -> Unit,
+    providers: List<PickerProvider> = emptyList(), onProviderModel: (String, String) -> Unit = { _, _ -> },
 ) {
     ChillerPopover(onDismiss = onClose, width = 320.dp) {
-        ModelPickerContent(model, models, configured, running, catalog, contextNote, onRefresh, onCancelRefresh, onClose, onModel, onSettings)
+        ModelPickerContent(model, models, configured, running, catalog, contextNote, onRefresh, onCancelRefresh, onClose, onModel, onSettings, providers, onProviderModel)
     }
 }
 
@@ -158,9 +162,11 @@ internal fun ModelPickerPopover(
 internal fun ModelPickerContent(
     model: String, models: List<String>, configured: Boolean, running: Boolean, catalog: ModelCatalogState, contextNote: String?,
     onRefresh: () -> Unit, onCancelRefresh: () -> Unit, onClose: () -> Unit, onModel: (String) -> Unit, onSettings: () -> Unit,
+    providers: List<PickerProvider> = emptyList(), onProviderModel: (String, String) -> Unit = { _, _ -> },
 ) {
     val c = LocalChillerPalette.current
     var filter by remember { mutableStateOf("") }
+    var openProvider by remember { mutableStateOf<String?>(null) }
     val discovered = catalog.chatModels.map { it.id }
     val known = (listOf(model) + discovered + models).filter { it.isNotBlank() }.distinct().take(40)
     val query = filter.trim()
@@ -211,10 +217,28 @@ internal fun ModelPickerContent(
                 shown.isEmpty() && known.isNotEmpty() -> EmptyNote("Ничего не найдено по запросу «$query»")
                 catalog.status == "ready" && catalog.chatModels.isEmpty() -> EmptyNote("Провайдер не вернул ни одной модели. Задайте ID вручную в настройках.")
             }
+            // Other providers: a model picked there moves this dialog to that provider from the next message.
+            val otherProviders = providers.mapNotNull { provider ->
+                val matching = if (query.isEmpty()) provider.models else provider.models.filter { it.contains(query, true) || modelLabel(it).contains(query, true) }
+                if (query.isNotEmpty() && matching.isEmpty() && !provider.name.contains(query, true)) null else provider to matching
+            }
+            if (otherProviders.isNotEmpty()) {
+                MenuDivider()
+                Text("Другие провайдеры", color = c.faint, fontSize = 11.sp, modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 2.dp))
+                otherProviders.forEach { (provider, matching) ->
+                    val open = query.isNotEmpty() || openProvider == provider.baseUrl
+                    MenuRow(provider.name, { openProvider = if (openProvider == provider.baseUrl) null else provider.baseUrl },
+                        subtitle = provider.baseUrl.substringAfter("://"), icon = if (open) Icons.Outlined.ExpandMore else Icons.Outlined.ChevronRight, enabled = !running)
+                    if (open) {
+                        matching.forEach { id -> MenuRow("   " + modelLabel(id), { onProviderModel(provider.baseUrl, id); onClose() }, subtitle = if (modelLabel(id) != id) "   $id" else null, enabled = !running) }
+                        if (provider.models.isEmpty()) MenuRow("   Подключить и выбрать первую модель", { onProviderModel(provider.baseUrl, ""); onClose() }, enabled = !running)
+                    }
+                }
+            }
         }
         MenuDivider()
         MenuRow("Настройки подключения", onSettings, icon = Icons.Outlined.Tune)
-        Text("Модель сменится со следующего сообщения", color = c.faint, fontSize = 11.sp, lineHeight = 15.sp, modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 2.dp))
+        Text("Модель и провайдер сменятся со следующего сообщения, диалог продолжится", color = c.faint, fontSize = 11.sp, lineHeight = 15.sp, modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 2.dp))
     }
 }
 

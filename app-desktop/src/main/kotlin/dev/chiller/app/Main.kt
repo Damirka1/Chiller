@@ -297,6 +297,7 @@ private fun chillerApplication() = application {
             actions = actions,
             preferences = state.uiPreferences, onPreferences = { scope.launch { controller.updateUiPreferences(it) } },
             models = controller.configuredModels(), onSelectModel = controller::selectModel,
+            providers = controller.pickerProviders(), onSelectProviderModel = controller::selectProviderModel,
             onRenameSession = controller::renameSession,
             onPreviewDeleteSession = controller::previewSessionDeletion,
             onDeleteSession = controller::deleteSession,

@@ -461,6 +461,28 @@ class DesktopControllerTest {
         } finally { controller.close() }
     }
 
+    @Test fun `switching to another provider from the model menu continues the dialog`() = runBlocking {
+        val controller = DesktopController(directory, initialCredential = null, catalogClient = OfflineCatalog)
+        try {
+            controller.initialize()
+            controller.saveCustomProvider(CustomProvider("llama", "llama.cpp", "http://10.0.0.5:8080/v1"))
+            assertEquals(emptyList(), controller.pickerProviders().filter { it.name == "llama.cpp" }, "no key and no models seen: not offered")
+            val id = controller.state.value.sessionId
+            assertTrue(controller.send("Synthetic offline request", ExecutionMode.PLAN, "client-1").accepted)
+            val first = controller.state.value.settings.baseUrl
+            assertEquals(id, controller.selectProviderModel("http://10.0.0.5:8080/v1/", "gemma"))
+            assertEquals("http://10.0.0.5:8080/v1", controller.state.value.settings.baseUrl)
+            assertEquals("gemma", controller.state.value.settings.model)
+            assertTrue(controller.state.value.run.messages.isNotEmpty(), "the visible dialog stays")
+            val switch = JsonlEventStore(directory.resolve("sessions")).read(id).last()
+            assertEquals("session.model", switch.type)
+            assertEquals("http://10.0.0.5:8080/v1", switch.payload.getValue("toEndpoint").toString().trim('"'))
+            // The provider left behind is offered back with the model used there.
+            assertTrue(controller.pickerProviders().any { normalizeEndpoint(it.baseUrl) == normalizeEndpoint(first) })
+            assertEquals(null, controller.selectProviderModel("ftp://10.0.0.5/v1", "gemma"))
+        } finally { controller.close() }
+    }
+
     @Test fun `preferences rename and explicit export target persist through controller`() = runBlocking {
         val controller = DesktopController(directory, initialCredential = null, catalogClient = OfflineCatalog)
         try {

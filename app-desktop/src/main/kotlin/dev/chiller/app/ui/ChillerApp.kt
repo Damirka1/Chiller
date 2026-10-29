@@ -143,6 +143,7 @@ fun ChillerApp(
     onDismissExport: () -> Unit = {}, onSaveExport: () -> Unit = {},
     preferences: UiPreferences = UiPreferences(), onPreferences: (UiPreferences) -> Unit = {},
     models: List<String> = emptyList(), onSelectModel: suspend (String) -> String? = { null },
+    providers: List<dev.chiller.app.di.PickerProvider> = emptyList(), onSelectProviderModel: suspend (String, String) -> String? = { _, _ -> null },
     onRenameSession: suspend (String, String) -> Boolean = { _, _ -> false },
     onExportSession: (String, String) -> Unit = { _, _ -> },
     connection: ConnectionState = ConnectionState(), onCheckConnection: () -> Unit = {}, onCancelConnection: () -> Unit = {},
@@ -506,6 +507,11 @@ fun ChillerApp(
                                                 attachments = draftAttachments, attachmentOwnerKey = draftKey, vision = visionEnabled(settingsData?.agent ?: AgentOptions(), providerModel, catalog.entry(providerModel)),
                                                 importing = (pendingImportsBySession[draftKey] ?: 0) > 0,
                                                 onAppendAttachments = appendAttachments,
+                                                providers = providers,
+                                                onProviderModel = { url, selected ->
+                                                    val oldDraft = draft
+                                                    scope.launch { onSelectProviderModel(url, selected)?.let { id -> drafts.putIfAbsent(id, oldDraft) } }
+                                                },
                                                 onRemoveAttachment = removeAttachment,
                                                 onImportState = updateImportCount,
                                                 onImportTextAttachment = onImportTextAttachment, onImportFiles = onImportFiles, onImportImageAttachment = onImportImageAttachment,

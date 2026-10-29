@@ -120,6 +120,8 @@ internal fun Composer(
     onImportImageAttachment: suspend (String, ByteArray) -> ComposerAttachment?,
     vision: Boolean = false,
     folderMenu: FolderMenu? = null,
+    providers: List<dev.chiller.app.di.PickerProvider> = emptyList(),
+    onProviderModel: (String, String) -> Unit = { _, _ -> },
 ) {
     val c = LocalChillerPalette.current
     var focused by remember { mutableStateOf(false) }
@@ -278,6 +280,7 @@ internal fun Composer(
                 model = model, models = models, configured = configured, running = running, catalog = catalog, contextNote = contextNote,
                 onRefresh = onRefreshModels, onCancelRefresh = onCancelCatalogRefresh,
                 onClose = { modelMenu = false; modelClosedAt = System.currentTimeMillis() }, onModel = onModel,
+                providers = providers, onProviderModel = onProviderModel,
                 onSettings = { modelMenu = false; onSettings() },
             )
         }

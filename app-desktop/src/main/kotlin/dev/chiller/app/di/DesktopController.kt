@@ -180,6 +180,22 @@ class DesktopController(
     suspend fun undo(id: String) = commands.withLock { undoLocked(id) }
     suspend fun prepareExport(format: String, sessionId: String = state.value.sessionId) = commands.withLock { prepareExportLocked(format, sessionId) }
 
+    /** Other providers the model menu offers: those with a key here or with models seen before, with their known models. */
+    fun pickerProviders(): List<PickerProvider> {
+        val settings = state.value.settings
+        val current = normalizeEndpoint(settings.baseUrl)
+        return (settings.customProviders.map { it.name to it.baseUrl } + ProviderPresets.all.map { it.name to it.baseUrl })
+            .map { (name, url) -> PickerProvider(url.trim().trimEnd('/'), name, emptyList()) }
+            .filter { normalizeEndpoint(it.baseUrl) != current }
+            .distinctBy { normalizeEndpoint(it.baseUrl) }
+            .mapNotNull { provider ->
+                val endpoint = normalizeEndpoint(provider.baseUrl)
+                val models = (settings.modelCatalogs[endpoint]?.models.orEmpty().filter { it.chat != false }.map { it.id } + settings.rememberedModels[endpoint].orEmpty()).distinct().take(40)
+                val usable = models.isNotEmpty() || originOf(provider.baseUrl)?.let(credentials::containsKey) == true
+                if (usable) provider.copy(models = models) else null
+            }
+    }
+
     fun configuredModels(): List<String> {
         val settings = state.value.settings
         val discovered = state.value.catalog.chatModels.map { it.id }
@@ -257,18 +273,29 @@ class DesktopController(
     }
 
 
-    suspend fun selectModel(model: String): String? = commands.withLock {
+    suspend fun selectModel(model: String): String? = commands.withLock { switchModelLocked(_state.value.settings.baseUrl, model) }
+
+    /** Switches the shown dialog to another connected provider; an empty [model] takes the first one it lists. */
+    suspend fun selectProviderModel(baseUrl: String, model: String): String? = commands.withLock { switchModelLocked(baseUrl.trim().trimEnd('/'), model) }
+
+    /**
+     * The model menu's switch: the dialog continues with the new model, on this or another provider, from the next
+     * message, and the switch is recorded in its history. Changing the endpoint in settings still starts a new dialog.
+     */
+    private suspend fun switchModelLocked(baseUrl: String, model: String): String? {
         val selected = model.trim()
-        if (busy() || selected.isEmpty() || selected.length > MAX_MODEL_LENGTH) return@withLock null
-        if (selected == _state.value.settings.model) return@withLock _state.value.sessionId
-        // Same endpoint and key: the dialog continues with the new model from the next message. History never moves
-        // to another provider this way; changing the endpoint in settings still starts a new dialog.
-        val previous = _state.value.settings.model
+        val settings = _state.value.settings
+        val sameEndpoint = normalizeEndpoint(baseUrl) == normalizeEndpoint(settings.baseUrl)
+        if (busy() || selected.length > MAX_MODEL_LENGTH || (sameEndpoint && selected.isEmpty()) || (!sameEndpoint && !endpointAllowed(baseUrl))) return null
+        if (sameEndpoint && selected == settings.model) return _state.value.sessionId
         val sessionId = _state.value.sessionId
         val hasHistory = runCatching { events.read(sessionId).isNotEmpty() }.getOrDefault(false)
-        configureLocked(_state.value.settings.baseUrl, selected, _state.value.settings.thinking, null, keepSession = hasHistory)
-        if (hasHistory) runCatching { events.append(sessionId, "session.model", buildJsonObject { put("from", previous); put("to", selected) }) }
-        _state.value.sessionId
+        configureLocked(baseUrl, selected, settings.thinking, null, keepSession = hasHistory)
+        if (hasHistory) runCatching { events.append(sessionId, "session.model", buildJsonObject {
+            put("from", settings.model); put("to", selected)
+            if (!sameEndpoint) { put("fromEndpoint", settings.baseUrl); put("toEndpoint", baseUrl) }
+        }) }
+        return _state.value.sessionId
     }
 
     suspend fun updateUiPreferences(value: UiPreferences) = preferencesMutex.withLock {

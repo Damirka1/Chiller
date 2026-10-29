@@ -60,6 +60,9 @@ data class DesktopSettings(val baseUrl: String = "https://api.deepseek.com", val
 @Serializable
 data class ProjectPrefs(val baseUrl: String? = null, val model: String? = null, val allowProcesses: Boolean? = null, val allowNetwork: Boolean? = null)
 
+/** Another connected provider in the model menu, with the chat models known for it (listed or used before). */
+data class PickerProvider(val baseUrl: String, val name: String, val models: List<String>)
+
 @Serializable
 data class CachedModelCatalog(val models: List<ProviderModel>, val fetchedAt: String)
 
