@@ -1,6 +1,8 @@
-# Разработка
+**English** · [Русский](CONTRIBUTING.ru.md)
 
-Нужны JDK 21+, ripgrep (`rg`) в PATH и Python 3 для offline smoke. Используйте Gradle wrapper; первый запуск скачивает зависимости.
+# Development
+
+You need JDK 21+, ripgrep (`rg`) on PATH and Python 3 for the offline smoke. Use the Gradle wrapper; the first run downloads dependencies.
 
 ```sh
 ./gradlew check :evals:offlineSmoke
@@ -8,14 +10,16 @@
 ./gradlew :app-desktop:createDistributable
 ```
 
-На Windows используйте `gradlew.bat`; сквозной smoke требует доступной команды `python3`. CI запускает unit-тесты на Linux/macOS/Windows, offline smoke на Linux/macOS и собирает DMG/MSI. Нативная UI-приёмка выполняется отдельно.
+On Windows use `gradlew.bat`; the end-to-end smoke needs a working `python3` command. CI runs unit tests on Linux/macOS/Windows, the offline smoke on Linux/macOS, and builds DMG/MSI. Native UI acceptance is done separately.
 
-[Архитектура](docs/ARCHITECTURE.md) · [Провайдеры](docs/PROVIDERS.md) · [Дизайн](docs/DESIGN.md) · [Зависимости](docs/DEPENDENCIES.md)
+[Architecture](docs/ARCHITECTURE.md) · [Providers](docs/PROVIDERS.md) · [Design](docs/DESIGN.md) · [Dependencies](docs/DEPENDENCIES.md)
 
-Делайте небольшие изменения и выполняйте подходящие проверки. Сохраняйте чужую работу; не запускайте несколько Gradle-сборок одного checkout одновременно. Изменения поведения должны сопровождаться регрессионной проверкой. Указывайте, какие проверки выполнены, пропущены или заблокированы.
+Make small changes and run the checks that fit them. Preserve other people's work; do not run several Gradle builds of one checkout at the same time. Behavior changes need a regression check. Say which checks were run, skipped or blocked.
 
-Секреты, пользовательские чаты, traces и локальные отчёты не коммитятся. `.env` и `reports/local/` игнорируются. Live API-тесты запускайте только с отдельным разрешённым бюджетом; они не входят в обычный check. Не включайте реальные ключи в fixtures.
+Secrets, user chats, traces and local reports are never committed. `.env` and `reports/local/` are ignored. Run live API tests only with a separately approved budget; they are not part of the regular check. Do not put real keys into fixtures.
 
-Публикация релиза выполняется workflow по тегу `vX.Y.Z` или `vX.Y.Z-rc.N` (release candidate публикуется как pre-release, текст берётся из соответствующего раздела `CHANGELOG.md`). Workflow сначала проверяет помеченный коммит на Linux, macOS и Windows, затем собирает установщики. Перед тегом проверьте точный коммит и CI; отчёт о локальных тестах не подтверждает опубликованный бинарник.
+Releases are published by the workflow on a `vX.Y.Z` or `vX.Y.Z-rc.N` tag (a release candidate is published as a pre-release; the text comes from the matching section of `CHANGELOG.md`). The workflow first checks the tagged commit on Linux, macOS and Windows, then builds the installers. Before tagging, check the exact commit and CI; a local test report does not vouch for the published binary.
 
-Перед DMG/MSI выполняется `:app-desktop:verifyBundledRipgrep`: встроенный ripgrep в готовом приложении должен найти файл с кириллицей в пути при пустом PATH. `:app-desktop:prepareThirdPartyNotices` собирает в приложение перечень сторонних библиотек с лицензиями из POM и файлами LICENSE/NOTICE; это перечень для проверки, а не юридическое заключение. Unit-тесты по-прежнему используют `rg` из PATH.
+Documentation is kept in English (`*.md`) and Russian (`*.ru.md`), with a language switch at the top of each file. Update both versions together.
+
+Before DMG/MSI, `:app-desktop:verifyBundledRipgrep` runs: the bundled ripgrep in the finished app must find a file with Cyrillic in its path with an empty PATH. `:app-desktop:prepareThirdPartyNotices` puts a list of third-party libraries with licenses from their POMs and LICENSE/NOTICE files into the app; it is a list for review, not a legal opinion. Unit tests still use `rg` from PATH.
