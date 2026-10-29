@@ -1,3 +1,5 @@
+@file:OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+
 package dev.chiller.app.ui
 
 import androidx.compose.animation.Crossfade
@@ -15,6 +17,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.VerticalScrollbar
+import androidx.compose.foundation.rememberScrollbarAdapter
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.OpenInNew
@@ -22,6 +26,10 @@ import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
+import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -136,19 +144,23 @@ internal fun SettingsPage(
             Box(Modifier.width(1.dp).fillMaxHeight().background(c.border.copy(alpha = .6f)))
         }
         Crossfade(section, Modifier.weight(1f).fillMaxHeight(), animationSpec = tween(if (LocalChillerReducedMotion.current) 0 else 150), label = "settings") { current ->
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
-                Column(Modifier.widthIn(max = 760.dp).fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 32.dp, vertical = 24.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
-                    Text(current.title, color = c.text, fontSize = 22.sp, fontWeight = FontWeight.Medium, letterSpacing = (-.5).sp)
+            BoxWithConstraints(Modifier.fillMaxSize()) {
+                val scroll = rememberScrollState()
+                Column(Modifier.fillMaxWidth().verticalScroll(scroll).padding(horizontal = if (maxWidth < 700.dp) 20.dp else 36.dp, vertical = 28.dp), verticalArrangement = Arrangement.spacedBy(24.dp)) {
+                    Text(current.title, color = c.text, fontSize = 28.sp, fontWeight = FontWeight.Medium, letterSpacing = (-.7).sp)
+                    Text(current.description(), color = c.muted, fontSize = 13.sp, lineHeight = 19.sp)
+                    Box(Modifier.fillMaxWidth().height(1.dp).background(c.border.copy(alpha = .65f)))
                     when (current) {
-                        SettingsSection.CONNECTION -> { ConnectionSection(data, actions); ProxyCard(data, actions) }
-                        SettingsSection.AGENT -> AgentSection(data, actions)
+                        SettingsSection.CONNECTION -> ConnectionSection(data, actions)
+                        SettingsSection.AGENT -> SettingsGrid { AgentSection(data, actions) }
                         SettingsSection.MCP -> McpSection(data.mcpServers, data.mcpStates, actions.saveMcpServers)
-                        SettingsSection.APPEARANCE -> AppearanceSection(data, actions)
-                        SettingsSection.DATA -> DataSection(data, actions)
+                        SettingsSection.APPEARANCE -> SettingsGrid { AppearanceSection(data, actions) }
+                        SettingsSection.DATA -> SettingsGrid { DataSection(data, actions) }
                         SettingsSection.KEYS -> KeysSection()
-                        SettingsSection.ABOUT -> AboutSection(data, actions)
+                        SettingsSection.ABOUT -> SettingsGrid { AboutSection(data, actions) }
                     }
                 }
+                VerticalScrollbar(rememberScrollbarAdapter(scroll), Modifier.align(Alignment.CenterEnd).fillMaxHeight().padding(vertical = 12.dp, horizontal = 4.dp))
             }
         }
     }
@@ -185,33 +197,53 @@ private fun ConnectionSection(data: SettingsData, actions: SettingsActions) {
             if (refused == null) { key = ""; creating = false; actions.applyConnection(provider.baseUrl, provider.defaultModel.orEmpty(), thinking, null) }
         }
     }
-    Card {
-        SectionTitle("Провайдер", "Все провайдеры совместимы с OpenAI Chat Completions. Ключ уходит только на адрес, для которого он задан.")
-        (ProviderPresets.all.map { it as ProviderPreset? } + data.customProviders.map { it.preset() } + listOf(null)).chunked(3).forEach { row ->
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                row.forEach { p ->
-                    if (p == null) {
-                        AddProviderTile(selected = creating, Modifier.weight(1f)) { creating = true; url = ""; model = ""; key = "" }
-                        return@forEach
-                    }
-                    val origin = originOf(p.baseUrl)
-                    val status = when {
-                        p.keyless -> "без ключа" to c.muted
-                        data.keySources[origin] == "env" -> "ключ из .env" to c.positive
-                        data.keySources[origin] == "keychain" -> "ключ сохранён" to c.positive
-                        data.keySources[origin] == "ui" -> "ключ задан" to c.positive
-                        else -> "нужен ключ" to c.faint
-                    }
-                    PresetCard(p, status, selected = !creating && origin == formOrigin, Modifier.weight(1f)) {
-                        creating = false; url = p.baseUrl; key = ""
-                        model = if (originOf(data.baseUrl) == origin) data.model else p.defaultModel.orEmpty()
-                        data.customProviders.firstOrNull { "custom:${it.id}" == p.id }?.thinking?.takeIf { originOf(data.baseUrl) != origin }?.let { thinking = it }
+    var search by remember { mutableStateOf("") }
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+    val catalogHeight = if (maxWidth < 860.dp) 240.dp else 480.dp
+    SettingsGrid(providerDetail = true) {
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        ChillerField(search, { search = it }, "Провайдеры", "Поиск по названию")
+        ChillerControl("Добавить провайдера", { creating = true; url = ""; model = ""; key = "" },
+            Modifier.fillMaxWidth(), icon = Icons.Outlined.Add, style = if (creating) ControlStyle.SELECTED else ControlStyle.OUTLINE)
+        val groups = listOf(
+            "Облачные" to ProviderPresets.all.filter { !it.keyless },
+            "Локальные" to ProviderPresets.all.filter { it.keyless },
+            "Мои подключения" to data.customProviders.map { it.preset() },
+        )
+        val catalogScroll = rememberScrollState()
+        Box {
+        Column(Modifier.heightIn(max = catalogHeight).verticalScroll(catalogScroll).padding(end = 10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        var matches = 0
+        groups.forEach { (title, providers) ->
+            val visible = providers.filter { it.name.contains(search.trim(), ignoreCase = true) || it.baseUrl.contains(search.trim(), ignoreCase = true) }
+            matches += visible.size
+            if (visible.isNotEmpty()) {
+                Text(title, color = c.faint, fontSize = 11.sp, fontWeight = FontWeight.Medium, modifier = Modifier.padding(top = 8.dp, start = 10.dp))
+                Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                    visible.forEach { p ->
+                        val origin = originOf(p.baseUrl)
+                        val status = when {
+                            p.keyless -> "без ключа" to c.muted
+                            data.keySources[origin] == "env" -> "ключ из .env" to c.positive
+                            data.keySources[origin] == "keychain" -> "ключ сохранён" to c.positive
+                            data.keySources[origin] == "ui" -> "ключ задан" to c.positive
+                            else -> "нужен ключ" to c.faint
+                        }
+                        PresetCard(p, status, selected = !creating && origin == formOrigin, Modifier.fillMaxWidth()) {
+                            creating = false; url = p.baseUrl; key = ""
+                            model = if (originOf(data.baseUrl) == origin) data.model else p.defaultModel.orEmpty()
+                            data.customProviders.firstOrNull { "custom:${it.id}" == p.id }?.thinking?.takeIf { originOf(data.baseUrl) != origin }?.let { thinking = it }
+                        }
                     }
                 }
-                repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
             }
         }
+        if (matches == 0) Text("Провайдеры не найдены", color = c.muted, fontSize = 12.sp)
+        }
+        VerticalScrollbar(rememberScrollbarAdapter(catalogScroll), Modifier.align(Alignment.CenterEnd).height(catalogHeight))
+        }
     }
+    Column(verticalArrangement = Arrangement.spacedBy(20.dp)) {
     Card {
         SectionTitle(when { creating -> "Свой провайдер"; custom != null -> custom.name; else -> preset?.name ?: "Свой адрес" },
             when {
@@ -248,13 +280,13 @@ private fun ConnectionSection(data: SettingsData, actions: SettingsActions) {
         } else Text("Модель выбирается из списка провайдера после «Применить».", color = c.faint, fontSize = 11.sp)
         preset?.keysUrl?.let { link -> ChillerControl("Где взять ключ: ${link.removePrefix("https://")}", { actions.openUrl(link) }, icon = Icons.AutoMirrored.Outlined.OpenInNew) }
         SettingToggle("Рассуждения модели", "Если провайдер поддерживает режим thinking", thinking) { thinking = it }
-        if (isCustom) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text("Профиль с этим провайдером", color = c.text, fontSize = 13.sp, modifier = Modifier.weight(1f))
+        if (isCustom) Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Профиль с этим провайдером", color = c.text, fontSize = 13.sp)
             listOf(null to "Не менять", "auto" to "Авто", "full" to "Полный", "compact" to "Компактный").forEach { (value, label) ->
                 ChillerControl(label, { profile = value }, style = if (profile == value) ControlStyle.SELECTED else ControlStyle.QUIET)
             }
         }
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             ChillerControl("Применить", ::apply, style = ControlStyle.PRIMARY, enabled = changed && url.isNotBlank() && (!isCustom || name.isNotBlank()))
             if (data.connection.status == "checking") ChillerControl("Отменить проверку", actions.cancelCheck, style = ControlStyle.OUTLINE)
             else ChillerControl("Проверить подключение", actions.checkConnection, style = ControlStyle.OUTLINE, enabled = !changed && data.keyConfigured && model.isNotBlank())
@@ -268,6 +300,10 @@ private fun ConnectionSection(data: SettingsData, actions: SettingsActions) {
             Text(if (changed) "Изменения не применены" else data.connection.message.ifBlank { line }, color = if (data.connection.status == "failed" && !changed) c.negative else c.muted, fontSize = 12.sp)
         }
         Text("Применение начинает новый диалог. Проверка отправляет один короткий запрос без файлов и инструментов.", color = c.faint, fontSize = 11.sp, lineHeight = 17.sp)
+    }
+    ProxyCard(data, actions)
+    }
+    }
     }
 }
 
@@ -303,7 +339,7 @@ private fun CostBudgetCard(data: SettingsData, actions: SettingsActions) {
             color = c.faint, fontSize = 11.sp, lineHeight = 16.sp)
         if (bound) Text("Цены сохранены для ${saved.model}; с текущей моделью ${data.model} бюджет откажет в запросах. Сохраните, чтобы указать цены для неё.",
             color = c.negative, fontSize = 12.sp, lineHeight = 17.sp)
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             ChillerControl("Сохранить для ${data.model.ifBlank { "текущей модели" }}", { actions.costBudget(draft(true)) { refused -> message = refused ?: "Сохранено" } }, style = ControlStyle.PRIMARY)
         }
         message?.let { Text(it, color = if (it == "Сохранено") c.positive else c.negative, fontSize = 12.sp) }
@@ -324,7 +360,7 @@ private fun ProxyCard(data: SettingsData, actions: SettingsActions) {
     val problem = draft.problem()
     Card {
         SectionTitle("Прокси", "Для корпоративной сети. Через прокси идут запросы к провайдерам, список моделей, картинки и веб-поиск; localhost и исключения — напрямую.")
-        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             listOf("system" to "Системный", "manual" to "Вручную", "off" to "Без прокси").forEach { (id, label) ->
                 ChillerControl(label, { mode = id; message = null }, style = if (mode == id) ControlStyle.SELECTED else ControlStyle.QUIET)
             }
@@ -336,32 +372,12 @@ private fun ProxyCard(data: SettingsData, actions: SettingsActions) {
         }, color = c.faint, fontSize = 11.sp, lineHeight = 16.sp)
         if (mode == "manual") ChillerField(url, { url = it; message = null }, "Адрес прокси", "http://proxy.company.local:3128")
         if (mode != "off") ChillerField(bypass, { bypass = it; message = null }, "Без прокси, через запятую", "*.company.local, 10.0.0.5")
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             ChillerControl("Сохранить", { actions.saveProxy(draft) { refused -> message = refused ?: "Сохранено. Проверьте подключение выше." } },
                 style = ControlStyle.PRIMARY, enabled = changed && problem == null)
         }
         val note = if (changed && problem != null) problem else message
         note?.let { Text(it, color = if (it.startsWith("Сохранено")) c.positive else c.negative, fontSize = 12.sp, lineHeight = 17.sp) }
-    }
-}
-
-/** The "+" tile that opens the form for a new custom provider. */
-@Composable
-private fun AddProviderTile(selected: Boolean, modifier: Modifier, onClick: () -> Unit) {
-    val c = LocalChillerPalette.current
-    val interaction = remember { MutableInteractionSource() }
-    val hovered by interaction.collectIsHoveredAsState()
-    val shape = RoundedCornerShape(10.dp)
-    Column(
-        modifier.clip(shape).background(if (selected) c.selected.copy(alpha = .6f) else if (hovered) c.hover else c.surface)
-            .border(if (selected) 1.5.dp else 1.dp, if (selected) c.accent.copy(alpha = .7f) else c.border, shape)
-            .hoverable(interaction).pointerHoverIcon(PointerIcon.Hand).clickable(interactionSource = interaction, indication = null, role = Role.Button, onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 10.dp),
-    ) {
-        Text("+ Свой провайдер", color = c.text, fontSize = 13.sp, fontWeight = FontWeight.Medium)
-        Text("шлюз компании, свой сервер", color = c.faint, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        Spacer(Modifier.height(4.dp))
-        Text("хранится только здесь", color = c.muted, fontSize = 11.sp)
     }
 }
 
@@ -372,8 +388,8 @@ private fun PresetCard(preset: ProviderPreset, status: Pair<String, Color>, sele
     val hovered by interaction.collectIsHoveredAsState()
     val shape = RoundedCornerShape(10.dp)
     Column(
-        modifier.clip(shape).background(if (selected) c.selected.copy(alpha = .6f) else if (hovered) c.hover else c.surface)
-            .border(if (selected) 1.5.dp else 1.dp, if (selected) c.accent.copy(alpha = .7f) else c.border, shape)
+        modifier.clip(shape).background(if (selected) c.accent.copy(alpha = .10f) else if (hovered) c.hover else c.surface)
+            .semantics { this.selected = selected }
             .hoverable(interaction).pointerHoverIcon(PointerIcon.Hand).clickable(interactionSource = interaction, indication = null, role = Role.RadioButton, onClick = onClick)
             .padding(horizontal = 12.dp, vertical = 10.dp),
     ) {
@@ -381,7 +397,6 @@ private fun PresetCard(preset: ProviderPreset, status: Pair<String, Color>, sele
             Text(preset.name, color = c.text, fontSize = 13.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
             if (preset.verified) Icon(Icons.Outlined.Verified, "Проверено в Chiller", Modifier.size(14.dp), tint = c.accent)
         }
-        Text(preset.baseUrl.removePrefix("https://").removePrefix("http://"), color = c.faint, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, fontFamily = ChillerFonts.mono)
         Spacer(Modifier.height(4.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(6.dp).clip(CircleShape).background(status.second)); Spacer(Modifier.width(5.dp))
@@ -420,7 +435,7 @@ private fun AgentSection(data: SettingsData, actions: SettingsActions) {
         Text("Время на задачу", color = c.text, fontSize = 13.sp)
         Text("Сколько может идти одна задача, считая все шаги, команды и помощников. Медленной локальной модели может понадобиться больше 10 минут.",
             color = c.faint, fontSize = 11.sp, lineHeight = 16.sp)
-        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             val minutes = listOf(10, 30, 60, 120).let { if (a.maxRunMinutes != AgentOptions.UNLIMITED && a.maxRunMinutes !in it) (it + a.maxRunMinutes).sorted() else it }
             (minutes.map { it to "$it мин" } + (AgentOptions.UNLIMITED to "Без лимита")).forEach { (v, label) ->
                 ChillerControl(label, { actions.agent(a.copy(maxRunMinutes = v)) }, style = if (a.maxRunMinutes == v) ControlStyle.SELECTED else ControlStyle.QUIET)
@@ -428,7 +443,7 @@ private fun AgentSection(data: SettingsData, actions: SettingsActions) {
         }
         Text("Шагов модели за задачу", color = c.text, fontSize = 13.sp)
         Text("Каждый шаг — один запрос к модели; большой файл или длинная задача может занять десятки шагов", color = c.faint, fontSize = 11.sp, lineHeight = 16.sp)
-        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             // Same chips as the other limits; a value saved by the old stepper still shows as its own selected chip.
             val steps = listOf(24, 48, 96, 200).let { if (a.maxRounds != AgentOptions.UNLIMITED && a.maxRounds !in it) (it + a.maxRounds).sorted() else it }
             (steps.map { it to "$it" } + (AgentOptions.UNLIMITED to "Без лимита")).forEach { (v, label) ->
@@ -437,19 +452,19 @@ private fun AgentSection(data: SettingsData, actions: SettingsActions) {
         }
         Text("Общий бюджет: основной агент и все помощники", color = c.text, fontSize = 13.sp)
         Text("Логические запросы к модели на всю задачу; транспортные повторы не считаются", color = c.faint, fontSize = 11.sp, lineHeight = 16.sp)
-        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             listOf(24 to "24", 48 to "48", 96 to "96", 192 to "192", AgentOptions.UNLIMITED to "Без лимита").forEach { (v, label) ->
                 ChillerControl(label, { actions.agent(a.copy(maxRequests = v)) }, style = if (a.maxRequests == v) ControlStyle.SELECTED else ControlStyle.QUIET)
             }
         }
         Text("Сумма сгенерированных выходных токенов на всю задачу, включая помощников. Это не лимит стоимости; входные токены не учитываются.", color = c.faint, fontSize = 11.sp, lineHeight = 16.sp)
-        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             listOf(32768 to "32k", 65536 to "64k", 262144 to "256k", 1_048_576 to "1M", AgentOptions.UNLIMITED to "Без лимита").forEach { (v, label) ->
                 ChillerControl(label, { actions.agent(a.copy(totalOutputTokens = v)) }, style = if (a.totalOutputTokens == v) ControlStyle.SELECTED else ControlStyle.QUIET)
             }
         }
         Text("Длина ответа за шаг, токенов", color = c.text, fontSize = 13.sp)
-        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             listOf(4096 to "4k", 8192 to "8k", 16384 to "16k", 32768 to "32k", 65536 to "64k", AgentOptions.UNLIMITED to "Максимум модели").forEach { (v, label) ->
                 ChillerControl(label, { actions.agent(a.copy(maxOutputTokens = v)) }, style = if (a.maxOutputTokens == v) ControlStyle.SELECTED else ControlStyle.QUIET)
             }
@@ -484,6 +499,41 @@ private fun AgentSection(data: SettingsData, actions: SettingsActions) {
                         style = if (target.id == data.selectedCaptureTarget) ControlStyle.SELECTED else ControlStyle.QUIET)
                 }
                 if (data.captureTargets.isEmpty()) Text("Список окон пуст. Обновите его и выберите окно явно.", color = c.faint, fontSize = 11.sp)
+            }
+        }
+    }
+}
+
+private fun SettingsSection.description(): String = when (this) {
+    SettingsSection.CONNECTION -> "Ваши модели и подключения. Выберите провайдера, чтобы настроить его параметры."
+    SettingsSection.AGENT -> "Поведение модели, возможности и ограничения для ваших задач."
+    SettingsSection.MCP -> "Подключайте инструменты и сервисы, с которыми работает агент."
+    SettingsSection.APPEARANCE -> "Рабочее пространство, в котором удобно сосредоточиться."
+    SettingsSection.DATA -> "Проекты, история и файлы приложения на этом компьютере."
+    SettingsSection.KEYS -> "Быстрый доступ к диалогам, проектам и командам."
+    SettingsSection.ABOUT -> "Версия приложения и сведения для диагностики."
+}
+
+/** Reflow the same composition: resizing must not discard drafts or field focus. */
+@Composable
+private fun SettingsGrid(providerDetail: Boolean = false, content: @Composable () -> Unit) {
+    Layout(content = content, modifier = Modifier.fillMaxWidth()) { measurables, constraints ->
+        val gap = 24.dp.roundToPx()
+        val wide = constraints.maxWidth >= (if (providerDetail) 860.dp else 1040.dp).roundToPx()
+        val columns = if (wide) 2 else 1
+        val firstWidth = if (!wide) constraints.maxWidth else if (providerDetail) 248.dp.roundToPx() else (constraints.maxWidth - gap) / 2
+        val heights = IntArray(columns)
+        val positions = mutableListOf<Pair<Int, Int>>()
+        val placeables = measurables.mapIndexed { index, measurable ->
+            val column = index % columns
+            val width = if (column == 0) firstWidth else constraints.maxWidth - firstWidth - gap
+            positions += (if (column == 0) 0 else firstWidth + gap) to heights[column]
+            measurable.measure(Constraints.fixedWidth(width)).also { heights[column] += it.height + gap }
+        }
+        layout(constraints.maxWidth, (heights.maxOrNull()?.minus(gap) ?: 0).coerceAtLeast(0)) {
+            placeables.forEachIndexed { index, placeable ->
+                val (x, y) = positions[index]
+                placeable.placeRelative(x, y)
             }
         }
     }
@@ -557,7 +607,7 @@ private fun ProfileCard(data: SettingsData, actions: SettingsActions) {
                 Text("Провайдер для картинок", color = c.text, fontSize = 13.sp)
                 Text("generate_image может рисовать через другой подключённый провайдер, со своим ключом", color = c.faint, fontSize = 11.sp, lineHeight = 15.sp)
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 (listOf("" to "Как у чата") + data.imageProviders).forEach { (url, label) ->
                     val selected = normalizeEndpoint(a.imageBaseUrl.ifBlank { data.baseUrl }) == normalizeEndpoint(url.ifBlank { data.baseUrl })
                     // A model id belongs to its endpoint: switching providers starts from that provider's own choice.
@@ -575,13 +625,13 @@ private fun ProfileCard(data: SettingsData, actions: SettingsActions) {
                 else -> "generate_image рисует через ${imageModel.displayName ?: imageModel.id}" + if (imageModel.imageEditing == true) " и умеет редактировать картинки" else ""
             }, color = c.faint, fontSize = 11.sp, lineHeight = 15.sp)
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             (listOf("auto" to "Авто", "off" to "Выкл") + listedImageModels.map { it.id to (it.displayName ?: it.id) }).forEach { (id, label) ->
                 ChillerControl(label, { actions.agent(a.copy(imageModel = id)) }, style = if (a.imageModel == id) ControlStyle.SELECTED else ControlStyle.QUIET)
             }
         }
         Text("Температура", color = c.text, fontSize = 13.sp)
-        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             val options = listOf<Double?>(null, 0.0, 0.2, 0.5, 0.8, 1.0)
             val recommended = ModelProfiles.recommendedSampling(data.model, listed?.displayName) != null
             options.forEach { t ->
@@ -636,11 +686,19 @@ private fun ThemeSwatch(id: String, label: String, selected: Boolean, modifier: 
     val (bg, fg) = when (id) { "dark" -> Color(0xFF1C1E20) to Color(0xFF2D3238); "light" -> Color(0xFFFFFFFF) to Color(0xFFE4E7EA); else -> Color(0xFFF4F5F6) to Color(0xFF2D3238) }
     val shape = RoundedCornerShape(10.dp)
     Column(modifier.clip(shape).border(if (selected) 1.5.dp else 1.dp, if (selected) c.accent else c.border, shape).pointerHoverIcon(PointerIcon.Hand).clickable(role = Role.RadioButton, onClick = onClick).padding(8.dp)) {
-        Box(Modifier.fillMaxWidth().height(54.dp).clip(RoundedCornerShape(7.dp)).background(bg).border(1.dp, c.border, RoundedCornerShape(7.dp)).padding(8.dp)) {
-            Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                Box(Modifier.width(46.dp).height(6.dp).clip(CircleShape).background(fg))
-                Box(Modifier.width(70.dp).height(6.dp).clip(CircleShape).background(fg.copy(alpha = .6f)))
-                Box(Modifier.width(30.dp).height(6.dp).clip(CircleShape).background(Color(0xFF376D59)))
+        Row(Modifier.fillMaxWidth().height(140.dp).clip(RoundedCornerShape(7.dp)).background(bg).border(1.dp, c.border, RoundedCornerShape(7.dp))) {
+            Column(Modifier.fillMaxHeight().fillMaxWidth(.25f).background(fg.copy(alpha = .16f)).padding(8.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                ChillerMark(Modifier.size(16.dp), Color(0xFF609D82))
+                repeat(4) { Box(Modifier.fillMaxWidth().height(4.dp).clip(CircleShape).background(fg.copy(alpha = .65f))) }
+            }
+            Column(Modifier.weight(1f).fillMaxHeight().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Box(Modifier.fillMaxWidth(.5f).height(5.dp).clip(CircleShape).background(fg))
+                Spacer(Modifier.height(5.dp))
+                Box(Modifier.fillMaxWidth(.9f).height(4.dp).clip(CircleShape).background(fg.copy(alpha = .6f)))
+                Box(Modifier.fillMaxWidth(.7f).height(4.dp).clip(CircleShape).background(fg.copy(alpha = .6f)))
+                Box(Modifier.fillMaxWidth(.4f).height(16.dp).clip(RoundedCornerShape(4.dp)).background(Color(0xFF609D82).copy(alpha = .35f)))
+                Spacer(Modifier.weight(1f))
+                Box(Modifier.fillMaxWidth().height(22.dp).clip(RoundedCornerShape(5.dp)).border(1.dp, fg.copy(alpha = .7f), RoundedCornerShape(5.dp)))
             }
         }
         Spacer(Modifier.height(6.dp))
@@ -700,7 +758,7 @@ private fun KeysSection() {
         listOf(shortcut("N") to "Новый диалог", shortcut("O") to "Открыть проект", shortcut("K") to "Поиск по диалогам и сообщениям", shortcut("P") to "Перейти к проекту",
             (if (isMacOs) "⌘ ⇧ P" else "Ctrl+Shift+P") to "Все команды", shortcut("1…9") to "Новый диалог в проекте по номеру", shortcut("↵") to "Отправить", shortcut(".") to "Остановить задачу",
             shortcut(",") to "Настройки", "Esc" to "Закрыть меню, настройки или поиск", "↑ ↓ ↵" to "Выбор в меню модели", "↑ ↓ → ←" to "Боковая панель: чаты и проекты", "Shift+F10" to "Меню выбранного в панели диалога", "↑ ↓" to "Разделы настроек", "Tab" to "Навигация с клавиатуры (видимый фокус)").forEach { (keys, label) ->
-            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 2.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
                 Text(label, color = c.text, fontSize = 13.sp, modifier = Modifier.weight(1f))
                 Text(keys, color = c.muted, fontSize = 12.sp, fontFamily = ChillerFonts.mono, modifier = Modifier.clip(RoundedCornerShape(6.dp)).border(1.dp, c.border, RoundedCornerShape(6.dp)).padding(horizontal = 8.dp, vertical = 3.dp))
             }

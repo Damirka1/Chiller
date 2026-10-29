@@ -24,7 +24,10 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.input.pointer.PointerIcon
@@ -177,21 +180,45 @@ fun ChillerField(value: String, onValueChange: (String) -> Unit, label: String, 
 }
 
 @Composable
-fun ChillerMark(modifier: Modifier = Modifier, color: Color = LocalChillerPalette.current.text) {
-    Canvas(modifier.size(24.dp)) {
-        val center = Offset(size.width / 2, size.height / 2)
-        val radius = size.minDimension * .37f
+fun ChillerMark(modifier: Modifier = Modifier, color: Color = LocalChillerPalette.current.accent) {
+    // Filled facets keep the crystal legible at sidebar and message-avatar sizes.
+    val arm = remember { Path().apply {
+        moveTo(12f, 1.5f)
+        lineTo(14.25f, 3f)
+        lineTo(14f, 6.8f)
+        lineTo(12f, 8.2f)
+        lineTo(10f, 6.8f)
+        lineTo(9.75f, 3f)
+        close()
+    } }
+    val facet = remember { Path().apply {
+        moveTo(12f, 1.5f)
+        lineTo(12f, 8.2f)
+        lineTo(10f, 6.8f)
+        lineTo(9.75f, 3f)
+        close()
+    } }
+    val core = remember { Path().apply {
         for (i in 0 until 6) {
-            val a = i * Math.PI / 3 - Math.PI / 2
-            val direction = Offset(cos(a).toFloat(), sin(a).toFloat())
-            val tip = center + direction * radius
-            drawLine(color, center, tip, strokeWidth = size.minDimension * .065f, cap = StrokeCap.Round)
-            val fork = center + direction * radius * .58f
-            for (side in listOf(-1, 1)) {
-                val b = a + side * Math.PI / 3
-                val end = fork + Offset(cos(b).toFloat(), sin(b).toFloat()) * radius * .32f
-                drawLine(color, fork, end, strokeWidth = size.minDimension * .055f, cap = StrokeCap.Round)
+            val angle = i * Math.PI / 3 - Math.PI / 2
+            val x = 12f + cos(angle).toFloat() * 2.6f
+            val y = 12f + sin(angle).toFloat() * 2.6f
+            if (i == 0) moveTo(x, y) else lineTo(x, y)
+        }
+        close()
+    } }
+    val lightFacet = lerp(color, Color.White, .22f)
+    Canvas(modifier.size(24.dp)) {
+        val side = size.minDimension
+        withTransform({
+            translate((size.width - side) / 2, (size.height - side) / 2)
+            scale(side / 24f, side / 24f, pivot = Offset.Zero)
+        }) {
+            for (i in 0 until 6) rotate(i * 60f, pivot = Offset(12f, 12f)) {
+                drawPath(arm, color)
+                drawPath(facet, lightFacet)
             }
+            drawPath(core, color)
         }
     }
 }
