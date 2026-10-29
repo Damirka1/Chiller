@@ -1,5 +1,6 @@
 package dev.chiller.app.ui
 
+import dev.chiller.app.i18n.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -52,29 +53,29 @@ internal fun ComparisonPage(
     Box(modifier, contentAlignment = Alignment.TopCenter) {
         Column(Modifier.widthIn(max = 980.dp).fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 28.dp, vertical = 18.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                ChillerControl("Назад к диалогу", actions.close, icon = Icons.AutoMirrored.Outlined.ArrowBack)
+                ChillerControl(strings.settings.backToDialog, actions.close, icon = Icons.AutoMirrored.Outlined.ArrowBack)
                 Spacer(Modifier.weight(1f))
                 Text(endpoint.removePrefix("https://").removePrefix("http://"), color = c.faint, fontSize = 11.sp, fontFamily = ChillerFonts.mono)
             }
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text("Сравнение моделей", color = c.text, fontSize = 22.sp, fontWeight = FontWeight.Medium, letterSpacing = (-.5).sp)
-                Text("Один и тот же набор задач, настоящий цикл агента и независимая проверка результата. Видно, какая модель и какой профиль справляются лучше и во что это обходится.", color = c.muted, fontSize = 12.sp, lineHeight = 18.sp)
+                Text(strings.tools.comparison, color = c.text, fontSize = 22.sp, fontWeight = FontWeight.Medium, letterSpacing = (-.5).sp)
+                Text(strings.tools.comparisonNote, color = c.muted, fontSize = 12.sp, lineHeight = 18.sp)
             }
             val shown = state.shown
             when {
                 shown != null -> {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("Сравнение от ${formatStamp(shown.startedAt)}" + if (!shown.complete) " · остановлено" else "", color = c.text, fontSize = 14.sp, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f))
-                        ChillerControl("Новое сравнение", { actions.show(null) }, icon = Icons.Outlined.Add)
+                        Text(strings.tools.comparisonFrom(formatStamp(shown.startedAt), !shown.complete), color = c.text, fontSize = 14.sp, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f))
+                        ChillerControl(strings.tools.newComparison, { actions.show(null) }, icon = Icons.Outlined.Add)
                     }
                     ResultsTable(shown.sides, shown.tasks, shown.reports.mapIndexed { i, r -> i to r.results }.toMap(), tasks, running = null)
                 }
                 state.running || state.results.isNotEmpty() -> {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         if (state.running) { Pulse(c.accent); Spacer(Modifier.width(8.dp)) }
-                        Text(if (state.running) "Идёт: ${state.current ?: "подготовка"}" else state.error?.let { "Завершено: $it" } ?: "Готово", color = c.text, fontSize = 13.sp, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        if (state.running) ChillerControl("Остановить", actions.cancel, icon = Icons.Outlined.Stop, style = ControlStyle.OUTLINE)
-                        else ChillerControl("Новое сравнение", actions.reset, icon = Icons.Outlined.Add)
+                        Text(if (state.running) strings.tools.running(state.current) else state.error?.let { strings.tools.finishedWith(it) } ?: strings.tools.done, color = c.text, fontSize = 13.sp, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        if (state.running) ChillerControl(strings.tools.stop, actions.cancel, icon = Icons.Outlined.Stop, style = ControlStyle.OUTLINE)
+                        else ChillerControl(strings.tools.newComparison, actions.reset, icon = Icons.Outlined.Add)
                     }
                     ResultsTable(state.sides, state.tasks, state.results, tasks, running = state.current.takeIf { state.running })
                 }
@@ -92,31 +93,31 @@ private fun Setup(models: List<String>, tasks: List<Pair<String, String>>, actio
     var selected by remember { mutableStateOf(tasks.map { it.first }.toSet()) }
     var repeats by remember { mutableStateOf(1) }
     PageCard {
-        Text("Стороны", color = c.text, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+        Text(strings.tools.sides, color = c.text, fontSize = 14.sp, fontWeight = FontWeight.Medium)
         sides.forEachIndexed { index, side ->
             Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(c.sidebar.copy(alpha = .6f)).padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("${'A' + index}", color = c.accent, fontSize = 13.sp, fontWeight = FontWeight.Medium, modifier = Modifier.width(22.dp))
-                    Box(Modifier.weight(1f)) { ChillerField(side.model, { v -> sides = sides.toMutableList().also { it[index] = side.copy(model = v.trim()) } }, "Модель", "ID модели на этом адресе") }
-                    if (sides.size > 1) ChillerIconButton(Icons.Outlined.Close, "Убрать сторону", { sides = sides.filterIndexed { i, _ -> i != index } })
+                    Box(Modifier.weight(1f)) { ChillerField(side.model, { v -> sides = sides.toMutableList().also { it[index] = side.copy(model = v.trim()) } }, strings.tools.model, strings.tools.modelIdHere) }
+                    if (sides.size > 1) ChillerIconButton(Icons.Outlined.Close, strings.tools.removeSide, { sides = sides.filterIndexed { i, _ -> i != index } })
                 }
                 if (models.isNotEmpty()) Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     models.take(12).forEach { m -> ChillerControl(m, { sides = sides.toMutableList().also { it[index] = side.copy(model = m) } }, style = if (m == side.model) ControlStyle.SELECTED else ControlStyle.QUIET) }
                 }
                 Row(Modifier.clip(RoundedCornerShape(8.dp)).background(c.surface).padding(2.dp), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                    listOf("auto" to "Авто", "full" to "Полный профиль", "compact" to "Компактный").forEach { (id, label) ->
+                    listOf("auto" to strings.tools.auto, "full" to strings.tools.fullProfile, "compact" to strings.tools.compact).forEach { (id, label) ->
                         ChillerControl(label, { sides = sides.toMutableList().also { it[index] = side.copy(profile = id) } }, style = if (side.profile == id) ControlStyle.SELECTED else ControlStyle.QUIET)
                     }
                 }
             }
         }
-        if (sides.size < 3) ChillerControl("Добавить сторону", { sides = sides + ComparisonSide(models.firstOrNull() ?: "", "auto") }, icon = Icons.Outlined.Add)
+        if (sides.size < 3) ChillerControl(strings.tools.addSide, { sides = sides + ComparisonSide(models.firstOrNull() ?: "", "auto") }, icon = Icons.Outlined.Add)
     }
     PageCard {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("Задачи · ${selected.size} из ${tasks.size}", color = c.text, fontSize = 14.sp, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f))
-            ChillerControl("Все", { selected = tasks.map { it.first }.toSet() })
-            ChillerControl("Ни одной", { selected = emptySet() })
+            Text(strings.tools.tasksOf(selected.size, tasks.size), color = c.text, fontSize = 14.sp, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f))
+            ChillerControl(strings.tools.all, { selected = tasks.map { it.first }.toSet() })
+            ChillerControl(strings.tools.none, { selected = emptySet() })
         }
         tasks.chunked(2).forEach { pair ->
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -137,7 +138,7 @@ private fun Setup(models: List<String>, tasks: List<Pair<String, String>>, actio
             }
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("Повторов на задачу", color = c.text, fontSize = 13.sp, modifier = Modifier.weight(1f))
+            Text(strings.tools.repeats, color = c.text, fontSize = 13.sp, modifier = Modifier.weight(1f))
             listOf(1, 2, 3).forEach { r -> ChillerControl("$r", { repeats = r }, style = if (repeats == r) ControlStyle.SELECTED else ControlStyle.QUIET) }
         }
     }
@@ -145,10 +146,10 @@ private fun Setup(models: List<String>, tasks: List<Pair<String, String>>, actio
     val ready = sides.all { it.model.isNotBlank() } && selected.isNotEmpty()
     Row(verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
-            Text("$runs ${plural(runs, "прогон", "прогона", "прогонов")} агента · не больше ${runs * 14} запросов к модели", color = c.text, fontSize = 13.sp)
-            Text("Каждый прогон — настоящие платные запросы. Результат проверяется Python-скриптами и сравнением файлов, не словами модели. Нужен python3.", color = c.faint, fontSize = 11.sp, lineHeight = 16.sp)
+            Text(strings.tools.runsEstimate(runs, runs * 14), color = c.text, fontSize = 13.sp)
+            Text(strings.tools.runsNote, color = c.faint, fontSize = 11.sp, lineHeight = 16.sp)
         }
-        ChillerControl("Запустить сравнение", { actions.start(sides, selected, repeats) }, icon = Icons.Outlined.PlayArrow, style = ControlStyle.PRIMARY, enabled = ready)
+        ChillerControl(strings.tools.startComparison, { actions.start(sides, selected, repeats) }, icon = Icons.Outlined.PlayArrow, style = ControlStyle.PRIMARY, enabled = ready)
     }
 }
 
@@ -167,21 +168,21 @@ private fun ResultsTable(sides: List<ComparisonSide>, taskIds: List<String>, res
                         Text("${'A' + i}", color = c.accent, fontSize = 12.sp, fontWeight = FontWeight.Medium)
                         Spacer(Modifier.width(6.dp))
                         Text(side.model, color = c.text, fontSize = 12.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        if (i == best && sides.size > 1) { Spacer(Modifier.width(6.dp)); Icon(Icons.Outlined.EmojiEvents, "Лучший результат", Modifier.size(14.dp), tint = c.accent) }
+                        if (i == best && sides.size > 1) { Spacer(Modifier.width(6.dp)); Icon(Icons.Outlined.EmojiEvents, strings.tools.bestResult, Modifier.size(14.dp), tint = c.accent) }
                     }
-                    Text(dev.chiller.agent.ModelProfiles.resolve(side.profile, side.model).name.lowercase() + " профиль", color = c.faint, fontSize = 11.sp)
+                    Text(strings.tools.profileSuffix(dev.chiller.agent.ModelProfiles.resolve(side.profile, side.model).name.lowercase()), color = c.faint, fontSize = 11.sp)
                 }
             }
         }
         Box(Modifier.fillMaxWidth().height(1.dp).background(c.border))
         // Summary row.
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("Итого", color = c.text, fontSize = 12.sp, fontWeight = FontWeight.Medium, modifier = Modifier.width(220.dp))
+            Text(strings.tools.total, color = c.text, fontSize = 12.sp, fontWeight = FontWeight.Medium, modifier = Modifier.width(220.dp))
             summaries.forEach { s ->
                 Column(Modifier.weight(1f).padding(horizontal = 6.dp)) {
                     Text(if (s.runs == 0) "—" else "${s.passed}/${s.runs} · ${(s.passRate * 100).toInt()}%", color = if (s.runs > 0 && s.passed == s.runs) c.positive else c.text, fontSize = 15.sp, fontWeight = FontWeight.Medium)
-                    if (s.runs > 0) Text(listOfNotNull("%.1f с".format(s.seconds), s.prompt?.let { "${compactTokens(it)} → ${compactTokens(s.completion)} ток." }, "раундов ${"%.1f".format(s.avgRounds)}", s.toolErrors.takeIf { it > 0 }?.let { "ошибок инстр. $it" }, s.repeatedReads.takeIf { it > 0 }?.let { "повторных чтений $it" },
-                        s.failedEdits.takeIf { it > 0 }?.let { "неудачных правок $it" }, "вывод инстр. ${compactTokens(s.toolOutputChars)} симв.").joinToString(" · "),
+                    if (s.runs > 0) Text(listOfNotNull(strings.tools.seconds(s.seconds), s.prompt?.let { strings.tools.tokensFlow(compactTokens(it), compactTokens(s.completion)) }, strings.tools.avgRounds(s.avgRounds), s.toolErrors.takeIf { it > 0 }?.let { strings.tools.toolErrors(it) }, s.repeatedReads.takeIf { it > 0 }?.let { strings.tools.repeatedReads(it) },
+                        s.failedEdits.takeIf { it > 0 }?.let { strings.tools.failedEdits(it) }, strings.tools.toolOutput(compactTokens(s.toolOutputChars))).joinToString(" · "),
                         color = c.faint, fontSize = 11.sp, lineHeight = 15.sp)
                 }
             }
@@ -197,7 +198,7 @@ private fun ResultsTable(sides: List<ComparisonSide>, taskIds: List<String>, res
                     val rows = results[i].orEmpty().filter { it.task == task }
                     Box(Modifier.weight(1f).padding(horizontal = 6.dp)) {
                         when {
-                            rows.isEmpty() && running?.startsWith(side.label) == true -> Text("в очереди", color = c.faint, fontSize = 11.sp)
+                            rows.isEmpty() && running?.startsWith(side.label) == true -> Text(strings.tools.queued, color = c.faint, fontSize = 11.sp)
                             rows.isEmpty() -> Text("—", color = c.faint, fontSize = 12.sp)
                             else -> Cell(rows)
                         }
@@ -219,7 +220,7 @@ private fun Cell(rows: List<EvalResult>) {
         }
         Spacer(Modifier.width(6.dp))
         Column {
-            Text((if (rows.size > 1) "$passed/${rows.size} · " else "") + "%.1f с · %d р.".format(rows.sumOf { it.durationMs } / 1000.0 / rows.size, rows.sumOf { it.rounds } / rows.size), color = c.text, fontSize = 11.sp)
+            Text((if (rows.size > 1) "$passed/${rows.size} · " else "") + strings.tools.rowTime(rows.sumOf { it.durationMs } / 1000.0 / rows.size, rows.sumOf { it.rounds } / rows.size), color = c.text, fontSize = 11.sp)
             Text(rows.last().verdict.take(60), color = c.faint, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
@@ -229,14 +230,14 @@ private fun Cell(rows: List<EvalResult>) {
 private fun History(history: List<ComparisonRecord>, actions: ComparisonActions) {
     val c = LocalChillerPalette.current
     PageCard {
-        Text("История", color = c.text, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+        Text(strings.tools.history, color = c.text, fontSize = 14.sp, fontWeight = FontWeight.Medium)
         history.forEach { record ->
             HoverRow({ actions.show(record) }) {
                 Icon(Icons.Outlined.Insights, null, Modifier.size(15.dp), tint = c.muted)
                 Spacer(Modifier.width(10.dp))
                 Column(Modifier.weight(1f)) {
                     Text(record.sides.joinToString("  vs  ") { it.label }, color = c.text, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text(formatStamp(record.startedAt) + " · ${record.tasks.size} задач" + if (!record.complete) " · остановлено" else "", color = c.faint, fontSize = 11.sp)
+                    Text(strings.tools.historyLine(formatStamp(record.startedAt), record.tasks.size, !record.complete), color = c.faint, fontSize = 11.sp)
                 }
                 Text(record.reports.joinToString("  ") { r -> "${r.results.count { it.passed }}/${r.results.size}" }, color = c.muted, fontSize = 12.sp, fontFamily = ChillerFonts.mono)
             }

@@ -35,6 +35,7 @@ interface Strings {
     val dialogs: DialogStrings
     val app: AppStrings
     val screens: ScreenStrings
+    val tools: ToolScreenStrings
     // groups
 }
 
@@ -799,6 +800,73 @@ interface ScreenStrings {
     val pastedImagePlain: String
     fun pastedText(size: String): String
     // end screens
+}
+
+interface ToolScreenStrings {
+    val comparison: String
+    val comparisonNote: String
+    fun comparisonFrom(stamp: String, stopped: Boolean): String
+    val newComparison: String
+    fun running(current: String?): String
+    fun finishedWith(error: String): String
+    val done: String
+    val stop: String
+    val sides: String
+    val model: String
+    val modelIdHere: String
+    val removeSide: String
+    val auto: String
+    val fullProfile: String
+    val compact: String
+    val addSide: String
+    fun tasksOf(selected: Int, total: Int): String
+    val all: String
+    val none: String
+    val repeats: String
+    fun runsEstimate(runs: Int, requests: Int): String
+    val runsNote: String
+    val startComparison: String
+    val bestResult: String
+    fun profileSuffix(profile: String): String
+    val total: String
+    fun seconds(s: Double): String
+    fun tokensFlow(input: String, output: String): String
+    fun avgRounds(rounds: Double): String
+    fun toolErrors(n: Int): String
+    fun repeatedReads(n: Int): String
+    fun failedEdits(n: Int): String
+    fun toolOutput(chars: String): String
+    val queued: String
+    fun rowTime(seconds: Double, rounds: Int): String
+    val history: String
+    fun historyLine(stamp: String, tasks: Int, stopped: Boolean): String
+    val mcpServers: String
+    val mcpNote: String
+    val noServers: String
+    val addServer: String
+    val addServerNote: String
+    val name: String
+    val commandAndArgs: String
+    val envVars: String
+    val looksLikeKey: String
+    val add: String
+    val commandNotParsed: String
+    val importJson: String
+    val importNote: String
+    val mcpJsonA11y: String
+    val import: String
+    val noLocalServers: String
+    fun toolsCount(n: Int): String
+    val serverFailed: String
+    val serverStarting: String
+    val serverOff: String
+    val hideDetails: String
+    val details: String
+    fun serverToggle(name: String): String
+    fun deleteServer(name: String): String
+    val readOnly: String
+    val canChange: String
+    // end tools
 }
 
 // interfaces

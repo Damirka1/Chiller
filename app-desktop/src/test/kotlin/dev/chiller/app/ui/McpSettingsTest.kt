@@ -47,11 +47,11 @@ class McpSettingsTest {
                 McpSection(emptyList(), emptyMap()) { list, done -> saved = list; done(null) }
             }
         }
-        onNodeWithContentDescription("Название").performTextInput("github")
-        onNodeWithContentDescription("Команда и аргументы").performTextInput("npx -y \"@modelcontextprotocol/server-github\"")
-        onNodeWithContentDescription("Переменные окружения (необязательно)").performTextInput("GITHUB_PERSONAL_ACCESS_TOKEN=ghp_1234567890abcdefghijklmnop")
-        onNodeWithText("Похоже на ключ", substring = true).assertExists()
-        onNodeWithText("Добавить").performClick()
+        onNodeWithContentDescription("Name").performTextInput("github")
+        onNodeWithContentDescription("Command and arguments").performTextInput("npx -y \"@modelcontextprotocol/server-github\"")
+        onNodeWithContentDescription("Environment variables (optional)").performTextInput("GITHUB_PERSONAL_ACCESS_TOKEN=ghp_1234567890abcdefghijklmnop")
+        onNodeWithText("looks like a key", substring = true).assertExists()
+        onNodeWithText("Add").performClick()
         assertEquals(McpServerConfig("github", "npx", listOf("-y", "@modelcontextprotocol/server-github"), mapOf("GITHUB_PERSONAL_ACCESS_TOKEN" to "ghp_1234567890abcdefghijklmnop")), saved!!.single())
     }
 }
