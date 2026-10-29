@@ -6,6 +6,10 @@ All notable changes to Chiller. The format follows [Keep a Changelog](https://ke
 
 ## [Unreleased]
 
+## [1.3.0-rc.1] — 2026-10-29
+
+The first candidate of 1.3: the interface in English and Russian, providers over plain HTTP and through a corporate proxy, another provider from the model menu and for images, the model's reasoning step by step, a configurable time per task, and dialogs that keep going after an interrupted step.
+
 ### Added
 
 - **Interface in English and Russian:** English by default, Russian in Settings → Appearance → Language; the switch applies at once. Statuses, errors and the demo follow the chosen language.
@@ -48,6 +52,13 @@ All notable changes to Chiller. The format follows [Keep a Changelog](https://ke
 - The time in the dialog list ("23 min") was cut off and shifted to the left.
 - A task stopped during an agent question is shown as stopped on opening, not as interrupted.
 - On Windows the full path was shown instead of the folder name; "Open in Finder" in settings is called "Show in Explorer" on Windows.
+
+### Known limitations
+
+- Checked by unit, UI and offscreen render tests; the packaged app was not yet checked live on macOS and Windows, including the language switch, the proxy and images through another provider.
+- The proxy has no login and password (including NTLM/Kerberos), no PAC scripts and no SOCKS.
+- Dialog titles and saved messages keep the language they were written in.
+- The installers are not signed: on macOS, open the app the first time with right-click → "Open"; on Windows, SmartScreen may ask for confirmation.
 
 ## [1.2.1] — 2026-10-21
 
@@ -211,6 +222,7 @@ The first release candidate of the 1.2 branch: profiles for small models, a veri
 
 The first public preview: a desktop app with Focus and Studio modes, code tools with file snapshots and undo, processes, subagent helpers, presets for OpenAI-compatible providers, a settings page and DMG/MSI builds in CI.
 
+[1.3.0-rc.1]: https://github.com/Damirka1/Chiller/compare/v1.2.1...v1.3.0-rc.1
 [1.2.1]: https://github.com/Damirka1/Chiller/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/Damirka1/Chiller/compare/v1.2.0-rc.3...v1.2.0
 [1.2.0-rc.3]: https://github.com/Damirka1/Chiller/compare/v1.2.0-rc.2...v1.2.0-rc.3
