@@ -1,5 +1,6 @@
 package dev.chiller.app.di
 
+import dev.chiller.app.i18n.*
 import dev.chiller.contracts.ArtifactStore
 import dev.chiller.contracts.ComposerAttachment
 import dev.chiller.contracts.FilePresentation
@@ -38,7 +39,7 @@ class AttachmentRepository(directory: Path, private val artifacts: ArtifactStore
         require(Files.isDirectory(root, LinkOption.NOFOLLOW_LINKS) && !Files.isSymbolicLink(root)) { "Attachment storage must be a real directory" }
     }
 
-    suspend fun importText(sessionId: String, text: String, name: String = "Вставленный текст.txt"): ComposerAttachment {
+    suspend fun importText(sessionId: String, text: String, name: String = I18n.current.di.pastedTextName): ComposerAttachment {
         // Megabytes of text are encoded once, off the UI thread.
         return withContext(Dispatchers.IO) {
             val bytes = encodeUtf8Strict(text)
@@ -78,7 +79,7 @@ class AttachmentRepository(directory: Path, private val artifacts: ArtifactStore
             ?: throw IllegalArgumentException("Invalid PNG image")
         require(dimensions.first.toLong() * dimensions.second <= MAX_PIXELS) { "Image exceeds 16 megapixels" }
         val id = validSession(sessionId)
-        val name = "Вставленное изображение.png"
+        val name = I18n.current.di.pastedImageName
         val mime = "image/png"
         val artifactId = artifacts.put(id, binarySummary(name, mime, png)).id
         persist(id, artifactId, png)

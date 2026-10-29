@@ -1,5 +1,6 @@
 package dev.chiller.app.di
 
+import dev.chiller.app.i18n.*
 import dev.chiller.agent.ModelProfiles
 import dev.chiller.evals.EvalReport
 import dev.chiller.evals.EvalResult
@@ -90,7 +91,7 @@ class ModelComparison(private val directory: Path, private val scope: CoroutineS
                 }
                 val record = ComparisonRecord(id, stamp, endpoint, sides, tasks.toList(), repeats, reports + partial, complete)
                 try { writeReplacing(folder.resolve("$id.json"), json.encodeToString(ComparisonRecord.serializer(), record)) }
-                catch (error: Exception) { _state.update { it.copy(error = "Результаты не сохранены: ${error.javaClass.simpleName}: ${error.message?.take(200)}") } }
+                catch (error: Exception) { _state.update { it.copy(error = I18n.current.di.resultsNotSaved("${error.javaClass.simpleName}: ${error.message?.take(200)}")) } }
             }
             try {
                 sides.forEachIndexed { index, side ->
@@ -105,7 +106,7 @@ class ModelComparison(private val directory: Path, private val scope: CoroutineS
                 }
                 complete = true
             } catch (cancelled: CancellationException) {
-                _state.update { it.copy(error = "Остановлено") }
+                _state.update { it.copy(error = I18n.current.di.stopped) }
             } catch (error: Exception) {
                 _state.update { it.copy(error = (error.message ?: error.javaClass.simpleName).take(300)) }
             } finally {

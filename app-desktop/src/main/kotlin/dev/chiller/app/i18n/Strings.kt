@@ -36,6 +36,8 @@ interface Strings {
     val app: AppStrings
     val screens: ScreenStrings
     val tools: ToolScreenStrings
+    val controller: ControllerStrings
+    val di: ServiceStrings
     // groups
 }
 
@@ -867,6 +869,158 @@ interface ToolScreenStrings {
     val readOnly: String
     val canChange: String
     // end tools
+}
+
+interface ControllerStrings {
+    val notChecked: String
+    val noApiKey: String
+    val catalogReceived: String
+    fun deletePreview(events: Int, artifacts: Int, traces: Int, bytes: Long): String
+    val deletePrepareFailed: String
+    val deletePartial: String
+    val deleteDataChanged: String
+    val screenPermission: String
+    val windowUnavailable: String
+    val waitForTask: String
+    val cannotEdit: String
+    val chooseModelFirst: String
+    val checkingOne: String
+    val hidden: String
+    val badUrl: String
+    val folderOpenFailed: String
+    val projectUnavailable: String
+    val dialog: String
+    val taskInProject: String
+    val relocateFailed: String
+    val restoreFailed: String
+    val isolateNeedsRepo: String
+    fun isolateFailed(reason: String): String
+    val notInCopy: String
+    val otherTaskInProject: String
+    fun movedFiles(n: Int): String
+    val noChanges: String
+    fun notClean(branch: String): String
+    fun moveFailed(reason: String): String
+    fun removeCopyFailed(reason: String): String
+    val badRequestId: String
+    val attachmentsUnavailable: String
+    val emptyMessage: String
+    val otherTaskRunning: String
+    val folderBusy: String
+    fun tooManyRuns(n: Int): String
+    val demoDialog: String
+    val chooseModelInSettings: String
+    val dialogFolderMissing: String
+    val offlineAnswer: String
+    val saveMessageFailed: String
+    val offlineSaveFailed: String
+    val startFailed: String
+    val notAccepted: String
+    val exportPrepareFailed: String
+    val exportSaveFailed: String
+    val processPermissionSaveFailed: String
+    val undoFailed: String
+    val verifyNotParsed: String
+    val noticeVerifyNotParsed: String
+    fun verifyStartFailed(reason: String): String
+    val noticeVerifyPassed: String
+    val verifyGaveUp: String
+    val noticeVerifyGaveUp: String
+    val verifySentOutput: String
+    val noticeVerifyNotStarted: String
+    val noticeDone: String
+    fun noticeError(error: String): String
+    val noticeFailed: String
+    val noticeStopped: String
+    val stillRunning: String
+    fun undoFailedWith(reason: String): String
+    fun undoPartial(undone: Int, total: Int, failures: String): String
+    val demoStartFailed: String
+    val noticeWaitingAnswer: String
+    val noticeWaitingApproval: String
+    val confirmedByReply: String
+    val localNoKey: String
+    fun tooManyProviders(n: Int): String
+    fun tooManyServers(n: Int): String
+    val serverNeedsNameAndCommand: String
+    val serverNamesDiffer: String
+    val envNames: String
+    fun keySavedIn(store: String): String
+    fun keySaveFailed(store: String): String
+    fun keyDeleteFailed(store: String): String
+    fun budgetOtherModel(budgetModel: String, chatModel: String): String
+    val anotherModel: String
+    fun budgetNoImagePrice(model: String): String
+    // end controller
+}
+
+interface ServiceStrings {
+    val catalogKeyRejected: String
+    val catalogUnsupported: String
+    val rateLimited: String
+    val catalogTooLarge: String
+    val catalogMalformed: String
+    val catalogNetwork: String
+    val catalogHttpError: String
+    val catalogFailed: String
+    val verified: String
+    val keyRejected: String
+    val notFound: String
+    val serverError: String
+    val requestRejected: String
+    val networkError: String
+    val badEndpoint: String
+    val modelIdRequired: String
+    val apiKeyRequired: String
+    val checkNotRun: String
+    val emptyResponse: String
+    val notChatCompletions: String
+    fun withHttp(text: String, status: Int): String
+    val tlsFailed: String
+    val customPresetNote: String
+    val nameLength: String
+    val addressRule: String
+    val keyVariableRule: String
+    val modelLength: String
+    val profileRule: String
+    val deepseekNote: String
+    val openrouterNote: String
+    val geminiNote: String
+    val localNoKey: String
+    val vllmNote: String
+    val fromPath: String
+    val bundled: String
+    val search: String
+    val bundledBroken: String
+    val toolMissing: String
+    val noReply3s: String
+    val available: String
+    fun startError(code: Int): String
+    fun verifyFailedHeader(attempt: Int, max: Int): String
+    val verifyCommand: String
+    val verifyTimedOut: String
+    fun verifyExitCode(code: Int): String
+    fun verifyState(state: String): String
+    val verifyTail: String
+    val verifyAsk: String
+    val extrasTooLong: String
+    val extrasNotJson: String
+    val extrasNotObject: String
+    val extrasReservedPrefix: String
+    fun resultsNotSaved(reason: String): String
+    val stopped: String
+    val gitMissing: String
+    fun gitTimeout(seconds: Long): String
+    fun gitTooLarge(mb: Long): String
+    fun gitExit(code: Int): String
+    val proxyUnknownMode: String
+    val proxyAddressRule: String
+    val proxyBypassTooLong: String
+    fun localBuild(stamp: String): String
+    val pastedTextName: String
+    val pastedImageName: String
+    val windowsCredentials: String
+    // end di
 }
 
 // interfaces

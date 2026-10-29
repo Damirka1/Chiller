@@ -1,5 +1,6 @@
 package dev.chiller.app.di
 
+import dev.chiller.app.i18n.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withContext
@@ -90,7 +91,7 @@ class GitWorktrees(private val home: Path, private val git: String = "git") {
                 environment()["GIT_TERMINAL_PROMPT"] = "0"
                 redirectErrorStream(false)
             }.start()
-        } catch (_: Exception) { throw GitException("git не найден: установите Git и добавьте его в PATH") }
+        } catch (_: Exception) { throw GitException(I18n.current.di.gitMissing) }
         process.outputStream.close()
         val stdout = ByteArrayOutputStream()
         val stderr = ByteArrayOutputStream()
@@ -100,10 +101,10 @@ class GitWorktrees(private val home: Path, private val git: String = "git") {
         val out = drain(process.inputStream, stdout, MAX_OUTPUT)
         val err = drain(process.errorStream, stderr, 8192)
         try {
-            if (!runInterruptible { process.waitFor(TIMEOUT_SECONDS, TimeUnit.SECONDS) }) throw GitException("git не ответил за $TIMEOUT_SECONDS с")
+            if (!runInterruptible { process.waitFor(TIMEOUT_SECONDS, TimeUnit.SECONDS) }) throw GitException(I18n.current.di.gitTimeout(TIMEOUT_SECONDS.toLong()))
             out.join(2000); err.join(2000)
-            if (stdout.size() > MAX_OUTPUT) throw GitException("Изменения слишком большие для переноса (больше ${MAX_OUTPUT / 1024 / 1024} МиБ)")
-            if (process.exitValue() != 0) throw GitException(stderr.toString(Charsets.UTF_8).trim().take(600).ifEmpty { "git завершился с кодом ${process.exitValue()}" })
+            if (stdout.size() > MAX_OUTPUT) throw GitException(I18n.current.di.gitTooLarge((MAX_OUTPUT / 1024 / 1024).toLong()))
+            if (process.exitValue() != 0) throw GitException(stderr.toString(Charsets.UTF_8).trim().take(600).ifEmpty { I18n.current.di.gitExit(process.exitValue()) })
             stdout.toByteArray()
         } finally {
             if (process.isAlive) process.destroyForcibly()

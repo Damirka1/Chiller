@@ -1,5 +1,6 @@
 package dev.chiller.app.di
 
+import dev.chiller.app.i18n.*
 import kotlinx.serialization.Serializable
 import java.io.IOException
 import java.net.InetSocketAddress
@@ -17,9 +18,9 @@ import java.net.URI
 data class ProxySettings(val mode: String = "system", val url: String = "", val bypass: String = "") {
     /** Why these settings cannot be used, in words for the settings page; null when they are valid. */
     fun problem(): String? = when {
-        mode !in MODES -> "Неизвестный режим прокси"
-        mode == "manual" && proxyAddress(url) == null -> "Адрес прокси: хост и порт, например http://proxy.company.local:3128 (без логина и пути)"
-        bypass.length > 2000 -> "Список исключений слишком длинный"
+        mode !in MODES -> I18n.current.di.proxyUnknownMode
+        mode == "manual" && proxyAddress(url) == null -> I18n.current.di.proxyAddressRule
+        bypass.length > 2000 -> I18n.current.di.proxyBypassTooLong
         else -> null
     }
 

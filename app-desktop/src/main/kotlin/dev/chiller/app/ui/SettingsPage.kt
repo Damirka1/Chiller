@@ -645,7 +645,7 @@ private fun ProfileCard(data: SettingsData, actions: SettingsActions) {
         ChillerField(extras, { extras = it }, strings.settings.requestExtras, "{\"top_p\": 0.9}")
         Text(problem ?: strings.settings.requestExtrasNote,
             color = if (problem != null) c.negative else c.faint, fontSize = 11.sp, lineHeight = 16.sp)
-        ChillerControl(strings.settings.saveFields, { actions.agent(a.copy(requestExtras = extras.trim())) }, style = ControlStyle.OUTLINE, enabled = extras.trim() != a.requestExtras && (problem == null || problem.startsWith("Служебные")))
+        ChillerControl(strings.settings.saveFields, { actions.agent(a.copy(requestExtras = extras.trim())) }, style = ControlStyle.OUTLINE, enabled = extras.trim() != a.requestExtras && (problem == null || problem.startsWith(I18n.current.di.extrasReservedPrefix)))
         actions.openComparison?.let { open ->
             Box(Modifier.fillMaxWidth().height(1.dp).background(c.border))
             Row(verticalAlignment = Alignment.CenterVertically) {

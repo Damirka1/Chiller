@@ -11,6 +11,10 @@ import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.*
 
 class ModelCatalogControllerTest {
+    // Helpers read the global language; these checks are written against the Russian texts.
+    @kotlin.test.BeforeTest fun russian() { dev.chiller.app.i18n.I18n.current = dev.chiller.app.i18n.RuStrings }
+    @kotlin.test.AfterTest fun english() { dev.chiller.app.i18n.I18n.current = dev.chiller.app.i18n.EnStrings }
+
     @TempDir lateinit var directory: Path
 
     private suspend fun awaitStatus(controller: DesktopController, status: String) = withTimeout(5_000) {

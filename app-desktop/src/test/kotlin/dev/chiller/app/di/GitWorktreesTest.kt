@@ -17,6 +17,10 @@ import kotlin.test.assertTrue
 
 /** Real git in temporary repositories; nothing outside the temp folder is touched. */
 class GitWorktreesTest {
+    // Helpers read the global language; these checks are written against the Russian texts.
+    @kotlin.test.BeforeTest fun russian() { dev.chiller.app.i18n.I18n.current = dev.chiller.app.i18n.RuStrings }
+    @kotlin.test.AfterTest fun english() { dev.chiller.app.i18n.I18n.current = dev.chiller.app.i18n.EnStrings }
+
     @TempDir lateinit var temp: Path
 
     private fun git(dir: Path, vararg args: String): String {

@@ -18,6 +18,10 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class AutoVerifyTest {
+    // Helpers read the global language; these checks are written against the Russian texts.
+    @kotlin.test.BeforeTest fun russian() { dev.chiller.app.i18n.I18n.current = dev.chiller.app.i18n.RuStrings }
+    @kotlin.test.AfterTest fun english() { dev.chiller.app.i18n.I18n.current = dev.chiller.app.i18n.EnStrings }
+
     @Test fun `commands split like argv without a shell`() {
         assertEquals(listOf("./gradlew", "test", "--tests", "*Foo*"), splitCommand("./gradlew test --tests '*Foo*'"))
         assertEquals(listOf("python3", "-c", "print(1 + 1)"), splitCommand("python3 -c \"print(1 + 1)\""))

@@ -1,5 +1,6 @@
 package dev.chiller.app.di
 
+import dev.chiller.app.i18n.*
 import dev.chiller.agent.*
 import dev.chiller.contracts.*
 import dev.chiller.providers.*
@@ -69,7 +70,7 @@ class DesktopController(
     private fun keyless(url: String = currentBaseUrl()) = isLoopback(url)
     private fun ready() = credential != null || keyless()
     private val _state = (originOf(DesktopSettings().baseUrl)?.let { credentials[it] } != null).let { hasKey ->
-        MutableStateFlow(DesktopState(apiKeyConfigured = hasKey, connection = ConnectionState(if (hasKey) "unverified" else "missing", if (hasKey) "Подключение ещё не проверено" else "Не задан API-ключ")))
+        MutableStateFlow(DesktopState(apiKeyConfigured = hasKey, connection = ConnectionState(if (hasKey) "unverified" else "missing", if (hasKey) I18n.current.controller.notChecked else I18n.current.controller.noApiKey)))
     }
     val state: StateFlow<DesktopState> = _state.asStateFlow()
     private val inputAttachments = AttachmentRepository(directory.resolve("attachments"), artifacts)
@@ -245,7 +246,7 @@ class DesktopController(
                 }
                 _state.update { state ->
                     val previous = state.catalog
-                    state.copy(connection = if (result.ok && state.connection.status == "unverified") ConnectionState("reachable", "Список моделей получен; ответ модели ещё не проверялся") else state.connection, catalog = if (result.ok) {
+                    state.copy(connection = if (result.ok && state.connection.status == "unverified") ConnectionState("reachable", I18n.current.controller.catalogReceived) else state.connection, catalog = if (result.ok) {
                         ModelCatalogState(status = "ready", models = result.models, fetchedAt = Instant.now().toString())
                     } else {
                         previous.copy(status = "failed", message = catalogMessage(result, key), stale = previous.models.isNotEmpty())
@@ -327,9 +328,9 @@ class DesktopController(
             deletionPlans.clear()
             deletionPlans[id] = plan
             val p = plan.preview
-            "Будут удалены история (${p.eventCount} событий), ${p.artifactCount} артефактов и ${p.traceCount} трассировок — ${p.totalBytes} байт. Файлы проекта сохранятся."
+            I18n.current.controller.deletePreview(p.eventCount, p.artifactCount, p.traceCount, p.totalBytes)
         } catch (cancelled: CancellationException) { throw cancelled }
-        catch (_: Exception) { showError("Не удалось подготовить удаление. Данные сохранены; проверьте, что диалог не открыт."); null }
+        catch (_: Exception) { showError(I18n.current.controller.deletePrepareFailed); null }
     }
 
     suspend fun deleteSession(id: String): Boolean = commands.withLock {
@@ -344,10 +345,10 @@ class DesktopController(
             if (result.complete && copy != null) scope.launch { runCatching { worktrees.remove(copy) } }
             refreshSessions()
             _state.update { it.copy(sessionWorkspaces = it.sessionWorkspaces - id) }
-            if (!result.complete) showError("Удаление завершено частично. Остатки данных изолированы; файлы проекта не затронуты.")
+            if (!result.complete) showError(I18n.current.controller.deletePartial)
             result.complete
         } catch (cancelled: CancellationException) { throw cancelled }
-        catch (_: Exception) { showError("Данные изменились или недоступны. Повторите предварительный просмотр удаления."); false }
+        catch (_: Exception) { showError(I18n.current.controller.deleteDataChanged); false }
     }
 
     suspend fun importTextAttachment(text: String): ComposerAttachment? = importTextAttachmentForSession(_state.value.sessionId, text)
@@ -417,11 +418,11 @@ class DesktopController(
         try {
             val targets = withContext(Dispatchers.IO) { captureController.listAvailable() }
             _state.update { it.copy(captureTargets = targets, selectedCaptureTarget = captureController.selected()?.title) }
-        } catch (_: Exception) { showError("Разрешите Chiller запись экрана в системном запросе или в «Системные настройки → Конфиденциальность и безопасность → Запись экрана и системного аудио». Если macOS потребует, перезапустите Chiller; затем обновите список окон.") }
+        } catch (_: Exception) { showError(I18n.current.controller.screenPermission) }
     }
     suspend fun selectCaptureTarget(id: String) = commands.withLock {
         try { val chosen = withContext(Dispatchers.IO) { captureController.select(id) }; _state.update { it.copy(selectedCaptureTarget = chosen.title) } }
-        catch (_: Exception) { showError("Окно недоступно. Обновите список окон и выберите снова.") }
+        catch (_: Exception) { showError(I18n.current.controller.windowUnavailable) }
     }
 
     suspend fun recoverInterrupted() = commands.withLock {
@@ -445,10 +446,10 @@ class DesktopController(
     suspend fun editMessage(index: Int, text: String, mode: ExecutionMode): SendReceipt = commands.withLock {
         val session = _state.value.sessionId
         val request = newId()
-        if (busy()) return@withLock SendReceipt(false, session, request, "Дождитесь завершения задачи")
+        if (busy()) return@withLock SendReceipt(false, session, request, I18n.current.controller.waitForTask)
         val messages = projectConversation(events.read(session))
         val plan = MessageHistoryActions.planEditTurn(messages, index, text)
-            ?: return@withLock SendReceipt(false, session, request, "Сообщение нельзя изменить")
+            ?: return@withLock SendReceipt(false, session, request, I18n.current.controller.cannotEdit)
         // The edited message is sent as a new turn: history is cut before it, and the normal send path answers it.
         resetEngine(invalidate = true)
         events.append(session, "history.truncate", buildJsonObject { put("count", plan.index); put("expectedCount", plan.expectedCount) })
@@ -470,15 +471,15 @@ class DesktopController(
             val snapshot = commands.withLock {
                 if (revision != connectionRevision.get()) return@withLock null
                 if (_state.value.settings.model.isBlank()) {
-                    _state.update { it.copy(connection = ConnectionState("unverified", "Сначала выберите модель")) }; return@withLock null
+                    _state.update { it.copy(connection = ConnectionState("unverified", I18n.current.controller.chooseModelFirst)) }; return@withLock null
                 }
                 val key = credential?.takeIf { it.isNotBlank() } ?: if (keyless()) "" else null
                 if (key == null) {
-                    _state.update { it.copy(connection = ConnectionState("missing", "Не задан API-ключ")) }
+                    _state.update { it.copy(connection = ConnectionState("missing", I18n.current.controller.noApiKey)) }
                     null
                 } else {
                     val profile = _state.value.settings
-                    _state.update { it.copy(connection = ConnectionState("checking", "Проверяется один запрос")) }
+                    _state.update { it.copy(connection = ConnectionState("checking", I18n.current.controller.checkingOne)) }
                     profile to key
                 }
             } ?: return@launch
@@ -488,7 +489,7 @@ class DesktopController(
             catch (_: Exception) { ConnectionCheckResult(false, "Network error or request timed out") }
             commands.withLock {
                 if (revision == connectionRevision.get() && profile == _state.value.settings && key == (credential ?: "")) {
-                    val safeMessage = localizeConnectionMessage((if (key.isEmpty()) result.message else result.message.replace(key, "[СКРЫТО]")).take(240))
+                    val safeMessage = localizeConnectionMessage((if (key.isEmpty()) result.message else result.message.replace(key, I18n.current.controller.hidden)).take(240))
                     _state.update { it.copy(connection = ConnectionState(if (result.success) "verified" else "failed", safeMessage, if (result.success) Instant.now().toString() else null)) }
                 }
             }
@@ -511,7 +512,7 @@ class DesktopController(
         if (busy()) return
         val uri = runCatching { java.net.URI(url) }.getOrNull()
         if (uri == null || uri.host == null || uri.userInfo != null || uri.query != null || uri.fragment != null || uri.scheme !in setOf("https", "http")) {
-            showError("Укажите корректный HTTP(S) URL."); return
+            showError(I18n.current.controller.badUrl); return
         }
         val oldSettings = _state.value.settings
         val oldCredential = credential
@@ -579,7 +580,7 @@ class DesktopController(
             if (attach) refreshSessions()
             applyProjectPrefs(root, newDialog = !attach)
         } catch (cancelled: CancellationException) { throw cancelled }
-        catch (_: Exception) { showError("Не удалось открыть рабочую папку.") }
+        catch (_: Exception) { showError(I18n.current.controller.folderOpenFailed) }
     }
 
     /** The project the shown dialog works for: the origin of its working copy, or its folder; never an app folder. */
@@ -638,7 +639,7 @@ class DesktopController(
             applyProjectPrefs(canonical, newDialog = true)
             return true
         } catch (cancelled: CancellationException) { throw cancelled }
-        catch (_: Exception) { showError("Папка проекта недоступна."); return false }
+        catch (_: Exception) { showError(I18n.current.controller.projectUnavailable); return false }
     }
 
     /**
@@ -649,7 +650,7 @@ class DesktopController(
         val from = _state.value
         val messages = from.run.messages.ifEmpty { runCatching { projectConversation(events.read(from.sessionId)) }.getOrDefault(emptyList()) }
         if (messages.none { it.role == "user" }) return@withLock null
-        val title = from.sessions.firstOrNull { it.id == from.sessionId }?.title ?: "Диалог"
+        val title = from.sessions.firstOrNull { it.id == from.sessionId }?.title ?: I18n.current.controller.dialog
         val draft = dev.chiller.app.ui.continuationDraft(title, from.settings.workspace, messages)
         if (!newSessionInLocked(path.toString())) return@withLock null
         _state.value.sessionId to draft
@@ -690,7 +691,7 @@ class DesktopController(
      * their workspace-relative history; the journal records the new binding, nothing is copied or replayed.
      */
     suspend fun relocateWorkspace(from: String, to: Path) = commands.withLock {
-        if (engines.values.any { it.active && it.root == from }) return@withLock showError("В этом проекте идёт задача. Дождитесь её завершения.")
+        if (engines.values.any { it.active && it.root == from }) return@withLock showError(I18n.current.controller.taskInProject)
         try {
             val root = withContext(Dispatchers.IO) { to.toRealPath() }.also { require(Files.isDirectory(it)) }.toString()
             if (root == from) return@withLock
@@ -708,7 +709,7 @@ class DesktopController(
             refreshSessions()
             if (_state.value.sessionId in bound) selectSessionLocked(_state.value.sessionId)
         } catch (cancelled: CancellationException) { throw cancelled }
-        catch (_: Exception) { showError("Не удалось указать новое место папки.") }
+        catch (_: Exception) { showError(I18n.current.controller.relocateFailed) }
     }
 
     /** The app's own folders, demo projects and dialogs' working copies, which are never listed as projects of the user. */
@@ -754,7 +755,7 @@ class DesktopController(
             applyProjectPrefs(savedRoot?.let { root -> worktreeOf(history, root)?.repo ?: root }, newDialog = false)
             val outside = history.lastOrNull { it.type == "turn.outside_changes" }?.let { runCatching { json.decodeFromJsonElement(OutsideChanges.serializer(), it.payload) }.getOrNull() }
             _state.update { it.copy(undoneChanges = undoneChangeIds(history), outside = outside) }
-        } catch (_: Exception) { showError("Сессию не удалось восстановить. Её данные сохранены для проверки.") }
+        } catch (_: Exception) { showError(I18n.current.controller.restoreFailed) }
     }
 
     private fun showEngine(engine: Engine, history: List<StoredEvent>) {
@@ -787,13 +788,13 @@ class DesktopController(
         val repo = shown.settings.workspace
         if (busy() || repo == null || shown.folderLocked || shown.worktree != null || shown.run.messages.isNotEmpty() || isAppFolder(repo)) return@withLock
         try {
-            if (!worktrees.canIsolate(Path.of(repo))) return@withLock showError("Отдельная копия делается из корня git-репозитория, в котором есть хотя бы один коммит.")
+            if (!worktrees.canIsolate(Path.of(repo))) return@withLock showError(I18n.current.controller.isolateNeedsRepo)
             val info = worktrees.create(Path.of(repo), shown.sessionId)
             resetEngine()
             pendingWorktrees[shown.sessionId] = info
             _state.update { it.copy(settings = it.settings.copy(workspace = info.path), worktree = info) }
         } catch (cancelled: CancellationException) { throw cancelled }
-        catch (e: Exception) { showError("Не удалось создать отдельную копию: ${e.message?.take(300)}") }
+        catch (e: Exception) { showError(I18n.current.controller.isolateFailed(e.message?.take(300).orEmpty())) }
     }
 
     /** Files the shown dialog changed in its copy, or null when it has none or it is busy. */
@@ -806,23 +807,23 @@ class DesktopController(
     /** Carries the shown dialog's changes from its copy into the project, exactly or not at all. Returns what happened. */
     suspend fun applyWorktree(): String = commands.withLock {
         val shown = _state.value
-        val info = shown.worktree ?: return@withLock "Диалог работает не в отдельной копии"
-        if (running(shown.sessionId)) return@withLock "Дождитесь завершения задачи"
-        if (engines.values.any { it.active && it.root == info.repo }) return@withLock "В проекте идёт другая задача. Перенесите изменения, когда она закончится."
+        val info = shown.worktree ?: return@withLock I18n.current.controller.notInCopy
+        if (running(shown.sessionId)) return@withLock I18n.current.controller.waitForTask
+        if (engines.values.any { it.active && it.root == info.repo }) return@withLock I18n.current.controller.otherTaskInProject
         try {
             when (val result = worktrees.apply(info)) {
                 is WorktreeApply.Applied -> {
                     runCatching { events.append(shown.sessionId, "worktree.applied", buildJsonObject { put("files", result.files.size); put("paths", JsonArray(result.files.take(50).map(::JsonPrimitive))) }) }
-                    "Перенесено в проект: ${result.files.size} ${dev.chiller.app.ui.plural(result.files.size, "файл", "файла", "файлов")}"
+                    I18n.current.controller.movedFiles(result.files.size)
                 }
-                WorktreeApply.Nothing -> "Изменений нет"
+                WorktreeApply.Nothing -> I18n.current.controller.noChanges
                 is WorktreeApply.Conflict -> {
                     runCatching { events.append(shown.sessionId, "worktree.apply_failed", buildJsonObject { put("message", result.message.take(600)) }) }
-                    "Не накладывается чисто: в проекте эти места тоже менялись. Проект не изменён, копия и ветка ${info.branch} остаются."
+                    I18n.current.controller.notClean(info.branch)
                 }
             }
         } catch (cancelled: CancellationException) { throw cancelled }
-        catch (e: Exception) { "Не удалось перенести: ${e.message?.take(300)}" }
+        catch (e: Exception) { I18n.current.controller.moveFailed(e.message?.take(300).orEmpty()) }
     }
 
     /**
@@ -835,7 +836,7 @@ class DesktopController(
         if (running(shown.sessionId)) return@withLock
         try { worktrees.remove(info) }
         catch (cancelled: CancellationException) { throw cancelled }
-        catch (e: Exception) { return@withLock showError("Не удалось удалить копию: ${e.message?.take(300)}") }
+        catch (e: Exception) { return@withLock showError(I18n.current.controller.removeCopyFailed(e.message?.take(300).orEmpty())) }
         resetEngine(invalidate = true)
         if (pendingWorktrees.remove(shown.sessionId) != null) {
             _state.update { it.copy(settings = it.settings.copy(workspace = info.repo), worktree = null) }
@@ -866,27 +867,27 @@ class DesktopController(
     private suspend fun sendLocked(text: String, mode: ExecutionMode, requestId: String, attachments: List<ComposerAttachment> = emptyList(), preserveAutoVerifyAttempt: Boolean = false): SendReceipt {
         val session = _state.value.sessionId
         fun rejected(reason: String) = SendReceipt(false, session, requestId, reason)
-        if (requestId.isBlank() || requestId.length > 100) return rejected("Недопустимый ID отправки")
-        if (attachments.size > 8 || attachments.any { inputAttachments.rawPath(session, it.artifactId) == null }) return rejected("Вложения недоступны в этом диалоге")
-        if (text.isBlank() && attachments.isEmpty()) return rejected("Сообщение пустое")
+        if (requestId.isBlank() || requestId.length > 100) return rejected(I18n.current.controller.badRequestId)
+        if (attachments.size > 8 || attachments.any { inputAttachments.rawPath(session, it.artifactId) == null }) return rejected(I18n.current.controller.attachmentsUnavailable)
+        if (text.isBlank() && attachments.isEmpty()) return rejected(I18n.current.controller.emptyMessage)
         if (coordinator?.status() in TERMINAL_STATUSES) coordinator?.awaitCompletion()
-        if (busy()) return rejected("Уже выполняется другая задача")
+        if (busy()) return rejected(I18n.current.controller.otherTaskRunning)
         // Two agents editing one folder would trip over each other's snapshots; dialogs without a folder have their own.
         val background = engines.values.filter { it.sessionId != session && it.active }
         val folder = _state.value.settings.workspace
-        if (folder != null && background.any { it.root == folder }) return rejected("В этом проекте уже идёт задача в другом диалоге. Дождитесь её, остановите или начните диалог в отдельной копии (меню папки).")
-        if (background.size >= MAX_PARALLEL_RUNS) return rejected("Одновременно идут $MAX_PARALLEL_RUNS задачи. Дождитесь одной из них.")
-        if (events.findEarly(session, "session.demo") != null) return rejected("Это демо-диалог: в нём отвечает сценарий, а не модель. Начните новый диалог.")
-        if (_state.value.settings.model.isBlank()) return rejected("Выберите модель в настройках подключения")
-        if (_state.value.workspaceMissing) return rejected("Папка диалога не найдена. Укажите её новое место или начните новый диалог.")
+        if (folder != null && background.any { it.root == folder }) return rejected(I18n.current.controller.folderBusy)
+        if (background.size >= MAX_PARALLEL_RUNS) return rejected(I18n.current.controller.tooManyRuns(MAX_PARALLEL_RUNS))
+        if (events.findEarly(session, "session.demo") != null) return rejected(I18n.current.controller.demoDialog)
+        if (_state.value.settings.model.isBlank()) return rejected(I18n.current.controller.chooseModelInSettings)
+        if (_state.value.workspaceMissing) return rejected(I18n.current.controller.dialogFolderMissing)
         if (!ready()) {
             val user = AgentMessage("user", text, attachments = attachments)
-            val answer = AgentMessage("assistant", "Это offline-режим Chiller. Интерфейс готов к работе; подключите API в настройках, чтобы выполнять задачи в проекте. Способ хранения ключа выбирается в настройках.", origin = MessageOrigin(MessageOriginKind.OFFLINE))
+            val answer = AgentMessage("assistant", I18n.current.controller.offlineAnswer, origin = MessageOrigin(MessageOriginKind.OFFLINE))
             try { withContext(NonCancellable) {
                 _state.value.settings.workspace?.let { root -> bindSession(session, root) }
                 events.append(session, "message", json.encodeToJsonElement(AgentMessage.serializer(), user).jsonObject)
             } }
-            catch (_: Exception) { return rejected("Не удалось сохранить сообщение") }
+            catch (_: Exception) { return rejected(I18n.current.controller.saveMessageFailed) }
             _state.update { it.copy(folderLocked = it.settings.workspace != null || it.folderLocked) }
             val receipt = SendReceipt(true, session, requestId)
             rememberReceipt(receipt)
@@ -895,7 +896,7 @@ class DesktopController(
                 events.append(session, "message", json.encodeToJsonElement(AgentMessage.serializer(), answer).jsonObject)
                 _state.update { it.copy(run = it.run.copy(status = "completed", messages = it.run.messages + answer), sessions = events.list()) }
             } catch (_: Exception) {
-                _state.update { it.copy(run = it.run.copy(status = "failed", error = "Сообщение сохранено, но не удалось сохранить offline-ответ.")) }
+                _state.update { it.copy(run = it.run.copy(status = "failed", error = I18n.current.controller.offlineSaveFailed)) }
             }
             return receipt
         }
@@ -907,7 +908,7 @@ class DesktopController(
             if (coordinator == null) buildEngine().restore()
             startRun(shownEngine!!, text, runMode, mode, requestId, attachments, preserveAutoVerifyAttempt)
         } catch (cancelled: CancellationException) { throw cancelled }
-        catch (_: Exception) { rejected("Не удалось начать задачу") }
+        catch (_: Exception) { rejected(I18n.current.controller.startFailed) }
     }
 
     /**
@@ -947,7 +948,7 @@ class DesktopController(
                 }
             }
         }
-        return if (accepted.await()) SendReceipt(true, session, requestId) else SendReceipt(false, session, requestId, "Задача не приняла сообщение")
+        return if (accepted.await()) SendReceipt(true, session, requestId) else SendReceipt(false, session, requestId, I18n.current.controller.notAccepted)
     }
 
     suspend fun stop() { shownEngine?.let { it.coordinator.stop(); it.questions.cancel() } }
@@ -959,7 +960,7 @@ class DesktopController(
         try {
             val text = if (format == "json") exporter.json(sessionId) else exporter.markdown(sessionId)
             _state.update { it.copy(exportContent = text, exportFormat = format, exportSessionId = sessionId) }
-        } catch (_: Exception) { showError("Не удалось подготовить экспорт сессии.") }
+        } catch (_: Exception) { showError(I18n.current.controller.exportPrepareFailed) }
     }
     fun dismissExport() { _state.update { it.copy(exportContent = null, exportSessionId = null) } }
     suspend fun saveExport(path: Path) {
@@ -967,7 +968,7 @@ class DesktopController(
         try {
             withContext(Dispatchers.IO) { Files.writeString(path, content) }
             dismissExport()
-        } catch (_: Exception) { showError("Не удалось сохранить экспорт. Выберите доступную папку.") }
+        } catch (_: Exception) { showError(I18n.current.controller.exportSaveFailed) }
     }
     fun answer(text: String) { shownEngine?.questions?.answer(text) }
 
@@ -995,7 +996,7 @@ class DesktopController(
                         saveSettings(settings)
                         _state.update { it.copy(settings = settings, allowProcesses = value, verify = VerifyState()) }
                     } catch (cancelled: CancellationException) { throw cancelled }
-                    catch (_: Exception) { showError("Не удалось сохранить разрешение на команды процессов.") }
+                    catch (_: Exception) { showError(I18n.current.controller.processPermissionSaveFailed) }
                 }
             }
         }
@@ -1007,7 +1008,7 @@ class DesktopController(
             val change = w.undo(id)
             _state.update { it.copy(run = it.run.copy(activities = it.run.activities + Activity(name = "undo", target = change.path, status = "completed", diff = change.diff)), undoneChanges = it.undoneChanges + id) }
         } catch (e: ToolException) { showError("${e.code}: ${e.message}") }
-        catch (_: Exception) { showError("Откат не выполнен. Файл мог измениться.") }
+        catch (_: Exception) { showError(I18n.current.controller.undoFailed) }
     }
 
     fun setVerifyCommand(root: String, command: String) {
@@ -1055,8 +1056,8 @@ class DesktopController(
             }
             val argv = runCatching { splitCommand(command) }.getOrNull()?.takeIf { it.isNotEmpty() }
                 ?: run {
-                    setVerify(engine, VerifyState("error", command, message = "Команда проверки не разобрана: проверьте кавычки"))
-                    notice(engine, "Задача завершена, но команда проверки не разобрана", "negative")
+                    setVerify(engine, VerifyState("error", command, message = I18n.current.controller.verifyNotParsed))
+                    notice(engine, I18n.current.controller.noticeVerifyNotParsed, "negative")
                     return@withLock null
                 }
             val captured = AutoVerifyContext(session, root, state.allowProcesses, engine.processes, command, options, runEpoch)
@@ -1076,7 +1077,7 @@ class DesktopController(
                 return
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) {
-                publishVerifyErrorIfCurrent(captured, attempt, "Не удалось запустить: ${e.message?.take(200)}")
+                publishVerifyErrorIfCurrent(captured, attempt, I18n.current.controller.verifyStartFailed(e.message?.take(200).orEmpty()))
                 return
             }
             val duration = (System.nanoTime() - started) / 1_000_000
@@ -1095,17 +1096,17 @@ class DesktopController(
         if (output.exitCode == 0) {
             engine.verifyAttempt = 0
             setVerify(engine, VerifyState("passed", context.command, 0, duration, attempt, context.options.autoVerifyAttempts, tail))
-            notice(engine, "Задача завершена, проверка пройдена", "positive")
+            notice(engine, I18n.current.controller.noticeVerifyPassed, "positive")
             return@withLock true
         }
         if (attempt >= context.options.autoVerifyAttempts) {
             engine.verifyAttempt = 0
-            setVerify(engine, VerifyState("gave_up", context.command, output.exitCode, duration, attempt, context.options.autoVerifyAttempts, tail, "Попытки исчерпаны — посмотрите вывод"))
-            notice(engine, "Проверка не прошла, попытки исчерпаны", "negative")
+            setVerify(engine, VerifyState("gave_up", context.command, output.exitCode, duration, attempt, context.options.autoVerifyAttempts, tail, I18n.current.controller.verifyGaveUp))
+            notice(engine, I18n.current.controller.noticeVerifyGaveUp, "negative")
             return@withLock true
         }
         engine.verifyAttempt = attempt
-        setVerify(engine, VerifyState("failed", context.command, output.exitCode, duration, attempt, context.options.autoVerifyAttempts, tail, "Отправил агенту вывод ошибки"))
+        setVerify(engine, VerifyState("failed", context.command, output.exitCode, duration, attempt, context.options.autoVerifyAttempts, tail, I18n.current.controller.verifySentOutput))
         // The repair turn goes to the dialog that ran the check, shown or not; validation and enqueue stay under the lock.
         startRun(engine, verificationFollowUp(context.command, output.exitCode, output.state, tail, attempt, context.options.autoVerifyAttempts),
             ExecutionMode.WORKSPACE_EDIT, ExecutionMode.WORKSPACE_EDIT, newId(), emptyList(), preserveAutoVerifyAttempt = true)
@@ -1116,7 +1117,7 @@ class DesktopController(
         val engine = engines[context.sessionId] ?: return@withLock
         if (!context.isCurrent(_state.value.settings, _state.value.allowProcesses, engine.processes, engine.verifyEpoch)) return@withLock
         setVerify(engine, VerifyState("error", context.command, attempt = attempt, maxAttempts = context.options.autoVerifyAttempts, message = message))
-        notice(engine, "Задача завершена, проверку не удалось запустить", "negative")
+        notice(engine, I18n.current.controller.noticeVerifyNotStarted, "negative")
     }
 
     /** The dialog's verification; the screen shows it when the dialog is the shown one. */
@@ -1126,16 +1127,16 @@ class DesktopController(
     }
 
     private fun noticeRunEnded(engine: Engine, run: RunState) = when (run.status) {
-        "completed" -> notice(engine, "Задача завершена", "positive")
-        "failed" -> notice(engine, run.error?.take(140)?.let { "Ошибка: $it" } ?: "Задача завершилась с ошибкой", "negative")
-        "cancelled" -> notice(engine, "Задача остановлена", "neutral")
+        "completed" -> notice(engine, I18n.current.controller.noticeDone, "positive")
+        "failed" -> notice(engine, run.error?.take(140)?.let { I18n.current.controller.noticeError(it) } ?: I18n.current.controller.noticeFailed, "negative")
+        "cancelled" -> notice(engine, I18n.current.controller.noticeStopped, "neutral")
         else -> Unit
     }
 
     /** One notice per dialog, only for dialogs that are not on screen; the newest replaces the older one. */
     private fun notice(engine: Engine, message: String, tone: String) {
         if (_state.value.sessionId == engine.sessionId) return
-        val title = _state.value.sessions.firstOrNull { it.id == engine.sessionId }?.title?.takeIf { it.isNotBlank() } ?: "Диалог"
+        val title = _state.value.sessions.firstOrNull { it.id == engine.sessionId }?.title?.takeIf { it.isNotBlank() } ?: I18n.current.controller.dialog
         val notice = Notice(newId(), engine.sessionId, title, message, tone)
         _state.update { state -> state.copy(notices = (state.notices.filterNot { it.sessionId == engine.sessionId } + notice).takeLast(MAX_NOTICES),
             unreadSessions = if (tone == "attention") state.unreadSessions else state.unreadSessions + engine.sessionId) }
@@ -1156,9 +1157,9 @@ class DesktopController(
      * change left it, so a file edited afterwards is refused (and so are its older changes) instead of overwritten.
      */
     suspend fun rewindTurn(changeIds: List<String>): RewindResult = commands.withLock {
-        if (busy()) return@withLock RewindResult(0, listOf("Задача ещё выполняется"))
+        if (busy()) return@withLock RewindResult(0, listOf(I18n.current.controller.stillRunning))
         if (changeIds.isEmpty()) return@withLock RewindResult(0, emptyList())
-        val w = try { workspaceService ?: run { buildEngine(); workspaceService!! } } catch (_: Exception) { return@withLock RewindResult(0, listOf("Папка проекта недоступна")) }
+        val w = try { workspaceService ?: run { buildEngine(); workspaceService!! } } catch (_: Exception) { return@withLock RewindResult(0, listOf(I18n.current.controller.projectUnavailable.removeSuffix("."))) }
         // The journal is the durable record: a second rewind (even after a restart) skips what is already undone.
         val alreadyUndone = runCatching { undoneChangeIds(events.read(_state.value.sessionId)) }.getOrDefault(emptySet())
         _state.update { it.copy(undoneChanges = it.undoneChanges + alreadyUndone) }
@@ -1172,10 +1173,10 @@ class DesktopController(
                 undone++
                 _state.update { it.copy(run = it.run.copy(activities = it.run.activities + Activity(name = "undo", target = change.path, status = "completed", diff = change.diff)), undoneChanges = it.undoneChanges + id) }
             } catch (e: ToolException) { failed += "${e.code}: ${e.message}" }
-            catch (e: Exception) { failed += "Откат не выполнен (${e.javaClass.simpleName}: ${e.message?.take(160)})" }
+            catch (e: Exception) { failed += I18n.current.controller.undoFailedWith("${e.javaClass.simpleName}: ${e.message?.take(160)}") }
         }
         runCatching { events.append(_state.value.sessionId, "turn.rewound", buildJsonObject { put("requested", remaining.size); put("undone", undone); put("failed", failed.size) }) }
-        if (failed.isNotEmpty()) showError("Откачено $undone из ${remaining.size}. Не откатилось: ${failed.distinct().take(3).joinToString("; ")}")
+        if (failed.isNotEmpty()) showError(I18n.current.controller.undoPartial(undone, remaining.size, failed.distinct().take(3).joinToString("; ")))
         RewindResult(undone, failed)
     }
 
@@ -1200,7 +1201,7 @@ class DesktopController(
             val job = engine.send(DemoScenario.PROMPT, ExecutionMode.WORKSPACE_EDIT, allowProcesses = true)
             job.invokeOnCompletion { scope.launch { refreshSessions() } }
             refreshSessions()
-        } catch (_: Exception) { showError("Не удалось запустить демо.") }
+        } catch (_: Exception) { showError(I18n.current.controller.demoStartFailed) }
     }
 
     private suspend fun buildEngine(providerOverride: LlmProvider? = null, modelOverride: String? = null): AgentCoordinator {
@@ -1283,14 +1284,14 @@ class DesktopController(
             val answered = live && run.status == "completed" && previous in ACTIVE_STATUSES
             val finished = previous in ACTIVE_STATUSES && run.status in TERMINAL_STATUSES
             previous = run.status
-            if (run.question != null && !asked) engines[id]?.let { notice(it, "Ждёт вашего ответа", "attention") }
+            if (run.question != null && !asked) engines[id]?.let { notice(it, I18n.current.controller.noticeWaitingAnswer, "attention") }
             asked = run.question != null
-            if (run.approval != null && !askedApproval) engines[id]?.let { notice(it, "Ждёт подтверждения правки", "attention") }
+            if (run.approval != null && !askedApproval) engines[id]?.let { notice(it, I18n.current.controller.noticeWaitingApproval, "attention") }
             askedApproval = run.approval != null
             _state.update {
                 val running = if (run.status in ACTIVE_STATUSES) it.runningSessions + id else it.runningSessions - id
                 val waiting = if ((run.question != null || run.approval != null) && run.status in ACTIVE_STATUSES) it.waitingSessions + id else it.waitingSessions - id
-                val connection = if (answered && it.connection.status in setOf("unverified", "reachable")) ConnectionState("verified", "Подтверждено ответом модели", Instant.now().toString()) else it.connection
+                val connection = if (answered && it.connection.status in setOf("unverified", "reachable")) ConnectionState("verified", I18n.current.controller.confirmedByReply, Instant.now().toString()) else it.connection
                 if (it.sessionId == id) it.copy(run = run, connection = connection, runningSessions = running, waitingSessions = waiting)
                 else it.copy(connection = connection, runningSessions = running, waitingSessions = waiting)
             }
@@ -1367,7 +1368,7 @@ class DesktopController(
         while (models.size > 16) models.remove(models.keys.first())
         return settings.copy(rememberedModels = models)
     }
-    private fun connectionForUnverified() = if (!ready()) ConnectionState("missing", "Не задан API-ключ") else ConnectionState("unverified", if (credential == null) "Локальный сервер без ключа · не проверено" else "Подключение ещё не проверено")
+    private fun connectionForUnverified() = if (!ready()) ConnectionState("missing", I18n.current.controller.noApiKey) else ConnectionState("unverified", if (credential == null) I18n.current.controller.localNoKey else I18n.current.controller.notChecked)
 
     suspend fun updateAgentOptions(options: AgentOptions) = commands.withLock {
         val current = _state.value.settings
@@ -1389,7 +1390,7 @@ class DesktopController(
         val clean = provider.normalized()
         clean.problem()?.let { return@withLock it }
         val current = _state.value.settings.customProviders
-        if (current.none { it.id == clean.id } && current.size >= MAX_CUSTOM_PROVIDERS) return@withLock "Не больше $MAX_CUSTOM_PROVIDERS своих провайдеров"
+        if (current.none { it.id == clean.id } && current.size >= MAX_CUSTOM_PROVIDERS) return@withLock I18n.current.controller.tooManyProviders(MAX_CUSTOM_PROVIDERS)
         var settings = _state.value.settings.copy(customProviders = current.filterNot { it.id == clean.id } + clean)
         val origin = originOf(clean.baseUrl)
         val typed = key?.trim()?.takeIf { it.isNotEmpty() }
@@ -1450,10 +1451,10 @@ class DesktopController(
     suspend fun saveMcpServers(servers: List<dev.chiller.tools.McpServerConfig>): String? = commands.withLock {
         val clean = servers.map { it.copy(name = it.name.trim(), command = it.command.trim(), args = it.args.map(String::trim).filter(String::isNotEmpty)) }
         when {
-            clean.size > MAX_MCP_SERVERS -> return@withLock "Не больше $MAX_MCP_SERVERS серверов"
-            clean.any { it.name.isEmpty() || it.command.isEmpty() } -> return@withLock "У сервера нужны название и команда"
-            clean.map { it.id }.toSet().size != clean.size -> return@withLock "Названия серверов должны различаться"
-            clean.any { server -> server.env.keys.any { !isVariableName(it) } } -> return@withLock "Имена переменных окружения: заглавные латинские буквы, цифры и _"
+            clean.size > MAX_MCP_SERVERS -> return@withLock I18n.current.controller.tooManyServers(MAX_MCP_SERVERS)
+            clean.any { it.name.isEmpty() || it.command.isEmpty() } -> return@withLock I18n.current.controller.serverNeedsNameAndCommand
+            clean.map { it.id }.toSet().size != clean.size -> return@withLock I18n.current.controller.serverNamesDiffer
+            clean.any { server -> server.env.keys.any { !isVariableName(it) } } -> return@withLock I18n.current.controller.envNames
         }
         val settings = _state.value.settings.copy(mcpServers = clean)
         _state.update { it.copy(settings = settings) }
@@ -1513,10 +1514,10 @@ class DesktopController(
             val next = _state.value.settings.copy(credentialOrigins = (_state.value.settings.credentialOrigins + origin).distinct().takeLast(32))
             saveSettings(next)
             secureOrigins += origin
-            _state.update { it.copy(settings = next, connection = it.connection.copy(message = "Ключ сохранён: ${credentialStore.name}")) }
+            _state.update { it.copy(settings = next, connection = it.connection.copy(message = I18n.current.controller.keySavedIn(credentialStore.name))) }
             true
         } catch (_: Exception) {
-            _state.update { it.copy(connection = it.connection.copy(message = "Не удалось сохранить ключ (${credentialStore.name}); он доступен до выхода")) }
+            _state.update { it.copy(connection = it.connection.copy(message = I18n.current.controller.keySaveFailed(credentialStore.name))) }
             false
         }
     }
@@ -1534,7 +1535,7 @@ class DesktopController(
             _state.update { it.copy(settings = next, apiKeyConfigured = ready(), connection = connectionForUnverified()) }
             true
         } catch (_: Exception) {
-            _state.update { it.copy(connection = it.connection.copy(message = "Не удалось удалить ключ (${credentialStore.name})")) }; false
+            _state.update { it.copy(connection = it.connection.copy(message = I18n.current.controller.keyDeleteFailed(credentialStore.name))) }; false
         }
     }
 
@@ -1588,8 +1589,8 @@ internal fun costBudgetFor(settings: DesktopSettings, chatModel: String, imageMo
     }
     val endpointMatches = budget.baseUrl.trim().trimEnd('/').equals(settings.baseUrl.trim().trimEnd('/'), ignoreCase = true)
     val chatRefusal = if (endpointMatches && budget.model == chatModel) null
-        else "Денежный бюджет задан для ${budget.model.ifBlank { "другой модели" }}; для $chatModel цены не указаны. Обновите бюджет в Настройки → Агент."
+        else I18n.current.controller.budgetOtherModel(budget.model.ifBlank { I18n.current.controller.anotherModel }, chatModel)
     val imageRefusal = if (imageModel == null || (endpointMatches && budget.imageModel == imageModel)) null
-        else "Денежный бюджет не содержит цену для модели картинок $imageModel. Обновите бюджет в Настройки → Агент."
+        else I18n.current.controller.budgetNoImagePrice(imageModel)
     return BoundBudget(base, chatRefusal, imageRefusal)
 }

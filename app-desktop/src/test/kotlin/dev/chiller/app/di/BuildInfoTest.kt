@@ -9,6 +9,10 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class BuildInfoTest {
+    // Helpers read the global language; these checks are written against the Russian texts.
+    @kotlin.test.BeforeTest fun russian() { dev.chiller.app.i18n.I18n.current = dev.chiller.app.i18n.RuStrings }
+    @kotlin.test.AfterTest fun english() { dev.chiller.app.i18n.I18n.current = dev.chiller.app.i18n.EnStrings }
+
     @Test fun `build label names the CI run or a local build`() {
         assertEquals("#57 · 2026-10-18", buildLabel("57", "2026-10-18", "18.10 16:20"))
         assertEquals("#57", buildLabel("57", "", "x"))

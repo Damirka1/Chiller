@@ -1,5 +1,6 @@
 package dev.chiller.app.di
 
+import dev.chiller.app.i18n.*
 import java.nio.file.Files
 import java.nio.file.Path
 
@@ -55,9 +56,9 @@ fun suggestVerifyCommand(root: Path): String? {
 
 /** What the agent is told when the check fails: the facts, the output tail, and one clear request. */
 fun verificationFollowUp(command: String, exitCode: Int?, state: String, tail: String, attempt: Int, maxAttempts: Int): String = buildString {
-    append("Автопроверка после твоих правок не прошла (попытка $attempt из $maxAttempts).\n\n")
-    append("Команда: `").append(command).append("`\n")
-    append(when { state == "timed_out" -> "Итог: превышено время ожидания"; exitCode != null -> "Код завершения: $exitCode"; else -> "Итог: $state" }).append("\n\n")
-    append("Конец вывода:\n```\n").append(tail.trim().takeLast(4000)).append("\n```\n\n")
-    append("Найди причину по выводу, исправь её и проверь снова. Не меняй тесты, чтобы они просто проходили, если задача этого не требует.")
+    append(I18n.current.di.verifyFailedHeader(attempt, maxAttempts))
+    append(I18n.current.di.verifyCommand).append(command).append("`\n")
+    append(when { state == "timed_out" -> I18n.current.di.verifyTimedOut; exitCode != null -> I18n.current.di.verifyExitCode(exitCode); else -> I18n.current.di.verifyState(state) }).append("\n\n")
+    append(I18n.current.di.verifyTail).append(tail.trim().takeLast(4000)).append("\n```\n\n")
+    append(I18n.current.di.verifyAsk)
 }

@@ -1,5 +1,6 @@
 package dev.chiller.app.di
 
+import dev.chiller.app.i18n.*
 import java.nio.file.Files
 import java.nio.file.Path
 import java.time.ZoneId
@@ -40,4 +41,4 @@ internal fun isPrerelease(version: String): Boolean = '-' in version
 
 internal fun buildLabel(number: String, commitDate: String, localStamp: String): String =
     if (number.isNotBlank()) listOf("#$number", commitDate).filter { it.isNotBlank() }.joinToString(" · ")
-    else "локальная · $localStamp"
+    else I18n.current.di.localBuild(localStamp)

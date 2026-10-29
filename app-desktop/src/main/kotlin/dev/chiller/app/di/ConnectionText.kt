@@ -1,5 +1,6 @@
 package dev.chiller.app.di
 
+import dev.chiller.app.i18n.*
 import dev.chiller.contracts.ModelCatalogResult
 
 // Stateless helpers of the controller: comparing endpoints and putting provider results into the user's words.
@@ -22,28 +23,28 @@ internal fun effectivePort(uri: java.net.URI) = uri.port.takeIf { it >= 0 } ?: i
 
 /** The model list's failure in the user's words; a key that slipped into the message is hidden. */
 internal fun catalogMessage(result: ModelCatalogResult, key: String?) = when (result.errorCode) {
-    "AUTHENTICATION_FAILED" -> "Провайдер отклонил ключ"
-    "UNSUPPORTED" -> "Этот адрес не отдаёт список моделей — укажите ID вручную"
-    "RATE_LIMITED" -> "Провайдер ограничил частоту запросов"
-    "RESPONSE_TOO_LARGE" -> "Ответ со списком моделей слишком большой"
-    "MALFORMED_RESPONSE" -> "Провайдер вернул неожиданный формат списка"
-    "PROVIDER_TIMEOUT", "NETWORK" -> "Список моделей не получен: таймаут или сеть"
-    "PROVIDER_HTTP_ERROR" -> "Провайдер не отдал список моделей"
-    else -> (result.message ?: "Не удалось получить список моделей").let { message -> if (key.isNullOrBlank()) message else message.replace(key, "[СКРЫТО]") }.take(200)
+    "AUTHENTICATION_FAILED" -> I18n.current.di.catalogKeyRejected
+    "UNSUPPORTED" -> I18n.current.di.catalogUnsupported
+    "RATE_LIMITED" -> I18n.current.di.rateLimited
+    "RESPONSE_TOO_LARGE" -> I18n.current.di.catalogTooLarge
+    "MALFORMED_RESPONSE" -> I18n.current.di.catalogMalformed
+    "PROVIDER_TIMEOUT", "NETWORK" -> I18n.current.di.catalogNetwork
+    "PROVIDER_HTTP_ERROR" -> I18n.current.di.catalogHttpError
+    else -> (result.message ?: I18n.current.di.catalogFailed).let { message -> if (key.isNullOrBlank()) message else message.replace(key, I18n.current.controller.hidden) }.take(200)
 }
 
 /** The connection check's result in the user's words. */
 internal fun localizeConnectionMessage(message: String): String = when {
-    message == "Connection and model access verified" || message == "verified" -> "Подключение и доступ к модели подтверждены"
-    message.startsWith("Authentication failed") -> "Провайдер отклонил API-ключ"
-    message.startsWith("Rate limit reached") -> "Провайдер ограничил частоту запросов"
-    message.startsWith("Model or endpoint not found") -> "Модель или адрес провайдера не найдены"
-    message.startsWith("Provider server error") -> "Ошибка сервера провайдера"
-    message.startsWith("Provider rejected the request") -> "Провайдер отклонил запрос"
-    message.startsWith("Network error") -> "Сетевая ошибка или истекло время ожидания"
-    message.startsWith("Invalid or unsupported endpoint") -> "Адрес провайдера недопустим или не поддерживается"
-    message == "Model ID is required" -> "Укажите ID модели"
-    message == "API key is required" -> "Укажите API-ключ"
-    message.isBlank() -> "Проверка подключения не выполнена"
+    message == "Connection and model access verified" || message == "verified" -> I18n.current.di.verified
+    message.startsWith("Authentication failed") -> I18n.current.di.keyRejected
+    message.startsWith("Rate limit reached") -> I18n.current.di.rateLimited
+    message.startsWith("Model or endpoint not found") -> I18n.current.di.notFound
+    message.startsWith("Provider server error") -> I18n.current.di.serverError
+    message.startsWith("Provider rejected the request") -> I18n.current.di.requestRejected
+    message.startsWith("Network error") -> I18n.current.di.networkError
+    message.startsWith("Invalid or unsupported endpoint") -> I18n.current.di.badEndpoint
+    message == "Model ID is required" -> I18n.current.di.modelIdRequired
+    message == "API key is required" -> I18n.current.di.apiKeyRequired
+    message.isBlank() -> I18n.current.di.checkNotRun
     else -> message
 }

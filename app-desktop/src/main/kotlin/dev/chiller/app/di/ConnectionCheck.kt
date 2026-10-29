@@ -1,5 +1,6 @@
 package dev.chiller.app.di
 
+import dev.chiller.app.i18n.*
 import dev.chiller.providers.isTlsFailure
 import dev.chiller.providers.useSystemTrust
 import io.ktor.client.HttpClient
@@ -52,9 +53,9 @@ class KtorConnectionChecker(
 
     @Suppress("UNUSED_PARAMETER")
     override suspend fun check(baseUrl: String, model: String, key: String, thinking: Boolean): ConnectionCheckResult {
-        val endpoint = safeEndpoint(baseUrl) ?: return ConnectionCheckResult(false, "Адрес провайдера недопустим или не поддерживается")
-        if (model.isBlank()) return ConnectionCheckResult(false, "Укажите ID модели")
-        if (key.isBlank() && !isLoopback(baseUrl)) return ConnectionCheckResult(false, "Укажите API-ключ")
+        val endpoint = safeEndpoint(baseUrl) ?: return ConnectionCheckResult(false, I18n.current.di.badEndpoint)
+        if (model.isBlank()) return ConnectionCheckResult(false, I18n.current.di.modelIdRequired)
+        if (key.isBlank() && !isLoopback(baseUrl)) return ConnectionCheckResult(false, I18n.current.di.apiKeyRequired)
         val host = runCatching { URI(baseUrl.trim()).host.lowercase() }.getOrDefault("")
 
         val request = buildJsonObject {
@@ -82,22 +83,22 @@ class KtorConnectionChecker(
                 when (val status = response.status.value) {
                     in 200..299 -> {
                         val responseText = readBounded(response.bodyAsChannel())
-                            ?: return@execute ConnectionCheckResult(false, "Ответ провайдера пустой, повреждён или превышает 64 КиБ")
-                        if (isSuccessfulChatResponse(responseText)) ConnectionCheckResult(true, "Подключение и доступ к модели подтверждены")
-                        else ConnectionCheckResult(false, "Ответ провайдера не соответствует формату Chat Completions")
+                            ?: return@execute ConnectionCheckResult(false, I18n.current.di.emptyResponse)
+                        if (isSuccessfulChatResponse(responseText)) ConnectionCheckResult(true, I18n.current.di.verified)
+                        else ConnectionCheckResult(false, I18n.current.di.notChatCompletions)
                     }
-                    401, 403 -> ConnectionCheckResult(false, "Провайдер отклонил API-ключ (HTTP $status)")
-                    429 -> ConnectionCheckResult(false, "Провайдер ограничил частоту запросов (HTTP 429)")
-                    404 -> ConnectionCheckResult(false, "Модель или адрес провайдера не найдены (HTTP 404)")
-                    in 500..599 -> ConnectionCheckResult(false, "Ошибка сервера провайдера (HTTP $status)")
-                    else -> ConnectionCheckResult(false, "Провайдер отклонил запрос (HTTP $status)")
+                    401, 403 -> ConnectionCheckResult(false, I18n.current.di.withHttp(I18n.current.di.keyRejected, status))
+                    429 -> ConnectionCheckResult(false, I18n.current.di.withHttp(I18n.current.di.rateLimited, 429))
+                    404 -> ConnectionCheckResult(false, I18n.current.di.withHttp(I18n.current.di.notFound, 404))
+                    in 500..599 -> ConnectionCheckResult(false, I18n.current.di.withHttp(I18n.current.di.serverError, status))
+                    else -> ConnectionCheckResult(false, I18n.current.di.withHttp(I18n.current.di.requestRejected, status))
                 }
             }
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Exception) {
-            if (isTlsFailure(error)) ConnectionCheckResult(false, "Сертификат сервера не прошёл проверку TLS: его нет ни в хранилище JDK, ни в системном хранилище")
-            else ConnectionCheckResult(false, "Сетевая ошибка или истекло время ожидания")
+            if (isTlsFailure(error)) ConnectionCheckResult(false, I18n.current.di.tlsFailed)
+            else ConnectionCheckResult(false, I18n.current.di.networkError)
         }
     }
 

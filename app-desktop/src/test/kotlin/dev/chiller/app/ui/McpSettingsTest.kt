@@ -11,6 +11,10 @@ import kotlin.test.*
 
 @OptIn(ExperimentalTestApi::class)
 class McpSettingsTest {
+    // Helpers read the global language; these checks are written against the Russian texts.
+    @kotlin.test.BeforeTest fun russian() { dev.chiller.app.i18n.I18n.current = dev.chiller.app.i18n.RuStrings }
+    @kotlin.test.AfterTest fun english() { dev.chiller.app.i18n.I18n.current = dev.chiller.app.i18n.EnStrings }
+
     @Test fun `common mcpServers JSON imports local servers and skips remote ones`() {
         val servers = parseMcpServersJson("""{"mcpServers": {
             "github": {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-github"], "env": {"GITHUB_PERSONAL_ACCESS_TOKEN": "${'$'}{GITHUB_TOKEN}"}},

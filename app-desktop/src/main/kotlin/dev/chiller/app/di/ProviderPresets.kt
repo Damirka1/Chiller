@@ -1,5 +1,6 @@
 package dev.chiller.app.di
 
+import dev.chiller.app.i18n.*
 import kotlinx.serialization.Serializable
 import java.net.URI
 
@@ -41,15 +42,15 @@ data class CustomProvider(
     /** "auto", "full" or "compact" applied with the provider; null keeps the current profile. */
     val profile: String? = null,
 ) {
-    fun preset() = ProviderPreset("custom:$id", name, baseUrl, listOfNotNull(keyVariable), defaultModel, note = "Свой провайдер · хранится только в настройках этого компьютера")
+    fun preset() = ProviderPreset("custom:$id", name, baseUrl, listOfNotNull(keyVariable), defaultModel, note = I18n.current.di.customPresetNote)
 
     /** Why this provider cannot be saved, in words for the settings page; null when it is valid. */
     fun problem(): String? = when {
-        name.isBlank() || name.length > 60 -> "Название: от 1 до 60 символов"
-        !endpointAllowed(baseUrl) -> "Адрес: HTTP или HTTPS; без логина, query и #"
-        keyVariable != null && !isVariableName(keyVariable) -> "Переменная ключа: заглавные латинские буквы, цифры и _, например QARMET_API_KEY"
-        defaultModel != null && defaultModel.length > 200 -> "Модель: не длиннее 200 символов"
-        profile != null && profile !in setOf("auto", "full", "compact") -> "Профиль: авто, полный или компактный"
+        name.isBlank() || name.length > 60 -> I18n.current.di.nameLength
+        !endpointAllowed(baseUrl) -> I18n.current.di.addressRule
+        keyVariable != null && !isVariableName(keyVariable) -> I18n.current.di.keyVariableRule
+        defaultModel != null && defaultModel.length > 200 -> I18n.current.di.modelLength
+        profile != null && profile !in setOf("auto", "full", "compact") -> I18n.current.di.profileRule
         else -> null
     }
 
@@ -69,20 +70,21 @@ fun endpointAllowed(url: String): Boolean = runCatching {
 }.getOrDefault(false)
 
 object ProviderPresets {
-    val all: List<ProviderPreset> = listOf(
+    // Built on each read: the notes follow the interface language.
+    val all: List<ProviderPreset> get() = listOf(
         ProviderPreset("deepseek", "DeepSeek", "https://api.deepseek.com", listOf("DEEPSEEK_API_KEY", "API_TOKEN"), "deepseek-flash",
-            "https://platform.deepseek.com/api_keys", "Модель разработки Chiller, проверена вживую", verified = true),
+            "https://platform.deepseek.com/api_keys", I18n.current.di.deepseekNote, verified = true),
         ProviderPreset("openai", "OpenAI", "https://api.openai.com/v1", listOf("OPENAI_API_KEY"), keysUrl = "https://platform.openai.com/api-keys"),
-        ProviderPreset("openrouter", "OpenRouter", "https://openrouter.ai/api/v1", listOf("OPENROUTER_API_KEY"), keysUrl = "https://openrouter.ai/keys", note = "Много моделей разных компаний через один ключ"),
-        ProviderPreset("gemini", "Google Gemini", "https://generativelanguage.googleapis.com/v1beta/openai", listOf("GEMINI_API_KEY"), keysUrl = "https://aistudio.google.com/apikey", note = "OpenAI-совместимый режим"),
+        ProviderPreset("openrouter", "OpenRouter", "https://openrouter.ai/api/v1", listOf("OPENROUTER_API_KEY"), keysUrl = "https://openrouter.ai/keys", note = I18n.current.di.openrouterNote),
+        ProviderPreset("gemini", "Google Gemini", "https://generativelanguage.googleapis.com/v1beta/openai", listOf("GEMINI_API_KEY"), keysUrl = "https://aistudio.google.com/apikey", note = I18n.current.di.geminiNote),
         ProviderPreset("groq", "Groq", "https://api.groq.com/openai/v1", listOf("GROQ_API_KEY"), keysUrl = "https://console.groq.com/keys"),
         ProviderPreset("mistral", "Mistral", "https://api.mistral.ai/v1", listOf("MISTRAL_API_KEY"), keysUrl = "https://console.mistral.ai/api-keys"),
         ProviderPreset("xai", "xAI", "https://api.x.ai/v1", listOf("XAI_API_KEY"), keysUrl = "https://console.x.ai"),
         ProviderPreset("together", "Together AI", "https://api.together.xyz/v1", listOf("TOGETHER_API_KEY"), keysUrl = "https://api.together.ai/settings/api-keys"),
         ProviderPreset("fireworks", "Fireworks", "https://api.fireworks.ai/inference/v1", listOf("FIREWORKS_API_KEY"), keysUrl = "https://fireworks.ai/account/api-keys"),
-        ProviderPreset("ollama", "Ollama", "http://localhost:11434/v1", note = "Локальный сервер, ключ не нужен"),
-        ProviderPreset("lmstudio", "LM Studio", "http://localhost:1234/v1", note = "Локальный сервер, ключ не нужен"),
-        ProviderPreset("vllm", "vLLM", "http://localhost:8000/v1", note = "Локальный сервер (например, Gemma), ключ не нужен"),
+        ProviderPreset("ollama", "Ollama", "http://localhost:11434/v1", note = I18n.current.di.localNoKey),
+        ProviderPreset("lmstudio", "LM Studio", "http://localhost:1234/v1", note = I18n.current.di.localNoKey),
+        ProviderPreset("vllm", "vLLM", "http://localhost:8000/v1", note = I18n.current.di.vllmNote),
     )
 
     fun byOrigin(url: String, custom: List<CustomProvider> = emptyList()): ProviderPreset? =

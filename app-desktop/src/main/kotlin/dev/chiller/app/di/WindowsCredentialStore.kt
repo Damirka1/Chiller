@@ -1,5 +1,6 @@
 package dev.chiller.app.di
 
+import dev.chiller.app.i18n.*
 import com.sun.jna.Library
 import com.sun.jna.Memory
 import com.sun.jna.Native
@@ -20,7 +21,7 @@ class WindowsCredentialStore internal constructor(private val native: WinCredNat
     constructor() : this(if (isWindows()) JnaWinCredNative() else null)
 
     override val supported: Boolean get() = native != null
-    override val name: String get() = "Диспетчер учётных данных Windows"
+    override val name: String get() = I18n.current.di.windowsCredentials
 
     override fun load(origin: String): String? {
         val api = requireSupported()
