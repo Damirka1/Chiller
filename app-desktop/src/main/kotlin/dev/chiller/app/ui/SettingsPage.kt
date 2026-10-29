@@ -54,6 +54,8 @@ data class SettingsData(
     val customProviders: List<CustomProvider> = emptyList(),
     /** The task's money budget and the image model in use, which its prices must cover. */
     val costBudget: CostBudgetSettings = CostBudgetSettings(), val imageModel: String? = null,
+    /** Models generate_image picks from, and other endpoints that can draw, as (url, name). */
+    val imageCatalog: ModelCatalogState = ModelCatalogState(), val imageProviders: List<Pair<String, String>> = emptyList(),
     val recent: List<String> = emptyList(), val dataDir: String = "", val demoCount: Int = 0,
     val version: String = "dev", val build: String = "", val commit: String = "", val runtime: String = "", val os: String = "",
     val captureTargets: List<CaptureTarget> = emptyList(), val selectedCaptureTarget: String? = null, val screenshotSupported: Boolean = false,
@@ -503,8 +505,22 @@ private fun ProfileCard(data: SettingsData, actions: SettingsActions) {
                 ChillerControl(label, { actions.agent(a.copy(vision = id)) }, style = if (a.vision == id) ControlStyle.SELECTED else ControlStyle.QUIET)
             }
         }
-        val imageModel = imageModelFor(a, data.catalog)
-        val listedImageModels = data.catalog.models.filter { it.imageGeneration == true }
+        if (data.imageProviders.isNotEmpty()) {
+            Column {
+                Text("Провайдер для картинок", color = c.text, fontSize = 13.sp)
+                Text("generate_image может рисовать через другой подключённый провайдер, со своим ключом", color = c.faint, fontSize = 11.sp, lineHeight = 15.sp)
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                (listOf("" to "Как у чата") + data.imageProviders).forEach { (url, label) ->
+                    val selected = normalizeEndpoint(a.imageBaseUrl.ifBlank { data.baseUrl }) == normalizeEndpoint(url.ifBlank { data.baseUrl })
+                    // A model id belongs to its endpoint: switching providers starts from that provider's own choice.
+                    ChillerControl(label, { if (!selected) actions.agent(a.copy(imageBaseUrl = url, imageModel = "auto")) },
+                        style = if (selected) ControlStyle.SELECTED else ControlStyle.QUIET)
+                }
+            }
+        }
+        val imageModel = imageModelFor(a, data.imageCatalog)
+        val listedImageModels = data.imageCatalog.models.filter { it.imageGeneration == true }
         Column {
             Text("Модель для картинок", color = c.text, fontSize = 13.sp)
             Text(when {

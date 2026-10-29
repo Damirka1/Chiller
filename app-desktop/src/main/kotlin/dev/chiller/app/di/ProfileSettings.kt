@@ -28,6 +28,24 @@ fun imageModelFor(options: AgentOptions, catalog: ModelCatalogState): ProviderMo
     else -> catalog.entry(choice) ?: ProviderModel(choice)
 }
 
+/** Where generate_image goes: the endpoint chosen for images, else the chat endpoint. */
+fun imageEndpoint(settings: DesktopSettings): String = settings.agent.imageBaseUrl.ifBlank { settings.baseUrl }
+
+/** The models generate_image picks from: the live chat catalog on the chat endpoint, else the one cached for the image endpoint. */
+fun imageCatalog(settings: DesktopSettings, catalog: ModelCatalogState): ModelCatalogState {
+    val endpoint = normalizeEndpoint(imageEndpoint(settings))
+    if (endpoint == normalizeEndpoint(settings.baseUrl)) return catalog
+    return settings.modelCatalogs[endpoint]?.let { ModelCatalogState("ready", it.models, fetchedAt = it.fetchedAt) } ?: ModelCatalogState()
+}
+
+/** Other endpoints whose cached catalog lists an image model, as (url, name); the chosen one stays even if its cache is gone. */
+fun imageProviderChoices(settings: DesktopSettings): List<Pair<String, String>> {
+    val chat = normalizeEndpoint(settings.baseUrl)
+    val listed = settings.modelCatalogs.filter { (endpoint, cached) -> endpoint != chat && cached.models.any { it.imageGeneration == true } }.keys
+    val chosen = settings.agent.imageBaseUrl.takeIf { it.isNotBlank() && normalizeEndpoint(it) != chat }?.let(::normalizeEndpoint)
+    return (listed + listOfNotNull(chosen)).distinct().map { url -> url to (ProviderPresets.byOrigin(url, settings.customProviders)?.name ?: url) }
+}
+
 /** The catalog entry for a model id, if the endpoint listed it. */
 fun ModelCatalogState.entry(modelId: String): ProviderModel? = models.firstOrNull { it.id == modelId }
 

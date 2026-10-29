@@ -1186,12 +1186,13 @@ class DesktopController(
         // Asking before each change applies to project files; a dialog without a folder only writes its own pictures.
         val approvals = if (s.settings.confirmEdits && !folderless && providerOverride == null) PendingApprovals() else null
         val code = LocalReadOnlyCodeService(workspace.root)
-        // generate_image uses the image model on the same endpoint and the same origin-bound key as the chat model.
-        val imageOrigin = originOf(s.settings.baseUrl)
-        val imageModel = imageModelFor(options, s.catalog)
+        // generate_image uses the image endpoint (the chat one unless another is chosen) with that origin's own key.
+        val imageBaseUrl = imageEndpoint(s.settings)
+        val imageOrigin = originOf(imageBaseUrl)
+        val imageModel = imageModelFor(options, imageCatalog(s.settings, s.catalog))
         val cost = costBudgetFor(s.settings, modelOverride ?: s.settings.model, imageModel?.id)
         val images = imageModel?.let { model ->
-            OpenAiImageService(http, s.settings.baseUrl, model.id, model.imageEditing != false, requestBudget = cost) { imageOrigin?.let { credentials[it] } }
+            OpenAiImageService(http, imageBaseUrl, model.id, model.imageEditing != false, requestBudget = cost) { imageOrigin?.let { credentials[it] } }
         }
         val imageSession = s.sessionId
         val attachmentImages = AttachmentImages { session, id -> if (session == imageSession) inputAttachments.originalImage(session, id) else null }

@@ -23,6 +23,22 @@ class ModelCatalogStateTest {
         assertEquals("dall-e-3", imageModelFor(AgentOptions(imageModel = "dall-e-3"), catalog)?.id, "a typed id works without a listing")
     }
 
+    @Test fun imagesCanUseAnotherEndpointWithItsCachedCatalog() {
+        val qarmet = CachedModelCatalog(listOf(ProviderModel("quasar"), ProviderModel("flux-2-klein", chat = false, imageGeneration = true)), "2026-10-29T00:00:00Z")
+        val local = ModelCatalogState("ready", listOf(ProviderModel("gemma")))
+        val settings = DesktopSettings(baseUrl = "http://10.0.0.5:8080/v1", model = "gemma",
+            modelCatalogs = mapOf("https://gateway.example.com/v1" to qarmet, "http://10.0.0.5:8080/v1" to CachedModelCatalog(local.models, "")),
+            customProviders = listOf(CustomProvider("q", "Qarmet", "https://gateway.example.com/v1")))
+
+        assertEquals(null, imageModelFor(settings.agent, imageCatalog(settings, local)), "the chat endpoint cannot draw")
+        assertEquals(listOf("https://gateway.example.com/v1" to "Qarmet"), imageProviderChoices(settings))
+
+        val split = settings.copy(agent = AgentOptions(imageBaseUrl = "https://gateway.example.com/v1/").sanitized())
+        assertEquals("https://gateway.example.com/v1", imageEndpoint(split))
+        assertEquals("flux-2-klein", imageModelFor(split.agent, imageCatalog(split, local))?.id)
+        assertEquals("", AgentOptions(imageBaseUrl = "ftp://gateway.example.com").sanitized().imageBaseUrl)
+    }
+
     @Test fun processMadeChartsThatWereNotShownAreFlagged() {
         val result = dev.chiller.app.ui.TurnResult(emptyList(), emptyList(), listOf("shown.png"), emptyList())
         val outside = OutsideChanges(0, added = listOf("weather_graph.png", "shown.png", "build/out.class"))
