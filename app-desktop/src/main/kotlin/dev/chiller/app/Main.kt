@@ -1,5 +1,6 @@
 package dev.chiller.app
 
+import dev.chiller.app.i18n.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.Density
@@ -50,6 +51,9 @@ private fun chillerApplication() = application {
         value = dev.chiller.app.di.UiPreferencesStore(directory).load()
     }
     val initialPreferences = savedPreferences ?: return@application
+    // One language for the whole app: composables read LocalStrings (ChillerApp provides it), other code I18n.current.
+    val strings = stringsFor(Language.fromId(state.uiPreferences.language))
+    SideEffect { I18n.current = strings }
     // Background news reach the system while the window is not in focus; the tray icon exists only while they are on.
     val trayState = rememberTrayState()
     val raise = remember { MutableSharedFlow<String?>(extraBufferCapacity = 4) }

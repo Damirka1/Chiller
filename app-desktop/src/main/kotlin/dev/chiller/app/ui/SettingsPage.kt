@@ -2,6 +2,7 @@
 
 package dev.chiller.app.ui
 
+import dev.chiller.app.i18n.*
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
@@ -95,9 +96,18 @@ class SettingsActions(
     val saveProxy: (ProxySettings, (String?) -> Unit) -> Unit = { _, done -> done("Сохранение недоступно") },
 )
 
-internal enum class SettingsSection(val title: String, val icon: ImageVector) {
-    CONNECTION("Подключение", Icons.Outlined.Cable), AGENT("Агент", Icons.Outlined.SmartToy), MCP("Инструменты MCP", Icons.Outlined.Extension), APPEARANCE("Внешний вид", Icons.Outlined.Palette),
-    DATA("Проекты и данные", Icons.Outlined.FolderOpen), KEYS("Клавиши", Icons.Outlined.Keyboard), ABOUT("О программе", Icons.Outlined.Info),
+internal enum class SettingsSection(val icon: ImageVector) {
+    CONNECTION(Icons.Outlined.Cable), AGENT(Icons.Outlined.SmartToy), MCP(Icons.Outlined.Extension), APPEARANCE(Icons.Outlined.Palette),
+    DATA(Icons.Outlined.FolderOpen), KEYS(Icons.Outlined.Keyboard), ABOUT(Icons.Outlined.Info);
+
+    fun title(s: SettingsStrings): String = when (this) {
+        CONNECTION -> s.connection; AGENT -> s.agent; MCP -> s.mcp; APPEARANCE -> s.appearance; DATA -> s.data; KEYS -> s.keys; ABOUT -> s.about
+    }
+
+    fun description(s: SettingsStrings): String = when (this) {
+        CONNECTION -> s.connectionDescription; AGENT -> s.agentDescription; MCP -> s.mcpDescription; APPEARANCE -> s.appearanceDescription
+        DATA -> s.dataDescription; KEYS -> s.keysDescription; ABOUT -> s.aboutDescription
+    }
 }
 
 /** The settings section list. Lives in the app sidebar while it is shown, otherwise at the page's left edge. */
@@ -109,12 +119,12 @@ internal fun SettingsNav(
 ) {
     val c = LocalChillerPalette.current
     Column(modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        ChillerControl("Назад к диалогу", onClose, Modifier.fillMaxWidth(), icon = Icons.AutoMirrored.Outlined.ArrowBack, trailing = "esc", inlineTrailing = true)
+        ChillerControl(LocalStrings.current.settings.backToDialog, onClose, Modifier.fillMaxWidth(), icon = Icons.AutoMirrored.Outlined.ArrowBack, trailing = "esc", inlineTrailing = true)
         Spacer(Modifier.height(14.dp))
-        Text("Настройки", color = c.text, fontSize = 20.sp, fontWeight = FontWeight.Medium, letterSpacing = (-.4).sp, modifier = Modifier.padding(start = 10.dp, bottom = 10.dp))
+        Text(LocalStrings.current.settings.title, color = c.text, fontSize = 20.sp, fontWeight = FontWeight.Medium, letterSpacing = (-.4).sp, modifier = Modifier.padding(start = 10.dp, bottom = 10.dp))
         SettingsSection.entries.forEach { s ->
             Box(contentAlignment = Alignment.CenterEnd) {
-                ChillerControl(s.title, { onSection(s) }, Modifier.fillMaxWidth(), icon = s.icon, style = if (s == section) ControlStyle.SELECTED else ControlStyle.QUIET)
+                ChillerControl(s.title(LocalStrings.current.settings), { onSection(s) }, Modifier.fillMaxWidth(), icon = s.icon, style = if (s == section) ControlStyle.SELECTED else ControlStyle.QUIET)
                 if (s == SettingsSection.CONNECTION && connectionDot != null) Box(Modifier.padding(end = 12.dp).size(7.dp).clip(CircleShape).background(connectionDot))
             }
         }
@@ -147,8 +157,8 @@ internal fun SettingsPage(
             BoxWithConstraints(Modifier.fillMaxSize()) {
                 val scroll = rememberScrollState()
                 Column(Modifier.fillMaxWidth().verticalScroll(scroll).padding(horizontal = if (maxWidth < 700.dp) 20.dp else 36.dp, vertical = 28.dp), verticalArrangement = Arrangement.spacedBy(24.dp)) {
-                    Text(current.title, color = c.text, fontSize = 28.sp, fontWeight = FontWeight.Medium, letterSpacing = (-.7).sp)
-                    Text(current.description(), color = c.muted, fontSize = 13.sp, lineHeight = 19.sp)
+                    Text(current.title(LocalStrings.current.settings), color = c.text, fontSize = 28.sp, fontWeight = FontWeight.Medium, letterSpacing = (-.7).sp)
+                    Text(current.description(LocalStrings.current.settings), color = c.muted, fontSize = 13.sp, lineHeight = 19.sp)
                     Box(Modifier.fillMaxWidth().height(1.dp).background(c.border.copy(alpha = .65f)))
                     when (current) {
                         SettingsSection.CONNECTION -> ConnectionSection(data, actions)
@@ -504,16 +514,6 @@ private fun AgentSection(data: SettingsData, actions: SettingsActions) {
     }
 }
 
-private fun SettingsSection.description(): String = when (this) {
-    SettingsSection.CONNECTION -> "Ваши модели и подключения. Выберите провайдера, чтобы настроить его параметры."
-    SettingsSection.AGENT -> "Поведение модели, возможности и ограничения для ваших задач."
-    SettingsSection.MCP -> "Подключайте инструменты и сервисы, с которыми работает агент."
-    SettingsSection.APPEARANCE -> "Рабочее пространство, в котором удобно сосредоточиться."
-    SettingsSection.DATA -> "Проекты, история и файлы приложения на этом компьютере."
-    SettingsSection.KEYS -> "Быстрый доступ к диалогам, проектам и командам."
-    SettingsSection.ABOUT -> "Версия приложения и сведения для диагностики."
-}
-
 /** Reflow the same composition: resizing must not discard drafts or field focus. */
 @Composable
 private fun SettingsGrid(providerDetail: Boolean = false, content: @Composable () -> Unit) {
@@ -661,22 +661,24 @@ private fun ProfileCard(data: SettingsData, actions: SettingsActions) {
 @Composable
 private fun AppearanceSection(data: SettingsData, actions: SettingsActions) {
     val p = data.preferences
+    val s = LocalStrings.current.settings
     Card {
-        SectionTitle("Тема", null)
+        SectionTitle(s.theme, null)
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            listOf("system" to "Системная", "light" to "Светлая", "dark" to "Тёмная").forEach { (id, label) -> ThemeSwatch(id, label, p.theme == id, Modifier.weight(1f)) { actions.preferences(p.copy(theme = id)) } }
+            listOf("system" to s.themeSystem, "light" to s.themeLight, "dark" to s.themeDark).forEach { (id, label) -> ThemeSwatch(id, label, p.theme == id, Modifier.weight(1f)) { actions.preferences(p.copy(theme = id)) } }
         }
     }
     Card {
-        SectionTitle("Интерфейс", null)
-        Choice("Плотность", listOf("normal" to "Обычная", "compact" to "Компактная"), p.density) { actions.preferences(p.copy(density = it)) }
-        Choice("Раскладка по умолчанию", listOf("focus" to "Focus", "studio" to "Studio"), p.layout) { actions.preferences(p.copy(layout = it)) }
-        SettingToggle("Уменьшить движение", "Без анимаций появления, переливов и мигающего курсора", p.reducedMotion) { actions.preferences(p.copy(reducedMotion = it)) }
+        SectionTitle(s.interfaceTitle, null)
+        // Each language is named in itself, so the way back is readable whichever one is on.
+        Choice(s.language, Language.entries.map { it.id to it.nativeName }, Language.fromId(p.language).id) { actions.preferences(p.copy(language = it)) }
+        Choice(s.density, listOf("normal" to s.densityNormal, "compact" to s.densityCompact), p.density) { actions.preferences(p.copy(density = it)) }
+        Choice(s.defaultLayout, listOf("focus" to "Focus", "studio" to "Studio"), p.layout) { actions.preferences(p.copy(layout = it)) }
+        SettingToggle(s.reducedMotion, s.reducedMotionHint, p.reducedMotion) { actions.preferences(p.copy(reducedMotion = it)) }
     }
     Card {
-        SectionTitle("Уведомления", "О диалогах в фоне Chiller сообщает внутри окна. Системные уведомления приходят, только когда окно не в фокусе.")
-        SettingToggle("Системные уведомления", "Задача завершена, проверка пройдена или агент ждёт ответа. Для них нужна иконка Chiller в области уведомлений.",
-            p.systemNotifications) { actions.preferences(p.copy(systemNotifications = it)) }
+        SectionTitle(s.notifications, s.notificationsHint)
+        SettingToggle(s.systemNotifications, s.systemNotificationsHint, p.systemNotifications) { actions.preferences(p.copy(systemNotifications = it)) }
     }
 }
 

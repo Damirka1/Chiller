@@ -26,6 +26,8 @@ data class UiPreferences(
     val projectModes: Map<String, String> = emptyMap(),
     /** Projects the user expanded (true) or collapsed (false) in the sidebar, by folder. */
     val projectExpansion: Map<String, Boolean> = emptyMap(),
+    /** Interface language: "en" (the default) or "ru"; see [dev.chiller.app.i18n.Language]. */
+    val language: String = "en",
 )
 
 /** Stores non-secret appearance preferences separately from provider/session data. */

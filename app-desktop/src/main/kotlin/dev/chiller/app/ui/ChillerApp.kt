@@ -1,5 +1,6 @@
 package dev.chiller.app.ui
 
+import dev.chiller.app.i18n.*
 import androidx.compose.animation.*
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -352,7 +353,8 @@ fun ChillerApp(
     LaunchedEffect(dark, titleBar) { titleBar?.onDark?.invoke(dark) }
     // Provider-given model names (an optional extension of /models), for the composer's model button.
     val modelNames = remember(catalog.models) { catalog.models.mapNotNull { m -> m.displayName?.takeIf { it.isNotBlank() }?.let { m.id to it } }.toMap() }
-    ChillerTheme(darkTheme = dark, reducedMotion = reducedMotion, compact = compactDensity) { CompositionLocalProvider(LocalModelNames provides modelNames, LocalFilePreview provides onPreviewFile, LocalEditApproval provides editApproval) {
+    val strings = stringsFor(Language.fromId(preferences.language))
+    ChillerTheme(darkTheme = dark, reducedMotion = reducedMotion, compact = compactDensity) { CompositionLocalProvider(LocalModelNames provides modelNames, LocalFilePreview provides onPreviewFile, LocalEditApproval provides editApproval, LocalStrings provides strings) {
         val c = LocalChillerPalette.current
         val menu = titleBar?.menu
         BoxWithConstraints(Modifier.fillMaxSize().then(titleBar?.hitTest ?: Modifier).background(c.canvas).focusRequester(rootFocus).chillerKeyboardFocusTracking().onPreviewKeyEvent {
@@ -643,7 +645,7 @@ fun ChillerApp(
                         add(PaletteCommand(if (allowProcesses) "Запретить команды процессов" else "Разрешить команды процессов", "Диалог", Icons.Outlined.Terminal) { onAllowProcessesChange(!allowProcesses) })
                     }
                     add(PaletteCommand(if (dark) "Светлая тема" else "Тёмная тема", "Вид", Icons.Outlined.Contrast) { updateView(view.copy(theme = if (dark) "light" else "dark")) })
-                    SettingsSection.entries.forEach { section -> add(PaletteCommand(section.title, "Настройки", section.icon) { settingsSection = section; settings = true }) }
+                    SettingsSection.entries.forEach { section -> add(PaletteCommand(section.title(strings.settings), strings.settings.title, section.icon) { settingsSection = section; settings = true }) }
                 }
             }
             CommandPalette(commands) { palette = false; runCatching { rootFocus.requestFocus() } }
