@@ -1,5 +1,6 @@
 package dev.chiller.app.ui
 
+import dev.chiller.app.i18n.*
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.spring
@@ -109,9 +110,9 @@ internal fun LazyListScope.projectTreeItems(
     @Composable fun LazyItemScope.Animated(content: @Composable () -> Unit) =
         Box(if (reduced) Modifier else Modifier.animateItem(fadeInSpec = tween(180), placementSpec = spring(stiffness = 600f, dampingRatio = .9f), fadeOutSpec = tween(110))) { content() }
 
-    item(key = "projects-header") { SectionHeader("Проекты", Icons.Outlined.CreateNewFolder, "Открыть проект…", onChoose, enabled, first = true) }
+    item(key = "projects-header") { SectionHeader(strings.projects.projects, Icons.Outlined.CreateNewFolder, strings.projects.openProject, onChoose, enabled, first = true) }
     if (tree.projects.isEmpty()) item(key = "projects-empty") {
-        NestedAction("Открыть папку проекта", Icons.Outlined.FolderOpen, enabled, indent = 10.dp, trailing = shortcut("O"), onClick = onChoose)
+        NestedAction(strings.projects.openProjectFolder, Icons.Outlined.FolderOpen, enabled, indent = 10.dp, trailing = shortcut("O"), onClick = onChoose)
     }
     tree.projects.forEach { group ->
         val open = expanded[group.path] ?: (group.path == current || group.sessions.any { it.id == selected })
@@ -127,23 +128,23 @@ internal fun LazyListScope.projectTreeItems(
         if (open) {
             val all = showAll[group.path] == true
             if (group.sessions.isEmpty()) item(key = "project-empty:${group.path}") {
-                Animated { NestedAction("Новый диалог", Icons.Outlined.Add, enabled) { model.onNewIn(group.path) } }
+                Animated { NestedAction(strings.common.newDialog, Icons.Outlined.Add, enabled) { model.onNewIn(group.path) } }
             }
             items(if (all) group.sessions else group.sessions.take(PROJECT_PREVIEW), key = { it.id }) { session -> Animated { sessionRow(session, true) } }
             if (group.sessions.size > PROJECT_PREVIEW) item(key = "project-more:${group.path}") {
-                Animated { NestedAction(if (all) "Свернуть" else "Ещё ${group.sessions.size - PROJECT_PREVIEW}", if (all) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore, true) { showAll[group.path] = !all } }
+                Animated { NestedAction(if (all) strings.common.collapse else strings.common.more(group.sessions.size - PROJECT_PREVIEW), if (all) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore, true) { showAll[group.path] = !all } }
             }
         }
     }
-    item(key = "loose-header") { SectionHeader("Без папки", Icons.Outlined.Add, "Новый диалог без папки", { model.onNewIn(null) }, enabled) }
+    item(key = "loose-header") { SectionHeader(strings.common.noFolder, Icons.Outlined.Add, strings.projects.newDialogNoFolder, { model.onNewIn(null) }, enabled) }
     if (tree.loose.isEmpty()) item(key = "loose-empty") {
-        Text("Вопросы, тексты и поиск в вебе — без доступа к файлам", color = LocalChillerPalette.current.faint, fontSize = 11.sp, lineHeight = 16.sp,
+        Text(strings.projects.looseHint, color = LocalChillerPalette.current.faint, fontSize = 11.sp, lineHeight = 16.sp,
             modifier = Modifier.padding(start = 10.dp, end = 10.dp, top = 2.dp, bottom = 6.dp))
     }
     val allLoose = showAll[LOOSE_KEY] == true
     items(if (allLoose) tree.loose else tree.loose.take(LOOSE_PREVIEW), key = { it.id }) { session -> Animated { sessionRow(session, false) } }
     if (tree.loose.size > LOOSE_PREVIEW) item(key = "loose-more") {
-        Animated { NestedAction(if (allLoose) "Свернуть" else "Ещё ${tree.loose.size - LOOSE_PREVIEW}", if (allLoose) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore, true, indent = 10.dp) { showAll[LOOSE_KEY] = !allLoose } }
+        Animated { NestedAction(if (allLoose) strings.common.collapse else strings.common.more(tree.loose.size - LOOSE_PREVIEW), if (allLoose) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore, true, indent = 10.dp) { showAll[LOOSE_KEY] = !allLoose } }
     }
 }
 
@@ -181,6 +182,7 @@ private enum class ProjectActivity { IDLE, RUNNING, WAITING, UNREAD }
 @Composable
 private fun ProjectRow(group: ProjectGroup, current: Boolean, open: Boolean, activity: ProjectActivity, enabled: Boolean, reduced: Boolean, model: ProjectsModel, onToggle: () -> Unit) {
     val c = LocalChillerPalette.current
+    val text = strings // semantics blocks are not composable
     val name = folderName(group.path)
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
@@ -207,7 +209,7 @@ private fun ProjectRow(group: ProjectGroup, current: Boolean, open: Boolean, act
                 }
                 .hoverable(interaction).pointerHoverIcon(PointerIcon.Hand)
                 .clickable(interactionSource = interaction, indication = null, role = Role.Button, onClick = onToggle)
-                .semantics { contentDescription = "Проект $name, ${if (open) "свернуть" else "развернуть"}" }
+                .semantics { contentDescription = text.projects.projectToggle(name, open) }
                 .padding(start = 4.dp, end = 2.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -218,19 +220,19 @@ private fun ProjectRow(group: ProjectGroup, current: Boolean, open: Boolean, act
             Text(name, color = if (exists) c.text else c.faint, fontSize = 13.sp, lineHeight = 19.sp, fontWeight = if (current) FontWeight.Medium else FontWeight.Normal,
                 maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
             if (actions) {
-                ChillerIconButton(Icons.Outlined.Add, "Новый диалог в $name", { model.onNewIn(group.path) }, Modifier.size(24.dp), enabled = enabled && exists)
+                ChillerIconButton(Icons.Outlined.Add, strings.projects.newDialogIn(name), { model.onNewIn(group.path) }, Modifier.size(24.dp), enabled = enabled && exists)
                 Box {
-                    ChillerIconButton(Icons.Outlined.MoreHoriz, "Действия проекта", { if (System.currentTimeMillis() - closedAt > 200) menu = !menu }, Modifier.size(24.dp))
+                    ChillerIconButton(Icons.Outlined.MoreHoriz, strings.projects.projectActions, { if (System.currentTimeMillis() - closedAt > 200) menu = !menu }, Modifier.size(24.dp))
                     if (menu) ChillerPopover({ menu = false; closedAt = System.currentTimeMillis() }, 240.dp, below = true, alignEnd = true) {
                         // Picking an item closes the menu; only an outside click needs the reopen guard.
                         val close = { menu = false }
                         Spacer(Modifier.height(5.dp))
-                        MenuRow("Новый диалог", { close(); model.onNewIn(group.path) }, icon = Icons.Outlined.Add, enabled = enabled && exists)
-                        MenuRow(if (group.pinned) "Открепить" else "Закрепить наверху", { close(); model.onPin(group.path, !group.pinned) }, icon = Icons.Outlined.PushPin)
-                        if (exists) MenuRow("Показать в $fileManagerName", { close(); model.onReveal(group.path) }, icon = Icons.Outlined.FolderOpen)
-                        else MenuRow("Указать новое место…", { close(); model.onRelocate(group.path) }, subtitle = "Папку переместили или переименовали", icon = Icons.Outlined.FolderOpen, enabled = enabled)
+                        MenuRow(strings.common.newDialog, { close(); model.onNewIn(group.path) }, icon = Icons.Outlined.Add, enabled = enabled && exists)
+                        MenuRow(if (group.pinned) strings.projects.unpin else strings.projects.pinTop, { close(); model.onPin(group.path, !group.pinned) }, icon = Icons.Outlined.PushPin)
+                        if (exists) MenuRow(strings.common.showInFileManager(), { close(); model.onReveal(group.path) }, icon = Icons.Outlined.FolderOpen)
+                        else MenuRow(strings.common.relocate, { close(); model.onRelocate(group.path) }, subtitle = strings.common.relocateHint, icon = Icons.Outlined.FolderOpen, enabled = enabled)
                         MenuDivider()
-                        MenuRow("Убрать из списка", { close(); model.onRemove(group.path) }, subtitle = "Папка и диалоги останутся", icon = Icons.Outlined.VisibilityOff, enabled = !current)
+                        MenuRow(strings.projects.removeFromList, { close(); model.onRemove(group.path) }, subtitle = strings.projects.removeHint, icon = Icons.Outlined.VisibilityOff, enabled = !current)
                         Spacer(Modifier.height(5.dp))
                     }
                 }
@@ -240,9 +242,9 @@ private fun ProjectRow(group: ProjectGroup, current: Boolean, open: Boolean, act
                     activity == ProjectActivity.WAITING -> Box(Modifier.padding(end = 9.dp).size(8.dp).clip(androidx.compose.foundation.shape.CircleShape).background(c.focus))
                     activity == ProjectActivity.RUNNING -> Box(Modifier.padding(end = 9.dp)) { Pulse(c.accent) }
                     activity == ProjectActivity.UNREAD && !open -> Box(Modifier.padding(end = 9.dp).size(7.dp).clip(androidx.compose.foundation.shape.CircleShape).background(c.accent))
-                    !exists -> Icon(Icons.Outlined.WarningAmber, "Папка не найдена", Modifier.padding(end = 7.dp).size(13.dp), tint = c.negative)
+                    !exists -> Icon(Icons.Outlined.WarningAmber, strings.projects.folderMissing, Modifier.padding(end = 7.dp).size(13.dp), tint = c.negative)
                     branch != null -> Text(branch!!, color = c.faint, fontSize = 11.sp, lineHeight = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 76.dp).padding(end = 7.dp))
-                    group.pinned -> Icon(Icons.Outlined.PushPin, "Закреплён", Modifier.padding(end = 8.dp).size(11.dp), tint = c.faint)
+                    group.pinned -> Icon(Icons.Outlined.PushPin, strings.projects.pinned, Modifier.padding(end = 8.dp).size(11.dp), tint = c.faint)
                     !open && group.sessions.isNotEmpty() -> Text("${group.sessions.size}", color = c.faint, fontSize = 11.sp, lineHeight = 15.sp, modifier = Modifier.padding(end = 9.dp))
                 }
             }
@@ -286,6 +288,7 @@ data class FolderMenu(
 @Composable
 internal fun FolderChip(menu: FolderMenu, enabled: Boolean) {
     val c = LocalChillerPalette.current
+    val text = strings // semantics blocks are not composable
     var open by remember { mutableStateOf(false) }
     var closedAt by remember { mutableStateOf(0L) }
     val interaction = remember { MutableInteractionSource() }
@@ -296,14 +299,14 @@ internal fun FolderChip(menu: FolderMenu, enabled: Boolean) {
             Modifier.widthIn(max = 168.dp).height(28.dp).clip(RoundedCornerShape(7.dp)).background(if ((hovered || open) && enabled) c.hover else c.sidebar)
                 .hoverable(interaction).pointerHoverIcon(PointerIcon.Hand)
                 .clickable(interactionSource = interaction, indication = null, enabled = enabled, role = Role.Button) { if (System.currentTimeMillis() - closedAt > 200) open = !open }
-                .semantics { contentDescription = "Папка диалога: ${menu.worktree?.let { folderName(it.repo) + ", отдельная копия" } ?: workspace?.let(::folderName) ?: "без папки"}" }
+                .semantics { contentDescription = text.projects.dialogFolderA11y(menu.worktree?.let { folderName(it.repo) + text.projects.copySuffixA11y } ?: workspace?.let(::folderName) ?: text.common.noFolderLower) }
                 .padding(start = 6.dp, end = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             if (workspace != null) ProjectTile(menu.worktree?.repo ?: workspace, 15.dp, dimmed = menu.missing)
             else Icon(Icons.AutoMirrored.Outlined.Chat, null, Modifier.size(13.dp), tint = c.faint)
             Spacer(Modifier.width(6.dp))
-            Text(menu.worktree?.let { folderName(it.repo) + " · копия" } ?: workspace?.let(::folderName) ?: "Без папки", color = if (menu.missing) c.negative else if (workspace == null) c.faint else c.muted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+            Text(menu.worktree?.let { folderName(it.repo) + strings.projects.copySuffix } ?: workspace?.let(::folderName) ?: strings.common.noFolder, color = if (menu.missing) c.negative else if (workspace == null) c.faint else c.muted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
             if (menu.locked && workspace != null) { Spacer(Modifier.width(4.dp)); Icon(Icons.Outlined.Lock, null, Modifier.size(10.dp), tint = c.faint) }
         }
         if (open) ChillerPopover({ open = false; closedAt = System.currentTimeMillis() }, 288.dp) {
@@ -312,27 +315,27 @@ internal fun FolderChip(menu: FolderMenu, enabled: Boolean) {
             if (menu.locked) Row(Modifier.padding(start = 16.dp, end = 14.dp, top = 2.dp, bottom = 6.dp), verticalAlignment = Alignment.Top) {
                 Icon(Icons.Outlined.Lock, null, Modifier.padding(top = 2.dp).size(12.dp), tint = c.faint)
                 Spacer(Modifier.width(8.dp))
-                Text(if (workspace != null) "Папка закреплена за диалогом: его правки и откаты относятся к ней. Другая папка откроет новый диалог."
-                    else "В диалоге уже есть файлы. Другая папка откроет новый диалог.", color = c.faint, fontSize = 11.sp, lineHeight = 15.sp)
+                Text(if (workspace != null) strings.projects.folderLocked
+                    else strings.projects.folderHasFiles, color = c.faint, fontSize = 11.sp, lineHeight = 15.sp)
             }
             if (menu.locked) menu.onContinueElsewhere?.let { continueElsewhere ->
-                MenuRow("Продолжить в другой папке…", { close(); continueElsewhere() }, subtitle = "Новый диалог с кратким пересказом этого", icon = Icons.Outlined.CreateNewFolder)
+                MenuRow(strings.projects.continueElsewhere, { close(); continueElsewhere() }, subtitle = strings.projects.continueHint, icon = Icons.Outlined.CreateNewFolder)
                 MenuDivider()
             }
             menu.onIsolate?.let { isolate ->
-                MenuRow("Работать в отдельной копии", { close(); isolate() }, subtitle = "git worktree: параллельно с другими задачами проекта", icon = Icons.Outlined.AccountTree)
+                MenuRow(strings.projects.isolate, { close(); isolate() }, subtitle = strings.projects.isolateHint, icon = Icons.Outlined.AccountTree)
                 MenuDivider()
             }
             if (menu.missing && workspace != null) {
-                MenuRow("Указать новое место…", { close(); menu.onRelocate(workspace) }, subtitle = "Папку переместили или переименовали", icon = Icons.Outlined.WarningAmber)
+                MenuRow(strings.common.relocate, { close(); menu.onRelocate(workspace) }, subtitle = strings.common.relocateHint, icon = Icons.Outlined.WarningAmber)
                 MenuDivider()
             }
             val others = menu.projects.filter { it != workspace }.take(6)
             if (workspace != null) FolderMenuRow(workspace, selected = true, hint = null) { close() }
-            others.forEach { path -> FolderMenuRow(path, selected = false, hint = if (menu.locked) "новый диалог" else null) { close(); menu.onOpen(path) } }
+            others.forEach { path -> FolderMenuRow(path, selected = false, hint = if (menu.locked) strings.projects.newDialogHint else null) { close(); menu.onOpen(path) } }
             if (workspace != null || others.isNotEmpty()) MenuDivider()
-            MenuRow("Открыть папку…", { close(); menu.onChoose() }, icon = Icons.Outlined.CreateNewFolder, shortcut = shortcut("O"))
-            MenuRow(if (menu.locked && workspace != null) "Новый диалог без папки" else "Без папки", { close(); menu.onDetach() }, subtitle = "Без доступа к файлам и командам",
+            MenuRow(strings.projects.openFolder, { close(); menu.onChoose() }, icon = Icons.Outlined.CreateNewFolder, shortcut = shortcut("O"))
+            MenuRow(if (menu.locked && workspace != null) strings.projects.newDialogNoFolder else strings.common.noFolder, { close(); menu.onDetach() }, subtitle = strings.projects.noAccessHint,
                 icon = Icons.AutoMirrored.Outlined.Chat, selected = workspace == null)
             Spacer(Modifier.height(6.dp))
         }
@@ -370,6 +373,7 @@ private fun FolderMenuRow(path: String, selected: Boolean, hint: String?, onClic
 internal fun ProjectSwitcher(projects: List<ProjectGroup>, current: String?, onPick: (String?) -> Unit, onChoose: () -> Unit, onDismiss: () -> Unit,
     onOpenDialog: (String) -> Unit = {}) {
     val c = LocalChillerPalette.current
+    val text = strings // semantics blocks are not composable
     var query by remember { mutableStateOf("") }
     var highlight by remember { mutableIntStateOf(0) }
     val focus = remember { FocusRequester() }
@@ -418,13 +422,13 @@ internal fun ProjectSwitcher(projects: List<ProjectGroup>, current: String?, onP
                 Spacer(Modifier.width(10.dp))
                 BasicTextField(query, { query = it }, singleLine = true,
                     textStyle = TextStyle(color = c.text, fontSize = 14.sp, lineHeight = 20.sp), cursorBrush = SolidColor(c.text),
-                    modifier = Modifier.weight(1f).focusRequester(focus).semantics { contentDescription = "Поиск проекта" },
-                    decorationBox = { inner -> Box { if (query.isEmpty()) Text("Перейти к проекту…", color = c.faint, fontSize = 14.sp, lineHeight = 20.sp); inner() } })
+                    modifier = Modifier.weight(1f).focusRequester(focus).semantics { contentDescription = text.projects.jumpSearchA11y },
+                    decorationBox = { inner -> Box { if (query.isEmpty()) Text(strings.projects.jumpPlaceholder, color = c.faint, fontSize = 14.sp, lineHeight = 20.sp); inner() } })
                 Text("Esc", color = c.faint, fontSize = 11.sp)
             }
             Box(Modifier.fillMaxWidth().height(1.dp).background(c.border))
             Column(Modifier.heightIn(max = 380.dp).verticalScroll(rememberScrollState()).padding(vertical = 6.dp)) {
-                if (matches.isEmpty()) Text(if (projects.isEmpty()) "Проектов пока нет" else "Нет проектов с «${query.trim()}»", color = c.faint, fontSize = 12.sp,
+                if (matches.isEmpty()) Text(if (projects.isEmpty()) strings.projects.noProjects else strings.projects.noProjectsMatching(query.trim()), color = c.faint, fontSize = 12.sp,
                     modifier = Modifier.padding(horizontal = 18.dp, vertical = 10.dp))
                 matches.forEachIndexed { index, group ->
                     SwitcherRow(index == highlight, { pick(index) }, { highlight = index }) {
@@ -435,9 +439,9 @@ internal fun ProjectSwitcher(projects: List<ProjectGroup>, current: String?, onP
                             Text(homeRelative(group.path), color = c.faint, fontSize = 11.sp, lineHeight = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                         val meta = listOfNotNull(
-                            "открыт".takeIf { group.path == current },
-                            group.sessions.size.takeIf { it > 0 }?.let { "$it ${plural(it, "диалог", "диалога", "диалогов")}" },
-                            group.lastActive?.let { relativeAge(it) }?.takeIf { it.isNotEmpty() },
+                            strings.projects.openNow.takeIf { group.path == current },
+                            group.sessions.size.takeIf { it > 0 }?.let { strings.common.dialogs(it) },
+                            group.lastActive?.let { relativeAge(it, strings.common) }?.takeIf { it.isNotEmpty() },
                         ).joinToString(" · ")
                         if (meta.isNotEmpty()) Text(meta, color = c.faint, fontSize = 11.sp, modifier = Modifier.padding(start = 10.dp))
                         if (group.pinned) Icon(Icons.Outlined.PushPin, null, Modifier.padding(start = 8.dp).size(12.dp), tint = c.faint)
@@ -447,17 +451,17 @@ internal fun ProjectSwitcher(projects: List<ProjectGroup>, current: String?, onP
                 SwitcherRow(highlight == matches.size, { pick(matches.size) }, { highlight = matches.size }) {
                     Box(Modifier.size(24.dp), contentAlignment = Alignment.Center) { Icon(Icons.AutoMirrored.Outlined.Chat, null, Modifier.size(15.dp), tint = c.muted) }
                     Spacer(Modifier.width(12.dp))
-                    Text("Новый диалог без папки", color = c.text, fontSize = 13.sp, modifier = Modifier.weight(1f))
+                    Text(strings.projects.newDialogNoFolder, color = c.text, fontSize = 13.sp, modifier = Modifier.weight(1f))
                 }
                 SwitcherRow(highlight == matches.size + 1, { pick(matches.size + 1) }, { highlight = matches.size + 1 }) {
                     Box(Modifier.size(24.dp), contentAlignment = Alignment.Center) { Icon(Icons.Outlined.CreateNewFolder, null, Modifier.size(15.dp), tint = c.muted) }
                     Spacer(Modifier.width(12.dp))
-                    Text("Открыть папку…", color = c.text, fontSize = 13.sp, modifier = Modifier.weight(1f))
+                    Text(strings.projects.openFolder, color = c.text, fontSize = 13.sp, modifier = Modifier.weight(1f))
                     Text(shortcut("O"), color = c.faint, fontSize = 11.sp)
                 }
             }
             Box(Modifier.fillMaxWidth().height(1.dp).background(c.border))
-            Text("↑↓ — выбрать · Enter — новый диалог · Shift+Enter — последний диалог", color = c.faint, fontSize = 11.sp, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+            Text(strings.projects.jumpHint, color = c.faint, fontSize = 11.sp, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
         }
     }
 }
@@ -486,12 +490,12 @@ internal fun MissingFolderBanner(path: String, enabled: Boolean, onRelocate: () 
         Icon(Icons.Outlined.WarningAmber, null, Modifier.size(17.dp), tint = c.negative)
         Spacer(Modifier.width(10.dp))
         Column(Modifier.weight(1f)) {
-            Text("Папка проекта не найдена", color = c.text, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+            Text(strings.projects.projectFolderMissing, color = c.text, fontSize = 13.sp, fontWeight = FontWeight.Medium)
             Text(homeRelative(path), color = c.muted, fontSize = 11.sp, lineHeight = 16.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
-        ChillerControl("Новый диалог", onNewDialog, enabled = enabled)
+        ChillerControl(strings.common.newDialog, onNewDialog, enabled = enabled)
         Spacer(Modifier.width(6.dp))
-        ChillerControl("Указать новое место…", onRelocate, icon = Icons.Outlined.FolderOpen, style = ControlStyle.PRIMARY, enabled = enabled)
+        ChillerControl(strings.common.relocate, onRelocate, icon = Icons.Outlined.FolderOpen, style = ControlStyle.PRIMARY, enabled = enabled)
     }
 }
 
@@ -514,34 +518,34 @@ internal fun WorktreeBar(info: dev.chiller.app.di.WorktreeInfo, running: Boolean
         Icon(Icons.Outlined.AccountTree, null, Modifier.size(16.dp), tint = c.accent)
         Spacer(Modifier.width(10.dp))
         Column(Modifier.weight(1f)) {
-            Text("Отдельная копия · ${info.branch}", color = c.text, fontSize = 12.sp, lineHeight = 17.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(strings.projects.separateCopyBranch(info.branch), color = c.text, fontSize = 12.sp, lineHeight = 17.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
             val line = message ?: when {
-                running -> "Задача идёт в копии; проект не меняется"
-                changes == null -> "Изменения появятся здесь"
-                changes!!.isEmpty() -> "Изменений пока нет"
-                else -> "Изменено: ${changes!!.size} ${plural(changes!!.size, "файл", "файла", "файлов")} · " + changes!!.take(3).joinToString(", ") { it.substringAfterLast('/') } + if (changes!!.size > 3) "…" else ""
+                running -> strings.projects.copyRunning
+                changes == null -> strings.projects.copyChangesLater
+                changes!!.isEmpty() -> strings.projects.copyNoChanges
+                else -> strings.projects.copyChanged(changes!!.size) + " · " + changes!!.take(3).joinToString(", ") { it.substringAfterLast('/') } + if (changes!!.size > 3) "…" else ""
             }
             Text(line, color = c.muted, fontSize = 11.sp, lineHeight = 15.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
         }
         Spacer(Modifier.width(8.dp))
-        ChillerControl(if (applying) "Переношу…" else "Перенести в проект", {
+        ChillerControl(if (applying) strings.projects.moving else strings.projects.moveToProject, {
             applying = true
             scope.launch { try { message = model.onApplyWorktree() } finally { applying = false; refresh++ } }
         }, icon = Icons.Outlined.MoveDown, style = ControlStyle.PRIMARY, enabled = !running && !applying && !changes.isNullOrEmpty())
         Box {
-            ChillerIconButton(Icons.Outlined.MoreHoriz, "Действия с копией", { menu = !menu; confirm = false }, Modifier.size(28.dp), enabled = !running)
+            ChillerIconButton(Icons.Outlined.MoreHoriz, strings.projects.copyActions, { menu = !menu; confirm = false }, Modifier.size(28.dp), enabled = !running)
             if (menu) ChillerPopover({ menu = false }, 280.dp, alignEnd = true) {
                 Spacer(Modifier.height(6.dp))
                 if (!confirm) {
-                    MenuRow("Показать в $fileManagerName", { menu = false; model.onReveal(info.path) }, icon = Icons.Outlined.FolderOpen)
+                    MenuRow(strings.common.showInFileManager(), { menu = false; model.onReveal(info.path) }, icon = Icons.Outlined.FolderOpen)
                     MenuDivider()
-                    MenuRow("Удалить копию…", { confirm = true }, subtitle = "Диалог вернётся в проект", icon = Icons.Outlined.DeleteOutline)
+                    MenuRow(strings.projects.deleteCopyMenu, { confirm = true }, subtitle = strings.projects.deleteCopyHint, icon = Icons.Outlined.DeleteOutline)
                 } else {
-                    Text(if (changes.isNullOrEmpty()) "Удалить копию? Ветка ${info.branch} останется в репозитории."
-                        else "Удалить копию? Изменения, которые не перенесены в проект, пропадут вместе с ней; ветка ${info.branch} останется.",
+                    Text(if (changes.isNullOrEmpty()) strings.projects.deleteCopyConfirm(info.branch)
+                        else strings.projects.deleteCopyConfirmChanges(info.branch),
                         color = c.muted, fontSize = 12.sp, lineHeight = 17.sp, modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp))
-                    MenuRow("Удалить копию", { menu = false; confirm = false; model.onRemoveWorktree() }, icon = Icons.Outlined.DeleteOutline)
-                    MenuRow("Отмена", { confirm = false }, icon = Icons.Outlined.Close)
+                    MenuRow(strings.projects.deleteCopy, { menu = false; confirm = false; model.onRemoveWorktree() }, icon = Icons.Outlined.DeleteOutline)
+                    MenuRow(strings.common.cancel, { confirm = false }, icon = Icons.Outlined.Close)
                 }
                 Spacer(Modifier.height(6.dp))
             }

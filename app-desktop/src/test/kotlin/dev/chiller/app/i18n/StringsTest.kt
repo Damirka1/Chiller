@@ -6,7 +6,10 @@ import kotlin.test.assertTrue
 
 class StringsTest {
     /** Every text of every group, read through the group interfaces so a new group is covered once it is listed here. */
-    private fun texts(strings: Strings): Map<String, String> = listOf("settings" to strings.settings).flatMap { (group, value) ->
+    private fun texts(strings: Strings): Map<String, String> = Strings::class.java.methods
+        .filter { it.parameterCount == 0 && it.returnType.isInterface && it.returnType.packageName == Strings::class.java.packageName }
+        .map { it.name.removePrefix("get").replaceFirstChar(Char::lowercase) to it.invoke(strings) }
+        .flatMap { (group, value) ->
         value.javaClass.interfaces.flatMap { it.methods.toList() }
             .filter { it.parameterCount == 0 && it.returnType == String::class.java }
             .map { "$group.${it.name}" to it.invoke(value) as String }

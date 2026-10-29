@@ -29,13 +29,16 @@ class HistoryPresentationTest {
     @Test fun relativeAgeIsShortAndLocal() {
         val zone = ZoneId.of("UTC")
         val clock = Clock.fixed(Instant.parse("2026-10-17T12:00:00Z"), zone)
-        assertEquals("сейчас", relativeAge("2026-10-17T11:59:40Z", clock, zone))
-        assertEquals("12 мин", relativeAge("2026-10-17T11:48:00Z", clock, zone))
-        assertEquals("3 ч", relativeAge("2026-10-17T09:00:00Z", clock, zone))
-        assertEquals("вчера", relativeAge("2026-10-16T09:00:00Z", clock, zone))
-        assertEquals("4 дн", relativeAge("2026-10-13T09:00:00Z", clock, zone))
-        assertEquals("01.09", relativeAge("2026-09-01T09:00:00Z", clock, zone))
-        assertEquals("", relativeAge("bad", clock, zone))
+        val ru = dev.chiller.app.i18n.RuStrings.common
+        assertEquals("сейчас", relativeAge("2026-10-17T11:59:40Z", ru, clock, zone))
+        assertEquals("12 мин", relativeAge("2026-10-17T11:48:00Z", ru, clock, zone))
+        assertEquals("3 ч", relativeAge("2026-10-17T09:00:00Z", ru, clock, zone))
+        assertEquals("вчера", relativeAge("2026-10-16T09:00:00Z", ru, clock, zone))
+        assertEquals("4 дн", relativeAge("2026-10-13T09:00:00Z", ru, clock, zone))
+        assertEquals("01.09", relativeAge("2026-09-01T09:00:00Z", ru, clock, zone))
+        val en = dev.chiller.app.i18n.EnStrings.common
+        assertEquals(listOf("now", "12 min", "3 h", "yesterday", "4 d", "Sep 1"), listOf("2026-10-17T11:59:40Z", "2026-10-17T11:48:00Z", "2026-10-17T09:00:00Z", "2026-10-16T09:00:00Z", "2026-10-13T09:00:00Z", "2026-09-01T09:00:00Z").map { relativeAge(it, en, clock, zone) })
+        assertEquals("", relativeAge("bad", en, clock, zone))
     }
 
     @Test fun filtersByTitleIgnoringCase() {

@@ -1,5 +1,6 @@
 package dev.chiller.app.ui
 
+import dev.chiller.app.i18n.*
 import androidx.compose.animation.*
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -163,12 +164,12 @@ internal fun Sidebar(
             Box(Modifier.fillMaxWidth().height(1.dp).background(c.border.copy(alpha = .75f)))
             Row(Modifier.fillMaxWidth().padding(vertical = 10.dp, horizontal = 3.dp).heightIn(min = 37.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(listOfNotNull("Chiller", version).joinToString(" "), color = c.faint, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f).padding(start = 10.dp))
-                ChillerIconButton(Icons.Outlined.Contrast, "Сменить тему", onTheme)
+                ChillerIconButton(Icons.Outlined.Contrast, strings.sidebar.changeTheme, onTheme)
             }
         }
         else Column(Modifier.fillMaxSize()) {
         // Dialogs stay reachable while one runs: it goes on in the background.
-        ChillerControl("Новый диалог", onNew, Modifier.fillMaxWidth(), icon = Icons.Outlined.Add, trailing = shortcut("N"))
+        ChillerControl(strings.common.newDialog, onNew, Modifier.fillMaxWidth(), icon = Icons.Outlined.Add, trailing = shortcut("N"))
         SidebarSearch(query, { query = it }, searchFocus)
         Spacer(Modifier.height(6.dp))
         val searching = query.isNotBlank()
@@ -176,7 +177,7 @@ internal fun Sidebar(
         val hits by produceState(emptyList<dev.chiller.sessions.SessionHit>(), query) {
             value = if (query.trim().length < 2) emptyList() else { kotlinx.coroutines.delay(250); runCatching { onSearchMessages(query) }.getOrDefault(emptyList()) }
         }
-        if (searching && shown.isEmpty() && hits.isEmpty()) Text("Ничего не найдено по «${query.trim()}»", color = c.faint, fontSize = 11.sp, lineHeight = 18.sp, modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp))
+        if (searching && shown.isEmpty() && hits.isEmpty()) Text(strings.sidebar.nothingFound(query.trim()), color = c.faint, fontSize = 11.sp, lineHeight = 18.sp, modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp))
         val roots = remember(tree) { tree.projects.flatMap { group -> group.sessions.map { it.id to group.path } }.toMap() }
         val row: @Composable (SessionInfo, Boolean, String?) -> Unit = { session, nested, project ->
             val runs = session.id in projects.running || (running && session.id == selected)
@@ -198,19 +199,19 @@ internal fun Sidebar(
             if (searching) {
                 if (shown.isNotEmpty()) item(key = "search-header") {
                     Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp)) {
-                        Text("Найдено", color = c.muted, fontSize = 12.sp, modifier = Modifier.weight(1f))
-                        Text("${shown.size} из ${sessions.size}", color = c.faint, fontSize = 11.sp)
+                        Text(strings.sidebar.found, color = c.muted, fontSize = 12.sp, modifier = Modifier.weight(1f))
+                        Text(strings.sidebar.foundCount(shown.size, sessions.size), color = c.faint, fontSize = 11.sp)
                     }
                 }
-                items(shown, key = { it.id }) { session -> row(session, false, roots[session.id]?.let(::folderName) ?: "без папки") }
+                items(shown, key = { it.id }) { session -> row(session, false, roots[session.id]?.let(::folderName) ?: strings.common.noFolderLower) }
                 if (hits.isNotEmpty()) item(key = "hits-header") {
                     Row(Modifier.fillMaxWidth().padding(start = 10.dp, end = 10.dp, top = 12.dp, bottom = 4.dp)) {
-                        Text("В сообщениях", color = c.muted, fontSize = 12.sp, modifier = Modifier.weight(1f))
+                        Text(strings.sidebar.inMessages, color = c.muted, fontSize = 12.sp, modifier = Modifier.weight(1f))
                         Text("${hits.size}", color = c.faint, fontSize = 11.sp)
                     }
                 }
                 items(hits, key = { "hit:" + it.sessionId }) { hit ->
-                    SearchHitRow(hit, sessions.firstOrNull { it.id == hit.sessionId }?.title ?: "Диалог", roots[hit.sessionId]?.let(::folderName), hit.sessionId == selected) { onOpenHit(hit, query.trim()) }
+                    SearchHitRow(hit, sessions.firstOrNull { it.id == hit.sessionId }?.title ?: strings.sidebar.dialog, roots[hit.sessionId]?.let(::folderName), hit.sessionId == selected) { onOpenHit(hit, query.trim()) }
                 }
             } else projectTreeItems(tree, workspace, selected, reduced, expanded, showAll, projects, onChoose) { session, nested -> row(session, nested, null) }
         }
@@ -220,7 +221,7 @@ internal fun Sidebar(
             HoverRow(onSettings, Modifier.weight(1f), enabled = enabled) {
                 Icon(Icons.Outlined.Settings, null, Modifier.size(16.dp), tint = c.muted)
                 Column(Modifier.weight(1f).padding(start = 10.dp)) {
-                    Text("Настройки", color = c.text, fontSize = 13.sp, lineHeight = 19.sp, maxLines = 1)
+                    Text(strings.settings.title, color = c.text, fontSize = 13.sp, lineHeight = 19.sp, maxLines = 1)
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Box(Modifier.size(6.dp).clip(CircleShape).background(dot))
                         Spacer(Modifier.width(6.dp))
@@ -228,7 +229,7 @@ internal fun Sidebar(
                     }
                 }
             }
-            ChillerIconButton(Icons.Outlined.Contrast, "Сменить тему", onTheme)
+            ChillerIconButton(Icons.Outlined.Contrast, strings.sidebar.changeTheme, onTheme)
         }
         }
         }
@@ -241,7 +242,7 @@ internal fun Sidebar(
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Icon(Icons.Outlined.CreateNewFolder, null, Modifier.size(24.dp), tint = c.accent)
             Spacer(Modifier.height(8.dp))
-            Text("Отпустите, чтобы открыть проект", color = c.text, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+            Text(strings.sidebar.dropToOpen, color = c.text, fontSize = 12.sp, fontWeight = FontWeight.Medium)
         }
     }
     }
@@ -250,6 +251,7 @@ internal fun Sidebar(
 @Composable
 internal fun SidebarSearch(query: String, onQuery: (String) -> Unit, focus: FocusRequester) {
     val c = LocalChillerPalette.current
+    val text = strings // semantics blocks are not composable
     val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
     var focused by remember { mutableStateOf(false) }
     Row(
@@ -271,10 +273,10 @@ internal fun SidebarSearch(query: String, onQuery: (String) -> Unit, focus: Focu
                         else -> false
                     }
                 }
-                .semantics { contentDescription = "Поиск диалогов" },
-            decorationBox = { inner -> Box { if (query.isEmpty()) Text("Поиск", color = c.faint, fontSize = 13.sp, lineHeight = 19.sp); inner() } },
+                .semantics { contentDescription = text.sidebar.searchDialogs },
+            decorationBox = { inner -> Box { if (query.isEmpty()) Text(strings.sidebar.search, color = c.faint, fontSize = 13.sp, lineHeight = 19.sp); inner() } },
         )
-        if (query.isNotEmpty()) Icon(Icons.Outlined.Close, "Очистить поиск", Modifier.size(14.dp).clip(CircleShape).clickable { onQuery("") }, tint = c.faint)
+        if (query.isNotEmpty()) Icon(Icons.Outlined.Close, strings.sidebar.clearSearch, Modifier.size(14.dp).clip(CircleShape).clickable { onQuery("") }, tint = c.faint)
         else Text(shortcut("K"), color = c.faint, fontSize = 11.sp)
     }
 }
@@ -306,11 +308,11 @@ internal fun SessionRow(session: SessionInfo, selected: Boolean, running: Boolea
         Box(Modifier.size(15.dp), contentAlignment = Alignment.Center) {
             if (waiting) Box(Modifier.size(8.dp).clip(CircleShape).background(c.focus)) else if (running) Pulse(c.accent)
             else if (unread) Box(Modifier.size(7.dp).clip(CircleShape).background(c.accent))
-            else if (isolated) Icon(Icons.Outlined.AccountTree, "Отдельная копия", Modifier.size(12.dp), tint = c.faint) else if (!nested) Icon(Icons.AutoMirrored.Outlined.Chat, null, Modifier.size(14.dp), tint = if (selected) c.muted else c.faint)
+            else if (isolated) Icon(Icons.Outlined.AccountTree, strings.sidebar.separateCopy, Modifier.size(12.dp), tint = c.faint) else if (!nested) Icon(Icons.AutoMirrored.Outlined.Chat, null, Modifier.size(14.dp), tint = if (selected) c.muted else c.faint)
         }
         Spacer(Modifier.width(9.dp))
         val title = @Composable {
-            Text(session.title.ifBlank { "Новый диалог" }, color = if (selected || !nested || unread) c.text else c.text.copy(alpha = .86f), fontSize = 13.sp, lineHeight = 19.sp,
+            Text(session.title.ifBlank { strings.common.newDialog }, color = if (selected || !nested || unread) c.text else c.text.copy(alpha = .86f), fontSize = 13.sp, lineHeight = 19.sp,
                 fontWeight = if (unread) FontWeight.SemiBold else FontWeight.Normal, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
         // The title is the request's first sentence; the whole request shows on hover.
@@ -325,22 +327,22 @@ internal fun SessionRow(session: SessionInfo, selected: Boolean, running: Boolea
         Box(Modifier.widthIn(min = 44.dp), contentAlignment = Alignment.CenterEnd) {
             if (hovered || menu || selected || rowFocused) {
                 Box {
-                    ChillerIconButton(Icons.Outlined.MoreHoriz, "Действия диалога", { if (System.currentTimeMillis() - closedAt > 200) menu = !menu },
+                    ChillerIconButton(Icons.Outlined.MoreHoriz, strings.sidebar.dialogActions, { if (System.currentTimeMillis() - closedAt > 200) menu = !menu },
                         Modifier.size(26.dp).focusProperties { canFocus = false }, enabled = enabled)
                     if (menu) ChillerPopover({ menu = false; closedAt = System.currentTimeMillis() }, 200.dp, below = true, alignEnd = true) {
                         Spacer(Modifier.height(5.dp))
-                        onStop?.let { stop -> MenuRow("Остановить", { menu = false; stop() }, subtitle = "Задача идёт в фоне", icon = Icons.Outlined.Stop); MenuDivider() }
-                        MenuRow("Переименовать", { menu = false; onRename() }, icon = Icons.Outlined.Edit)
-                        MenuRow("Экспорт Markdown", { menu = false; onExport("markdown") }, icon = Icons.Outlined.Description)
-                        MenuRow("Экспорт JSON", { menu = false; onExport("json") }, icon = Icons.Outlined.DataObject)
+                        onStop?.let { stop -> MenuRow(strings.sidebar.stop, { menu = false; stop() }, subtitle = strings.sidebar.runsInBackground, icon = Icons.Outlined.Stop); MenuDivider() }
+                        MenuRow(strings.sidebar.rename, { menu = false; onRename() }, icon = Icons.Outlined.Edit)
+                        MenuRow(strings.sidebar.exportMarkdown, { menu = false; onExport("markdown") }, icon = Icons.Outlined.Description)
+                        MenuRow(strings.sidebar.exportJson, { menu = false; onExport("json") }, icon = Icons.Outlined.DataObject)
                         if (canDelete) {
                             MenuDivider()
-                            MenuRow("Удалить диалог…", { menu = false; onDelete() }, icon = Icons.Outlined.DeleteOutline)
+                            MenuRow(strings.sidebar.deleteDialog, { menu = false; onDelete() }, icon = Icons.Outlined.DeleteOutline)
                         }
                         Spacer(Modifier.height(5.dp))
                     }
                 }
-            } else Text(if (waiting) "ждёт ответа" else if (running) "идёт" else relativeAge(session.updatedAt), color = if (waiting) c.focus else if (running) c.accent else c.faint, fontSize = 11.sp, lineHeight = 15.sp, maxLines = 1, softWrap = false, modifier = Modifier.padding(start = 6.dp, end = 8.dp))
+            } else Text(if (waiting) strings.sidebar.waiting else if (running) strings.sidebar.running else relativeAge(session.updatedAt, strings.common), color = if (waiting) c.focus else if (running) c.accent else c.faint, fontSize = 11.sp, lineHeight = 15.sp, maxLines = 1, softWrap = false, modifier = Modifier.padding(start = 6.dp, end = 8.dp))
         }
     }
 }
@@ -349,6 +351,7 @@ internal fun SessionRow(session: SessionInfo, selected: Boolean, running: Boolea
 @Composable
 internal fun SearchHitRow(hit: dev.chiller.sessions.SessionHit, title: String, project: String?, selected: Boolean, onOpen: () -> Unit) {
     val c = LocalChillerPalette.current
+    val text = strings // semantics blocks are not composable
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
     val snippet = remember(hit, c) {
@@ -364,14 +367,14 @@ internal fun SearchHitRow(hit: dev.chiller.sessions.SessionHit, title: String, p
         Modifier.fillMaxWidth().clip(RoundedCornerShape(7.dp)).background(if (selected) c.selected else if (hovered) c.hover else androidx.compose.ui.graphics.Color.Transparent)
             .hoverable(interaction).pointerHoverIcon(PointerIcon.Hand)
             .clickable(interactionSource = interaction, indication = null, role = Role.Button, onClick = onOpen)
-            .semantics { contentDescription = "Найдено в «$title»" }
+            .semantics { contentDescription = text.sidebar.foundIn(title) }
             .padding(horizontal = 10.dp, vertical = 7.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(title.ifBlank { "Новый диалог" }, color = c.text, fontSize = 13.sp, lineHeight = 18.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+            Text(title.ifBlank { strings.common.newDialog }, color = c.text, fontSize = 13.sp, lineHeight = 18.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
             if (hit.matches > 1) Text("×${hit.matches}", color = c.faint, fontSize = 11.sp, modifier = Modifier.padding(start = 6.dp))
         }
         Text(snippet, color = c.muted, fontSize = 11.sp, lineHeight = 16.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
-        Text(listOfNotNull(if (hit.role == "user") "вы" else "модель", project).joinToString(" · "), color = c.faint, fontSize = 10.sp, lineHeight = 14.sp)
+        Text(listOfNotNull(if (hit.role == "user") strings.sidebar.you else strings.sidebar.model, project).joinToString(" · "), color = c.faint, fontSize = 10.sp, lineHeight = 14.sp)
     }
 }

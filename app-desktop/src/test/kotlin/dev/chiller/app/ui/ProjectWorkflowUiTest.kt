@@ -1,5 +1,8 @@
 package dev.chiller.app.ui
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.test.*
 import dev.chiller.app.di.Notice
@@ -31,7 +34,7 @@ class ProjectWorkflowUiTest {
 
     private fun ComposeUiTest.app(
         workspace: String? = shop, projects: ProjectsModel = model(), notices: List<Notice> = emptyList(), selected: String = "fresh",
-        preferences: UiPreferences = UiPreferences(theme = "light", reducedMotion = true),
+        preferences: UiPreferences = UiPreferences(theme = "light", reducedMotion = true, language = "ru"),
     ) = setContent {
         ChillerApp(
             RunState(), sessions, selected, workspace, isDemo = false,
@@ -49,6 +52,26 @@ class ProjectWorkflowUiTest {
         onNewIn = { calls += "newIn:${it?.let(::folderName)}" }, onPin = { path, pinned -> calls += "pin:${folderName(path)}:$pinned" },
         onRemove = { calls += "remove:${folderName(it)}" }, onRelocate = { calls += "relocate:${folderName(it)}" }, onStop = { calls += "stop:$it" },
     )
+
+    @Test fun theSidebarSpeaksEnglishByDefaultAndRussianWhenChosen() = runComposeUiTest {
+        var language by mutableStateOf("en")
+        setContent {
+            ChillerApp(
+                RunState(), sessions, "fresh", shop, isDemo = false,
+                providerModel = "fake-model", providerBaseUrl = "http://localhost:8000/v1", thinkingEnabled = false, apiKeyConfigured = true,
+                onSend = { _, _, id -> SendReceipt(false, "fresh", id) }, onStop = {}, onNewSession = {}, onSelectSession = {},
+                onChooseWorkspace = {}, onConfigureProvider = { _, _, _, _ -> null }, onAnswerQuestion = {}, onUndo = {},
+                onAllowProcessesChange = {}, allowProcesses = false, preferences = UiPreferences(theme = "light", reducedMotion = true, language = language),
+                recentWorkspaces = listOf(shop, api), projects = model(),
+            )
+        }
+        onNodeWithText("Projects").assertExists()
+        onNodeWithContentDescription("New dialog without a folder").assertExists()
+        // The switch applies at once, without a restart.
+        language = "ru"
+        onNodeWithText("Проекты").assertExists()
+        onNodeWithText("Projects").assertDoesNotExist()
+    }
 
     @Test fun projectsExpandAndOfferActionsOnHover() = runComposeUiTest {
         app()
@@ -72,7 +95,7 @@ class ProjectWorkflowUiTest {
     }
 
     @Test fun projectExpansionComesFromPreferencesAndIsSaved() = runComposeUiTest {
-        app(preferences = UiPreferences(theme = "light", reducedMotion = true, projectExpansion = mapOf(api to true, shop to false)))
+        app(preferences = UiPreferences(theme = "light", reducedMotion = true, language = "ru", projectExpansion = mapOf(api to true, shop to false)))
         onNodeWithText("Тесты для парсера CSV").assertExists()
         onNodeWithText("Починить расчёт скидки").assertDoesNotExist()
         onAllNodesWithText("demo-shop").onFirst().performClick()
@@ -178,7 +201,7 @@ class ProjectWorkflowUiTest {
     }
 
     @Test fun eachProjectKeepsItsMode() = runComposeUiTest {
-        app(preferences = UiPreferences(theme = "light", reducedMotion = true, projectModes = mapOf(shop to "edit")))
+        app(preferences = UiPreferences(theme = "light", reducedMotion = true, language = "ru", projectModes = mapOf(shop to "edit")))
         onNodeWithText("Изменения").assertExists()
         // Switching the mode is remembered for the open project.
         onNodeWithText("Изменения").performClick()
@@ -202,7 +225,7 @@ class ProjectWorkflowUiTest {
                 RunState(), sessions, "fresh", shop, isDemo = false, providerModel = "fake-model", providerBaseUrl = "http://localhost:8000/v1", thinkingEnabled = false, apiKeyConfigured = true,
                 onSend = { _, _, id -> SendReceipt(false, "fresh", id) }, onStop = {}, onNewSession = {}, onSelectSession = {}, onChooseWorkspace = {},
                 onConfigureProvider = { _, _, _, _ -> null }, onAnswerQuestion = {}, onUndo = {}, onAllowProcessesChange = { calls += "processes:$it" }, allowProcesses = false,
-                preferences = UiPreferences(theme = "light", reducedMotion = true), recentWorkspaces = listOf(shop, api), projects = model(), paletteMenu = menu,
+                preferences = UiPreferences(theme = "light", reducedMotion = true, language = "ru"), recentWorkspaces = listOf(shop, api), projects = model(), paletteMenu = menu,
             )
         }
         onRoot().performKeyInput { keyDown(Key.CtrlLeft); keyDown(Key.ShiftLeft); pressKey(Key.P); keyUp(Key.ShiftLeft); keyUp(Key.CtrlLeft) }
@@ -228,7 +251,7 @@ class ProjectWorkflowUiTest {
                 providerModel = "fake-model", providerBaseUrl = "http://localhost:8000/v1", thinkingEnabled = false, apiKeyConfigured = true,
                 onSend = { _, _, id -> SendReceipt(false, "s2", id) }, onStop = {}, onNewSession = {}, onSelectSession = { calls += "select:$it" }, onChooseWorkspace = {},
                 onConfigureProvider = { _, _, _, _ -> null }, onAnswerQuestion = {}, onUndo = {}, onAllowProcessesChange = {}, allowProcesses = false,
-                preferences = UiPreferences(theme = "light", reducedMotion = true), recentWorkspaces = listOf(shop, api),
+                preferences = UiPreferences(theme = "light", reducedMotion = true, language = "ru"), recentWorkspaces = listOf(shop, api),
                 onSearchMessages = { query -> if ("иголк" in query) listOf(dev.chiller.sessions.SessionHit("s2", "Здесь спрятана иголка в стоге", 15, 6, 4, "user", 1)) else emptyList() },
             )
         }
@@ -247,7 +270,7 @@ class ProjectWorkflowUiTest {
                 sessions, "s1", shop, isDemo = false, providerModel = "fake-model", providerBaseUrl = "http://localhost:8000/v1", thinkingEnabled = false, apiKeyConfigured = true,
                 onSend = { _, _, id -> SendReceipt(false, "s1", id) }, onStop = {}, onNewSession = {}, onSelectSession = {}, onChooseWorkspace = {},
                 onConfigureProvider = { _, _, _, _ -> null }, onAnswerQuestion = {}, onUndo = {}, onAllowProcessesChange = {}, allowProcesses = false,
-                preferences = UiPreferences(theme = "light", reducedMotion = true),
+                preferences = UiPreferences(theme = "light", reducedMotion = true, language = "ru"),
                 onDeleteMessage = { calls += "delete:$it"; true },
             )
         }

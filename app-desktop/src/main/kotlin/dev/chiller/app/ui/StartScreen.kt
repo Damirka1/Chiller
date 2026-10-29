@@ -1,5 +1,6 @@
 package dev.chiller.app.ui
 
+import dev.chiller.app.i18n.*
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -166,7 +167,7 @@ private fun RecentProjectRow(project: RecentProject, onClick: () -> Unit) {
             Text(Path.of(project.path).fileName?.toString() ?: project.path, color = if (exists) c.text else c.faint, fontSize = 13.sp, lineHeight = 18.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(if (exists) homeRelative(project.path) else "Папка не найдена · ${homeRelative(project.path)}", color = c.faint, fontSize = 11.sp, lineHeight = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
-        if (project.dialogs > 0) Text("${project.dialogs} ${plural(project.dialogs, "диалог", "диалога", "диалогов")}" + (project.lastActive?.let { relativeAge(it) }?.takeIf { it.isNotEmpty() }?.let { " · $it" } ?: ""),
+        if (project.dialogs > 0) Text("${project.dialogs} ${plural(project.dialogs, "диалог", "диалога", "диалогов")}" + (project.lastActive?.let { relativeAge(it, strings.common) }?.takeIf { it.isNotEmpty() }?.let { " · $it" } ?: ""),
             color = c.faint, fontSize = 11.sp, lineHeight = 15.sp, modifier = Modifier.padding(start = 8.dp))
         if (exists) { Spacer(Modifier.width(10.dp)); Icon(Icons.AutoMirrored.Outlined.ArrowForward, null, Modifier.size(14.dp), tint = c.faint) }
     }
@@ -194,7 +195,7 @@ private fun ResumeCard(item: ResumeItem, onClick: () -> Unit) {
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Text(item.title.ifBlank { "Новый диалог" }, color = c.text, fontSize = 13.sp, lineHeight = 18.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(listOfNotNull(relativeAge(item.updatedAt).takeIf { it.isNotEmpty() }, item.project?.let { Path.of(it).fileName?.toString() }).joinToString(" · "),
+            Text(listOfNotNull(relativeAge(item.updatedAt, strings.common).takeIf { it.isNotEmpty() }, item.project?.let { Path.of(it).fileName?.toString() }).joinToString(" · "),
                 color = c.faint, fontSize = 11.sp, lineHeight = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
         Text("Открыть", color = c.muted, fontSize = 12.sp)
