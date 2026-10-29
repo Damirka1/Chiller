@@ -12,7 +12,7 @@ Kotlin · Compose Desktop · OpenAI-совместимые API · macOS и Windo
 
 [Скачать релиз](https://github.com/Damirka1/Chiller/releases) · [Быстрый старт](#быстрый-старт) · [Почему Chiller](#почему-chiller) · [Подробности](docs/USAGE.ru.md)
 
-<img src="docs/images/focus-light.png" alt="Chiller: режим Focus, светлая тема" width="900">
+<img src="docs/images/focus-light-ru.png" alt="Chiller: режим Focus, светлая тема" width="900">
 
 </div>
 
@@ -49,12 +49,12 @@ Chiller позволяет выбирать полный или компактн
 
 <table>
 <tr>
-<td width="50%"><img src="docs/images/focus-dark.png" alt="Focus, тёмная тема"><br><sub><b>Focus</b> — диалог, сгруппированные вызовы инструментов, живой чек-лист плана под сообщениями.</sub></td>
-<td width="50%"><img src="docs/images/studio-dark.png" alt="Studio"><br><sub><b>Studio</b> — инспектор: диффы, процессы, помощники, токены и раунды.</sub></td>
+<td width="50%"><img src="docs/images/focus-dark-ru.png" alt="Focus, тёмная тема"><br><sub><b>Focus</b> — диалог, сгруппированные вызовы инструментов, живой чек-лист плана под сообщениями.</sub></td>
+<td width="50%"><img src="docs/images/studio-dark-ru.png" alt="Studio"><br><sub><b>Studio</b> — инспектор: диффы, процессы, помощники, токены и раунды.</sub></td>
 </tr>
 <tr>
-<td width="50%"><img src="docs/images/settings-light.png" alt="Настройки агента"><br><sub><b>Профиль модели</b> — авто по ID, набор инструментов, vision, temperature и поля запроса для vLLM.</sub></td>
-<td width="50%"><img src="docs/images/focus-light.png" alt="Focus, светлая тема"><br><sub><b>Светлая тема</b> — собственная дизайн-система, на общих компонентах Chiller.</sub></td>
+<td width="50%"><img src="docs/images/settings-light-ru.png" alt="Настройки агента"><br><sub><b>Профиль модели</b> — авто по ID, набор инструментов, vision, temperature и поля запроса для vLLM.</sub></td>
+<td width="50%"><img src="docs/images/focus-light-ru.png" alt="Focus, светлая тема"><br><sub><b>Светлая тема</b> — собственная дизайн-система, на общих компонентах Chiller.</sub></td>
 </tr>
 </table>
 

@@ -18,7 +18,7 @@ Kotlin · Compose Desktop · OpenAI-compatible APIs · macOS and Windows
 
 Chiller is a desktop app in which a model works on your project through precise tools: it searches, reads fragments, edits against file snapshots, runs checks and reports back. The main goal is for a **4–30B model on your own vLLM / Ollama / LM Studio** to solve real tasks reliably and fast, not only large cloud models.
 
-> The app interface is currently in Russian. The documentation is available in English and Russian.
+> The app and the documentation are available in English and Russian; the interface language is chosen in Settings → Appearance.
 
 ## Why Chiller
 

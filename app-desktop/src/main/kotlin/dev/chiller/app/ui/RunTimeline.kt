@@ -395,7 +395,8 @@ internal fun formatDuration(ms: Long): String = when {
 internal fun compactTokens(value: Long?): String = when {
     value == null -> "?"
     value >= 10_000 -> "${(value + 500) / 1000}k"
-    value >= 1_000 -> "%.1fk".format(java.util.Locale.ROOT, value / 1000.0).replace('.', ',')
+    // A decimal comma in Russian, a point in English.
+    value >= 1_000 -> "%.1fk".format(java.util.Locale.ROOT, value / 1000.0).let { if (I18n.current.language == Language.RU) it.replace('.', ',') else it }
     else -> value.toString()
 }
 

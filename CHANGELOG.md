@@ -8,6 +8,7 @@ All notable changes to Chiller. The format follows [Keep a Changelog](https://ke
 
 ### Added
 
+- **Interface in English and Russian:** English by default, Russian in Settings → Appearance → Language; the switch applies at once. Statuses, errors and the demo follow the chosen language.
 - **Another provider from the model menu:** an "Other providers" section in the menu by the input field; the chosen model continues the current dialog on another provider from the next message, and the switch is written to the journal.
 - **Images through another provider:** "Settings → Agent → Image provider", for example chat on llama.cpp and `generate_image` through a company gateway, each with its own key.
 - **Proxy for corporate networks:** "Settings → Connection → Proxy": system, manual or none, with exceptions; chat, the model catalog, images, the connection check and web search go through it.

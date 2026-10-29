@@ -9,8 +9,8 @@ import kotlin.test.assertTrue
 
 class WindowsCredentialStoreTest {
     // Helpers read the global language; these checks are written against the Russian texts.
-    @kotlin.test.BeforeTest fun russian() { dev.chiller.app.i18n.I18n.current = dev.chiller.app.i18n.RuStrings }
-    @kotlin.test.AfterTest fun english() { dev.chiller.app.i18n.I18n.current = dev.chiller.app.i18n.EnStrings }
+    @kotlin.test.BeforeTest fun russian() { dev.chiller.app.i18n.I18n.current = dev.chiller.app.i18n.RuStrings; dev.chiller.contracts.CoreLanguage.russian = true }
+    @kotlin.test.AfterTest fun english() { dev.chiller.app.i18n.I18n.current = dev.chiller.app.i18n.EnStrings; dev.chiller.contracts.CoreLanguage.russian = false }
 
     private class FakeCredentials : WinCredNative {
         val values = mutableMapOf<String, ByteArray>()
