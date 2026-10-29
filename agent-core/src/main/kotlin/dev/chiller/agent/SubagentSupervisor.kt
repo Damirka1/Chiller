@@ -52,7 +52,7 @@ class SubagentSupervisor(
             val allChildren = children.values.filter { it.snapshot.parentRunId == parentRunId }
             val pending = allChildren.filter { !it.snapshot.status.isTerminal }
             pending.forEach { child ->
-                try { transition(child) { it.copy(status = SubagentStatus.CANCELLED, error = "Основной прогон завершился раньше", activity = "", finishedAt = now()) } }
+                try { transition(child) { it.copy(status = SubagentStatus.CANCELLED, error = tr("The main run ended first", "Основной прогон завершился раньше"), activity = "", finishedAt = now()) } }
                 catch (error: Throwable) { if (failure == null) failure = error }
             }
             Triple(pending.mapNotNull { it.job }, allChildren.mapNotNull { it.job }, failure)
@@ -70,7 +70,7 @@ class SubagentSupervisor(
             latest.forEach { snapshot ->
                 if (snapshot.id in children) return@forEach
                 // A child that was running when the app stopped is never resumed: its outcome is unknown.
-                val restored = if (snapshot.status.isTerminal) snapshot else snapshot.copy(status = SubagentStatus.INTERRUPTED, activity = "", error = "Приложение было закрыто во время работы")
+                val restored = if (snapshot.status.isTerminal) snapshot else snapshot.copy(status = SubagentStatus.INTERRUPTED, activity = "", error = tr("The app was closed while it worked", "Приложение было закрыто во время работы"))
                 revision = maxOf(revision, restored.revision)
                 children[restored.id] = Child(restored, SubagentRequest(restored.taskId, restored.goal, allowedPaths = restored.allowedPaths, maxRounds = restored.maxRounds))
             }
@@ -154,7 +154,7 @@ class SubagentSupervisor(
     override suspend fun cancel(context: ToolContext, agentId: String): SubagentSnapshot {
         val child = lock.withLock { requireRun(context); owned(context, agentId) }
         var failure: Throwable? = null
-        val (snapshot, job) = try { lock.withLock { cancelLocked(child, "Остановлен основным агентом") } }
+        val (snapshot, job) = try { lock.withLock { cancelLocked(child, tr("Stopped by the main agent", "Остановлен основным агентом")) } }
         catch (error: Throwable) { failure = error; child.snapshot to child.job }
         job?.cancelAndJoin()
         failure?.let { throw it }
@@ -164,7 +164,7 @@ class SubagentSupervisor(
     override suspend fun cancelByUser(agentId: String): SubagentSnapshot? {
         val child = lock.withLock { children[agentId] } ?: return null
         var failure: Throwable? = null
-        val (snapshot, job) = try { lock.withLock { cancelLocked(child, "Остановлен пользователем") } }
+        val (snapshot, job) = try { lock.withLock { cancelLocked(child, tr("Stopped by the user", "Остановлен пользователем")) } }
         catch (error: Throwable) { failure = error; child.snapshot to child.job }
         job?.cancelAndJoin()
         failure?.let { throw it }
@@ -184,9 +184,9 @@ class SubagentSupervisor(
         try {
             withTimeout(childTimeoutMs) { loop(child) }
         } catch (_: TimeoutCancellationException) {
-            settle(child) { it.copy(status = SubagentStatus.FAILED, error = "Превышено время работы (${childTimeoutMs / 1000} с)", activity = "", finishedAt = now()) }
+            settle(child) { it.copy(status = SubagentStatus.FAILED, error = tr("Ran out of time (${childTimeoutMs / 1000} s)", "Превышено время работы (${childTimeoutMs / 1000} с)"), activity = "", finishedAt = now()) }
         } catch (cancelled: CancellationException) {
-            withContext(NonCancellable) { settle(child) { it.copy(status = SubagentStatus.CANCELLED, error = it.error ?: "Остановлен", activity = "", finishedAt = now()) } }
+            withContext(NonCancellable) { settle(child) { it.copy(status = SubagentStatus.CANCELLED, error = it.error ?: tr("Stopped", "Остановлен"), activity = "", finishedAt = now()) } }
             throw cancelled
         } catch (error: Exception) {
             settle(child) { it.copy(status = SubagentStatus.FAILED, error = (error.message ?: error.javaClass.simpleName).take(300), activity = "", finishedAt = now()) }
@@ -195,7 +195,7 @@ class SubagentSupervisor(
 
     private suspend fun loop(child: Child) {
         val request = child.request
-        settle(child) { it.copy(status = SubagentStatus.RUNNING, startedAt = now(), activity = "начинает") }
+        settle(child) { it.copy(status = SubagentStatus.RUNNING, startedAt = now(), activity = tr("starting", "начинает")) }
         val tools = base.specs.filter { it.name in CHILD_TOOLS || (child.web && it.name in CHILD_WEB_TOOLS) }
         val web = if (child.web) "\nWeb: web_search and web_fetch are available for public pages. Report only what the pages actually say, with their URLs; if they lack the data, say so." else
             "\nNo web access: if the task needs the internet, say so in your report instead of guessing."
@@ -213,7 +213,7 @@ class SubagentSupervisor(
             val inbox = lock.withLock {
                 val drained = generateSequence { child.mailbox.removeFirstOrNull() }.toList()
                 try {
-                    transition(child) { it.copy(rounds = round + 1, processedMessages = it.processedMessages + drained.size, activity = if (round == request.maxRounds - 1) "пишет итог" else "думает") }
+                    transition(child) { it.copy(rounds = round + 1, processedMessages = it.processedMessages + drained.size, activity = if (round == request.maxRounds - 1) tr("writing the result", "пишет итог") else tr("thinking", "думает")) }
                 } catch (error: Throwable) {
                     drained.asReversed().forEach(child.mailbox::addFirst)
                     throw error
@@ -227,12 +227,12 @@ class SubagentSupervisor(
                 settle(child) { it.copy(usage = it.usage + usage) }
             }
             if (response.toolCalls.isEmpty()) {
-                val text = response.content?.trim().orEmpty().ifEmpty { "(пустой ответ)" }
+                val text = response.content?.trim().orEmpty().ifEmpty { tr("(empty reply)", "(пустой ответ)") }
                 settle(child) { it.copy(status = SubagentStatus.COMPLETED, result = text.take(8000), activity = "", finishedAt = now()) }
                 return
             }
             if (last) {
-                settle(child) { it.copy(status = SubagentStatus.FAILED, error = "Не дал итог: в последнем раунде снова запросил инструменты", activity = "", finishedAt = now()) }
+                settle(child) { it.copy(status = SubagentStatus.FAILED, error = tr("Gave no result: it asked for tools again in the last round", "Не дал итог: в последнем раунде снова запросил инструменты"), activity = "", finishedAt = now()) }
                 return
             }
             messages += response

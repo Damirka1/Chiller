@@ -170,7 +170,7 @@ private fun ResultsTable(sides: List<ComparisonSide>, taskIds: List<String>, res
                         Text(side.model, color = c.text, fontSize = 12.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         if (i == best && sides.size > 1) { Spacer(Modifier.width(6.dp)); Icon(Icons.Outlined.EmojiEvents, strings.tools.bestResult, Modifier.size(14.dp), tint = c.accent) }
                     }
-                    Text(strings.tools.profileSuffix(dev.chiller.agent.ModelProfiles.resolve(side.profile, side.model).name.lowercase()), color = c.faint, fontSize = 11.sp)
+                    Text(strings.tools.profileSuffix(strings.settings.profileName(dev.chiller.agent.ModelProfiles.resolve(side.profile, side.model).id)), color = c.faint, fontSize = 11.sp)
                 }
             }
         }

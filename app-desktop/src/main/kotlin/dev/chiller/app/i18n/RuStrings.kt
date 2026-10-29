@@ -230,6 +230,11 @@ object RuStrings : Strings {
         override fun screenshotsLine(supported: Boolean) = "Снимки экрана: ${if (supported) "поддерживаются; системный доступ проверяется при выборе окна" else "не поддерживаются на этой платформе"}."
         override val whatWasChecked = "Что проверено"
         override val whatWasCheckedNote = "Вживую: DeepSeek V4.1 Flash (eval-задачи и помощники). Офлайн: весь цикл инструментов, отмена правок, журналы. Не проверено: Gemma/vLLM, другие провайдеры из списка, Windows и Linux вживую."
+        override fun profileName(id: String) = if (id == "compact") "компактный" else "полный"
+        override fun profileDescription(id: String, tools: Int) = if (id == "compact") "Для маленьких моделей (около 4–14B активных параметров, например Gemma 26B-A4B): $tools базовых инструментов, короткий пошаговый промпт, без помощников, один вызов за шаг." else "Все инструменты, помощники и обычный промпт. Для крупных моделей (DeepSeek, GPT, Claude-класса)."
+        override val today = "Сегодня"
+        override val yesterday = "Вчера"
+        override val earlier = "Ранее"
         // end settings
     }
     override val common = object : CommonStrings {

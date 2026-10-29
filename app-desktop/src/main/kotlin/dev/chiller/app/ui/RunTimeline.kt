@@ -523,6 +523,6 @@ internal fun runErrorDescription(error: String): String = when {
     error.contains("INCOMPLETE_TOOL_CALL") -> I18n.current.run.errorIncompleteToolCall
     error.contains("INCOMPLETE_STREAM") -> I18n.current.run.errorIncompleteStream
     error.contains("current request or newest exchange exceeds") -> I18n.current.run.errorContextOverflow
-    error.contains("Общий бюджет") -> I18n.current.run.errorBudget
+    error.contains("shared budget") || error.contains("Общий бюджет") -> I18n.current.run.errorBudget
     else -> error
 }

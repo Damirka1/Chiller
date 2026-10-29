@@ -585,11 +585,11 @@ private fun ProfileCard(data: SettingsData, actions: SettingsActions) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(7.dp).clip(CircleShape).background(c.accent)); Spacer(Modifier.width(8.dp))
             Text(buildString {
-                append(strings.settings.profileFor(data.model.ifBlank { strings.settings.theModel }, resolved.name.lowercase()))
+                append(strings.settings.profileFor(data.model.ifBlank { strings.settings.theModel }, strings.settings.profileName(resolved.id)))
                 if (a.profile == "auto") append(if (listed?.displayName != null) strings.settings.autoByIdAndName(listed.displayName!!) else strings.settings.autoById)
             }, color = c.text, fontSize = 12.sp)
         }
-        Text(resolved.description, color = c.faint, fontSize = 11.sp, lineHeight = 16.sp)
+        Text(strings.settings.profileDescription(resolved.id, dev.chiller.agent.ModelProfiles.CORE_TOOLS.size), color = c.faint, fontSize = 11.sp, lineHeight = 16.sp)
         resolved.tools?.let { tools ->
             Text(strings.settings.tools(tools.sorted().joinToString(", ")), color = c.muted, fontSize = 11.sp, lineHeight = 16.sp, fontFamily = ChillerFonts.mono)
         }

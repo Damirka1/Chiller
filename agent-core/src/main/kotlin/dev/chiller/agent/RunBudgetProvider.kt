@@ -22,7 +22,7 @@ class RunBudgetProvider(
     init { require(maxRequests > 0 && maxOutputTokens > 0) }
 
     fun beginRun(resetCostBudget: Boolean = true) = synchronized(lock) {
-        check(active == 0) { "Предыдущие запросы ещё завершаются" }
+        check(active == 0) { tr("Earlier requests are still finishing", "Предыдущие запросы ещё завершаются") }
         if (resetCostBudget) requestBudget?.beginTask()
         requests = 0; output = 0
     }
@@ -33,7 +33,7 @@ class RunBudgetProvider(
     override fun stream(request: ModelRequest): Flow<ModelEvent> = flow {
         val reserved = synchronized(lock) {
             check(requests < maxRequests && output < maxOutputTokens) {
-                "Общий бюджет основного агента и помощников исчерпан ($maxRequests запросов / $maxOutputTokens выходных токенов)"
+                tr("The shared budget of the main agent and helpers ran out ($maxRequests requests / $maxOutputTokens output tokens)", "Общий бюджет основного агента и помощников исчерпан ($maxRequests запросов / $maxOutputTokens выходных токенов)")
             }
             val cap = minOf(request.maxOutputTokens.toLong(), maxOutputTokens - output).toInt()
             require(cap > 0)

@@ -59,12 +59,12 @@ object ModelProfiles {
     )
 
     val FULL = ModelProfile(
-        "full", "Полный", "Все инструменты, помощники и обычный промпт. Для крупных моделей (DeepSeek, GPT, Claude-класса).", tools = null,
+        "full", "Full", "Every tool, helpers and the usual prompt. For large models (DeepSeek, GPT, Claude class).", tools = null,
     )
 
     val COMPACT = ModelProfile(
-        "compact", "Компактный",
-        "Для маленьких моделей (около 4–14B активных параметров, например Gemma 26B-A4B): ${CORE_TOOLS.size} базовых инструментов, короткий пошаговый промпт, без помощников, один вызов за шаг.",
+        "compact", "Compact",
+        "For small models (about 4–14B active parameters, for example Gemma 26B-A4B): ${CORE_TOOLS.size} core tools, a short step-by-step prompt, no helpers, one call per step.",
         tools = CORE_TOOLS, systemPrompt = COMPACT_PROMPT, maxOutputTokens = 2048, temperature = 0.2, parallelToolCalls = false, projectMap = true,
     )
 

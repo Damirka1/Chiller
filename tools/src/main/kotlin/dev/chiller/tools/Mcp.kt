@@ -70,7 +70,7 @@ class McpConnection(
                 environment().putAll(environment)
                 redirectErrorStream(false)
             }.start()
-        } catch (e: Exception) { throw McpException("MCP_START_FAILED", "Не удалось запустить «${config.command}»: ${e.message?.take(200)}") }
+        } catch (e: Exception) { throw McpException("MCP_START_FAILED", tr("Could not start “${config.command}”: ${e.message?.take(200)}", "Не удалось запустить «${config.command}»: ${e.message?.take(200)}")) }
         process = started
         writer = OutputStreamWriter(started.outputStream, Charsets.UTF_8)
         reader = Thread({ readLoop(started) }, "mcp-${config.id}").apply { isDaemon = true; start() }
@@ -117,10 +117,10 @@ class McpConnection(
             val response = try { withTimeout(timeoutMs) { answer.await() } }
                 catch (_: TimeoutCancellationException) {
                     runCatching { notify("notifications/cancelled", buildJsonObject { put("requestId", id); put("reason", "timeout") }) }
-                    throw McpException("MCP_TIMEOUT", "Сервер ${config.name} не ответил за ${timeoutMs / 1000} с")
+                    throw McpException("MCP_TIMEOUT", tr("The ${config.name} server did not answer within ${timeoutMs / 1000} s", "Сервер ${config.name} не ответил за ${timeoutMs / 1000} с"))
                 }
             response["error"]?.jsonObject?.let { error ->
-                throw McpException("MCP_ERROR", error["message"]?.jsonPrimitive?.contentOrNull?.take(500) ?: "Сервер ${config.name} вернул ошибку")
+                throw McpException("MCP_ERROR", error["message"]?.jsonPrimitive?.contentOrNull?.take(500) ?: tr("The ${config.name} server returned an error", "Сервер ${config.name} вернул ошибку"))
             }
             return response["result"] as? JsonObject ?: buildJsonObject {}
         } catch (cancelled: CancellationException) {
@@ -134,8 +134,8 @@ class McpConnection(
         send(buildJsonObject { put("jsonrpc", "2.0"); put("method", method); params?.let { put("params", it) } })
 
     private suspend fun send(message: JsonObject) {
-        val out = writer ?: throw McpException("MCP_UNAVAILABLE", "Сервер ${config.name} не запущен")
-        if (closed || process?.isAlive != true) throw McpException("MCP_UNAVAILABLE", "Сервер ${config.name} остановлен" + errors().takeIf { it.isNotEmpty() }?.let { ": ${it.takeLast(300)}" }.orEmpty())
+        val out = writer ?: throw McpException("MCP_UNAVAILABLE", tr("The ${config.name} server is not running", "Сервер ${config.name} не запущен"))
+        if (closed || process?.isAlive != true) throw McpException("MCP_UNAVAILABLE", tr("The ${config.name} server stopped", "Сервер ${config.name} остановлен") + errors().takeIf { it.isNotEmpty() }?.let { ": ${it.takeLast(300)}" }.orEmpty())
         writeLock.withLock { withContext(Dispatchers.IO) { out.write(json.encodeToString(JsonObject.serializer(), message)); out.write("\n"); out.flush() } }
     }
 
@@ -156,7 +156,7 @@ class McpConnection(
                 }
             }
         } catch (_: Exception) { }
-        pending.values.forEach { it.complete(buildJsonObject { put("error", buildJsonObject { put("message", "Сервер ${config.name} завершился" + errors().takeIf { e -> e.isNotEmpty() }?.let { e -> ": ${e.takeLast(300)}" }.orEmpty()) }) }) }
+        pending.values.forEach { it.complete(buildJsonObject { put("error", buildJsonObject { put("message", tr("The ${config.name} server exited", "Сервер ${config.name} завершился") + errors().takeIf { e -> e.isNotEmpty() }?.let { e -> ": ${e.takeLast(300)}" }.orEmpty()) }) }) }
     }
 
     /** One line of at most [MAX_LINE] characters; a longer one is dropped whole instead of filling memory. */
@@ -187,7 +187,7 @@ class McpConnection(
     }
 
     private fun expand(value: String): String = Regex("""\$\{([A-Za-z_][A-Za-z0-9_]*)}""").replace(value) { match ->
-        resolveVariable(match.groupValues[1]) ?: throw McpException("MCP_START_FAILED", "Переменная ${match.groupValues[1]} не задана в окружении или .env")
+        resolveVariable(match.groupValues[1]) ?: throw McpException("MCP_START_FAILED", tr("The variable ${match.groupValues[1]} is not set in the environment or .env", "Переменная ${match.groupValues[1]} не задана в окружении или .env"))
     }
 
     override fun close() {
@@ -246,7 +246,7 @@ class McpHub(
             scope.launch {
                 val state = try { McpServerState(config.name, "ready", connection.start()) }
                     catch (cancelled: CancellationException) { throw cancelled }
-                    catch (e: Exception) { McpServerState(config.name, "failed", message = (e.message ?: "Сервер не запустился") + connection.errors().takeIf { it.isNotEmpty() }?.let { "\n${it.takeLast(400)}" }.orEmpty()) }
+                    catch (e: Exception) { McpServerState(config.name, "failed", message = (e.message ?: tr("The server did not start", "Сервер не запустился")) + connection.errors().takeIf { it.isNotEmpty() }?.let { "\n${it.takeLast(400)}" }.orEmpty()) }
                 if (connections[config.id]?.second === connection) _states.update { it + (config.id to state) }
                 else connection.close()
             }
@@ -286,9 +286,9 @@ class McpTools(private val servers: Map<String, Pair<McpConnection, List<McpTool
                 val item = part.jsonObject
                 when (item["type"]?.jsonPrimitive?.contentOrNull) {
                     "text" -> item["text"]?.jsonPrimitive?.contentOrNull.orEmpty()
-                    "image", "audio" -> "[${item["type"]!!.jsonPrimitive.content} ${item["mimeType"]?.jsonPrimitive?.contentOrNull.orEmpty()} не передаётся модели]"
+                    "image", "audio" -> "[${item["type"]!!.jsonPrimitive.content} ${item["mimeType"]?.jsonPrimitive?.contentOrNull.orEmpty()} is not passed to the model]"
                     "resource", "resource_link" -> item["resource"]?.jsonObject?.get("text")?.jsonPrimitive?.contentOrNull
-                        ?: item["uri"]?.jsonPrimitive?.contentOrNull?.let { "[ресурс $it]" }.orEmpty()
+                        ?: item["uri"]?.jsonPrimitive?.contentOrNull?.let { "[resource $it]" }.orEmpty()
                     else -> ""
                 }
             }.ifEmpty { result["structuredContent"]?.let { json.encodeToString(JsonElement.serializer(), it) }.orEmpty() }

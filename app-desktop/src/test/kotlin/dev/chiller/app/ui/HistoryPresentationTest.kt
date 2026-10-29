@@ -19,8 +19,9 @@ class HistoryPresentationTest {
             SessionInfo("bad", "", "not-an-instant"),
         )
 
+        dev.chiller.app.i18n.I18n.current = dev.chiller.app.i18n.EnStrings
         val sections = historySections(sessions, clock, zone)
-        assertEquals(listOf("Сегодня", "Вчера", "Ранее"), sections.map { it.title })
+        assertEquals(listOf("Today", "Yesterday", "Earlier"), sections.map { it.title })
         assertEquals(listOf("today-new", "today-old"), sections[0].sessions.map { it.id })
         assertEquals(listOf("yesterday-new"), sections[1].sessions.map { it.id })
         assertEquals(listOf("older", "bad"), sections[2].sessions.map { it.id })

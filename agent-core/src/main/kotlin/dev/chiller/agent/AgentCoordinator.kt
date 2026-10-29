@@ -195,7 +195,7 @@ class AgentCoordinator(
         check(job?.isActive != true) { "Stop the active run before recovery" }
         if (unresolvedToolCalls(_state.value.messages).isEmpty() && _state.value.status != "interrupted") return@withLock
         val closed = closeUnresolvedCalls()
-        appendMessage(AgentMessage("assistant", "Прерванные действия не повторялись. Перед продолжением нужно проверить текущее состояние файлов и процессов.", origin = MessageOrigin(MessageOriginKind.APPLICATION)))
+        appendMessage(AgentMessage("assistant", tr("Interrupted actions were not repeated. Check the current state of files and processes before going on.", "Прерванные действия не повторялись. Перед продолжением нужно проверить текущее состояние файлов и процессов."), origin = MessageOrigin(MessageOriginKind.APPLICATION)))
         events.append(sessionId, "run.recovered", buildJsonObject { put("unknownCalls", closed) })
         _state.update { it.copy(status = "idle", error = null, question = null, streamingText = "") }
     }
@@ -214,7 +214,7 @@ class AgentCoordinator(
                     if (maxRunMinutes > 0) withTimeout(maxRunMinutes * 60_000L) { work() } else work()
                 } catch (timeout: TimeoutCancellationException) {
                     withContext(NonCancellable) {
-                        val message = "Лимит времени задачи ($maxRunMinutes мин) достигнут. Проверьте результаты и продолжите задачу; лимит меняется в Настройки → Агент."
+                        val message = tr("The task time limit ($maxRunMinutes min) was reached. Check the results and continue the task; the limit is in Settings → Agent.", "Лимит времени задачи ($maxRunMinutes мин) достигнут. Проверьте результаты и продолжите задачу; лимит меняется в Настройки → Агент.")
                         events.append(sessionId, "run.failed", buildJsonObject { put("runId", id); put("message", message) })
                         _state.update { it.copy(status = "failed", error = message, streamingText = "", activeModelId = null, runDurationMs = stats.durationMs) }
                     }
@@ -229,7 +229,7 @@ class AgentCoordinator(
                     val safe = error.message?.take(400) ?: error.javaClass.simpleName
                     _state.update { it.copy(status = "failed", error = safe, streamingText = "", activeModelId = null, runDurationMs = stats.durationMs) }
                     if (stats.rounds > 0 && unresolvedToolCalls(_state.value.messages).isEmpty()) {
-                        runCatching { appendMessage(AgentMessage("assistant", "Работа остановлена: $safe. Можно уточнить задачу и продолжить.", origin = MessageOrigin(MessageOriginKind.APPLICATION))) }
+                        runCatching { appendMessage(AgentMessage("assistant", tr("The work stopped: $safe. You can clarify the task and continue.", "Работа остановлена: $safe. Можно уточнить задачу и продолжить."), origin = MessageOrigin(MessageOriginKind.APPLICATION))) }
                     }
                     events.append(sessionId, "run.failed", buildJsonObject { put("runId", id); put("message", safe) })
                 } finally {
@@ -522,9 +522,9 @@ class AgentCoordinator(
                     else -> TRUNCATED_TEXT_NOTICE
                 })
                 _state.update { it.copy(streamingText = "", recoveryNotice = when {
-                    truncatedCall -> "Ответ достиг лимита. Незавершённый вызов не выполнен; пробуем меньшими частями ($truncations/$MAX_TRUNCATION_RECOVERIES)."
-                    exhaustedThinking -> "Рассуждения заняли весь лимит ответа. Следующий шаг — без рассуждений ($truncations/$MAX_TRUNCATION_RECOVERIES)."
-                    else -> "Ответ достиг лимита. Продолжаем с места обрыва ($truncations/$MAX_TRUNCATION_RECOVERIES)."
+                    truncatedCall -> tr("The reply hit the limit. The unfinished call was not run; trying smaller parts ($truncations/$MAX_TRUNCATION_RECOVERIES).", "Ответ достиг лимита. Незавершённый вызов не выполнен; пробуем меньшими частями ($truncations/$MAX_TRUNCATION_RECOVERIES).")
+                    exhaustedThinking -> tr("Reasoning took the whole reply limit. The next step runs without reasoning ($truncations/$MAX_TRUNCATION_RECOVERIES).", "Рассуждения заняли весь лимит ответа. Следующий шаг — без рассуждений ($truncations/$MAX_TRUNCATION_RECOVERIES).")
+                    else -> tr("The reply hit the limit. Continuing from where it stopped ($truncations/$MAX_TRUNCATION_RECOVERIES).", "Ответ достиг лимита. Продолжаем с места обрыва ($truncations/$MAX_TRUNCATION_RECOVERIES).")
                 }) }
                 return@repeat
             }
@@ -549,15 +549,15 @@ class AgentCoordinator(
                     events.append(sessionId, "run.plan_open", buildJsonObject {
                         put("runId", id); put("round", round + 1); put("openSteps", open.size); put("reminder", planReminders)
                     })
-                    _state.update { it.copy(recoveryNotice = "План не закрыт: ${open.size} шаг(а). Агент доделывает или закрывает их ($planReminders/$MAX_PLAN_REMINDERS).") }
+                    _state.update { it.copy(recoveryNotice = tr("The plan is not closed: ${open.size} step(s). The agent finishes or closes them ($planReminders/$MAX_PLAN_REMINDERS).", "План не закрыт: ${open.size} шаг(а). Агент доделывает или закрывает их ($planReminders/$MAX_PLAN_REMINDERS).")) }
                     return@repeat
                 }
                 events.append(sessionId, "run.completed", buildJsonObject { put("runId", id) })
                 _state.update { it.copy(status = "completed", activeModelId = null) }
                 return
             }
-            if (answerOnly) throw IllegalStateException(noProgressTool?.let { "Агент повторяет один и тот же вызов ($it) без нового результата. Все результаты сохранены; уточните задачу и продолжите." }
-                ?: "Достигнут лимит $maxRounds шагов; работа остановлена с сохранением истории.")
+            if (answerOnly) throw IllegalStateException(noProgressTool?.let { tr("The agent repeats the same call ($it) without a new result. All results are saved; clarify the task and continue.", "Агент повторяет один и тот же вызов ($it) без нового результата. Все результаты сохранены; уточните задачу и продолжите.") }
+                ?: tr("Step limit of $maxRounds reached; the work stopped and the history is saved.", "Достигнут лимит $maxRounds шагов; работа остановлена с сохранением истории."))
             val calls = response.toolCalls
             require(calls.size <= 16) { "Too many tool calls" }
             for (call in calls) require(call.id.isNotBlank() && executedCalls.add(call.id)) { "Duplicate or empty tool call id; operation not repeated" }
@@ -612,19 +612,19 @@ class AgentCoordinator(
                 _state.update { it.copy(status = "completed", activeModelId = null) }
                 return
             }
-            if (tooManyRepeatedErrors) throw IllegalStateException("Повторяется одна и та же ошибка инструмента. Все результаты сохранены; уточните задачу и продолжите.")
+            if (tooManyRepeatedErrors) throw IllegalStateException(tr("The same tool error keeps repeating. All results are saved; clarify the task and continue.", "Повторяется одна и та же ошибка инструмента. Все результаты сохранены; уточните задачу и продолжите."))
             noProgress?.let { name ->
                 events.append(sessionId, "run.no_progress", buildJsonObject { put("runId", id); put("tool", name) })
-                if (round >= maxRounds - 1) throw IllegalStateException("Агент повторяет один и тот же вызов ($name) без нового результата. Все результаты сохранены; уточните задачу и продолжите.")
+                if (round >= maxRounds - 1) throw IllegalStateException(tr("The agent repeats the same call ($name) without a new result. All results are saved; clarify the task and continue.", "Агент повторяет один и тот же вызов ($name) без нового результата. Все результаты сохранены; уточните задачу и продолжите."))
                 // Instead of ending with an error, one more round without tools: the answer says what was and was not found.
                 answerOnly = true; noProgressTool = name
                 repeatNotice = AgentMessage("user", noProgressNotice(name))
-                _state.update { it.copy(recoveryNotice = "Агент повторял один и тот же вызов без нового результата: инструменты отключены, он отвечает тем, что уже знает.") }
+                _state.update { it.copy(recoveryNotice = tr("The agent kept repeating the same call without a new result: tools are off, and it answers with what it already knows.", "Агент повторял один и тот же вызов без нового результата: инструменты отключены, он отвечает тем, что уже знает.")) }
                 return@repeat
             }
-            if (repeatNotice != null) _state.update { it.copy(recoveryNotice = "Повторный вызов без нового результата: агенту напомнили использовать то, что уже получено.") }
+            if (repeatNotice != null) _state.update { it.copy(recoveryNotice = tr("A repeated call without a new result: the agent was reminded to use what it already has.", "Повторный вызов без нового результата: агенту напомнили использовать то, что уже получено.")) }
         }
-        throw IllegalStateException("Достигнут лимит $maxRounds шагов; работа остановлена с сохранением истории.")
+        throw IllegalStateException(tr("Step limit of $maxRounds reached; the work stopped and the history is saved.", "Достигнут лимит $maxRounds шагов; работа остановлена с сохранением истории."))
     }
 
     /**
@@ -685,8 +685,8 @@ private const val MAX_TRUNCATION_RECOVERIES = 2
 /** What the user sees while a failed model request waits to be resent. */
 internal fun retryNotice(event: ModelEvent.Retrying): String {
     val seconds = (event.delayMs + 999) / 1000
-    val reason = if (event.code == "RATE_LIMITED") "Провайдер ограничил частоту запросов" else "Провайдер временно недоступен (${event.code})"
-    return "$reason. Повтор через $seconds с (попытка ${event.attempt}/${event.maxAttempts})."
+    val reason = if (event.code == "RATE_LIMITED") tr("The provider limited the request rate", "Провайдер ограничил частоту запросов") else tr("The provider is temporarily unavailable (${event.code})", "Провайдер временно недоступен (${event.code})")
+    return tr("$reason. Retrying in $seconds s (attempt ${event.attempt}/${event.maxAttempts}).", "$reason. Повтор через $seconds с (попытка ${event.attempt}/${event.maxAttempts}).")
 }
 
 internal fun truncatedCallNotice(replyTokens: Int, tools: Set<String> = emptySet(), again: Boolean = false): String {

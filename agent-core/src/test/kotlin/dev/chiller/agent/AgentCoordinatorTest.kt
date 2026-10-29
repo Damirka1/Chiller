@@ -18,6 +18,10 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 class AgentCoordinatorTest {
+    // User-facing core texts follow the app's language; these checks are written against the Russian ones.
+    @kotlin.test.BeforeTest fun russian() { dev.chiller.contracts.CoreLanguage.russian = true }
+    @kotlin.test.AfterTest fun english() { dev.chiller.contracts.CoreLanguage.russian = false }
+
     @Test fun terminalRunsAlwaysReleaseOwnedProcesses() = runTest {
         for (fail in listOf(false, true)) {
             val provider = ScriptedProvider { flow {

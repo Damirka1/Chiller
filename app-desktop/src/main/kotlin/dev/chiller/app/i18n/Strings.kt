@@ -269,6 +269,11 @@ interface SettingsStrings {
     fun screenshotsLine(supported: Boolean): String
     val whatWasChecked: String
     val whatWasCheckedNote: String
+    fun profileName(id: String): String
+    fun profileDescription(id: String, tools: Int): String
+    val today: String
+    val yesterday: String
+    val earlier: String
     // end settings
 }
 

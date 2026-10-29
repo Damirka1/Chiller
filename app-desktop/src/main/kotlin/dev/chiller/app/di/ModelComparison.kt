@@ -23,7 +23,7 @@ import java.time.format.DateTimeFormatter
 /** One column of a comparison: a model with a harness profile. */
 @Serializable
 data class ComparisonSide(val model: String, val profile: String = "auto") {
-    val label: String get() = "$model · ${ModelProfiles.resolve(profile, model).name.lowercase()}"
+    val label: String get() = "$model · ${I18n.current.settings.profileName(ModelProfiles.resolve(profile, model).id)}"
 }
 
 /** A finished (or stopped) comparison as stored on disk. Keys are never part of it. */

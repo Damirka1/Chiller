@@ -356,6 +356,7 @@ fun ChillerApp(
     val strings = stringsFor(Language.fromId(preferences.language))
     // Labels built outside composition (run status, sizes, tool names) read the same language; set before the children compose.
     I18n.current = strings
+    dev.chiller.contracts.CoreLanguage.russian = strings.language == Language.RU
     ChillerTheme(darkTheme = dark, reducedMotion = reducedMotion, compact = compactDensity) { CompositionLocalProvider(LocalModelNames provides modelNames, LocalFilePreview provides onPreviewFile, LocalEditApproval provides editApproval, LocalStrings provides strings) {
         val c = LocalChillerPalette.current
         val menu = titleBar?.menu
@@ -734,4 +735,4 @@ internal fun toggledMode(mode: ExecutionMode): ExecutionMode = if (mode == Execu
 internal val CONTINUE_PROMPT: String get() = I18n.current.app.continuePrompt
 
 /** The coordinator's message for a run stopped by the step limit (not a failure of the task itself). */
-internal fun isStepLimitError(error: String): Boolean = error.startsWith("Достигнут лимит") && "шагов" in error
+internal fun isStepLimitError(error: String): Boolean = error.startsWith("Step limit of") || (error.startsWith("Достигнут лимит") && "шагов" in error)

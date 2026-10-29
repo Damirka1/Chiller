@@ -19,13 +19,14 @@ fun historySections(
     val dated = sessions.map { session ->
         session to runCatching { Instant.parse(session.updatedAt) }.getOrNull()
     }
-    val buckets = linkedMapOf("Сегодня" to mutableListOf<Pair<SessionInfo, Instant?>>(),
-        "Вчера" to mutableListOf(), "Ранее" to mutableListOf())
+    val s = I18n.current.settings
+    val buckets = linkedMapOf(s.today to mutableListOf<Pair<SessionInfo, Instant?>>(),
+        s.yesterday to mutableListOf(), s.earlier to mutableListOf())
     for ((session, instant) in dated) {
         val section = when (instant?.atZone(zoneId)?.toLocalDate()) {
-            today -> "Сегодня"
-            today.minusDays(1) -> "Вчера"
-            else -> "Ранее"
+            today -> s.today
+            today.minusDays(1) -> s.yesterday
+            else -> s.earlier
         }
         buckets.getValue(section).add(session to instant)
     }

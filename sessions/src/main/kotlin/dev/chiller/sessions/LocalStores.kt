@@ -161,7 +161,7 @@ class JsonlEventStore(private val directory: Path) : EventStore {
             event.payload["title"]?.jsonPrimitive?.contentOrNull?.trim()?.takeIf { it.length in 1..120 }
         }
         val request = first?.content?.takeIf { it.isNotBlank() }
-        val title = renamed ?: request?.let(::titleFromRequest) ?: first?.attachments?.firstOrNull()?.name?.take(64) ?: "Новый диалог"
+        val title = renamed ?: request?.let(::titleFromRequest) ?: first?.attachments?.firstOrNull()?.name?.take(64) ?: tr("New dialog", "Новый диалог")
         // The full request stays readable on hover when the title shows only part of it.
         val summary = request?.trim()?.replace(Regex("\\s+"), " ")?.take(400)?.takeIf { it != title }
         val workspace = events.lastOrNull { it.type == "session.workspace" }?.payload?.get("root")?.jsonPrimitive?.contentOrNull
