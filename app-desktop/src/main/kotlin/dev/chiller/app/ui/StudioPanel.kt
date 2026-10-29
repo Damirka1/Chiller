@@ -192,8 +192,8 @@ private fun FileRow(file: FileChanges, selected: Boolean, onClick: () -> Unit) {
         Icon(icon, null, Modifier.size(15.dp), tint = tint)
         Spacer(Modifier.width(9.dp))
         Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
-            Text(file.path.substringAfterLast('/'), color = if (file.kind == "deleted") c.muted else c.text, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
-            if ('/' in file.path) Text(" " + file.path.substringBeforeLast('/'), color = c.faint, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+            Text(file.path.substringAfterLast('/'), color = if (file.kind == "deleted") c.muted else c.text, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.MiddleEllipsis, modifier = Modifier.weight(1f, fill = false))
+            if ('/' in file.path) Text(" " + file.path.substringBeforeLast('/'), color = c.faint, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.MiddleEllipsis, modifier = Modifier.weight(1f, fill = false))
         }
         tag?.let { Text(it, color = tint, fontSize = 10.sp, modifier = Modifier.padding(end = 6.dp)) }
         if (file.changes.size > 1) Text("×${file.changes.size}", color = c.faint, fontSize = 10.sp, modifier = Modifier.padding(end = 6.dp))

@@ -178,7 +178,9 @@ internal fun ToolRow(activity: Activity, reduced: Boolean, onUndo: (String) -> U
             Spacer(Modifier.width(9.dp))
             Text(toolLabel(activity.name), color = if (failed) c.negative else c.muted, fontSize = 12.sp, lineHeight = 18.sp)
             Spacer(Modifier.width(8.dp))
-            Text(activity.target, color = c.text, fontSize = 12.sp, lineHeight = 18.sp, fontFamily = ChillerFonts.mono, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+            // A path keeps its file name visible (`deepseek/…/_preview.py`); a command keeps its start.
+            Text(activity.target, color = c.text, fontSize = 12.sp, lineHeight = 18.sp, fontFamily = ChillerFonts.mono, maxLines = 1,
+                overflow = if (' ' in activity.target.trim()) TextOverflow.Ellipsis else TextOverflow.MiddleEllipsis, modifier = Modifier.weight(1f))
             activity.diff?.let { val (a, r) = diffStats(it); if (a + r > 0) { Spacer(Modifier.width(8.dp)); DiffStat(a, r) } }
             Spacer(Modifier.width(8.dp))
             when {

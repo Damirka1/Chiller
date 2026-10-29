@@ -37,6 +37,24 @@ class StoresTest {
         assertEquals("Other", store.list().single().title)
     }
 
+    @Test fun aLongRequestIsTitledByItsFirstSentenceAndKeptWholeForHover() = runTest {
+        val root = Files.createTempDirectory("chiller-title")
+        val store = JsonlEventStore(root)
+        val request = "Create dir deepseek and do it. Create a complete landing page with 77 icons,\nchecks and previews."
+        store.append("s", "message", buildJsonObject { put("role", "user"); put("content", request) })
+        val info = store.list().single()
+        assertEquals("Create dir deepseek and do it", info.title)
+        assertEquals("Create dir deepseek and do it. Create a complete landing page with 77 icons, checks and previews.", info.summary)
+    }
+
+    @Test fun titlesKeepShortAndUnsplittableRequestsReadable() {
+        assertEquals("Привет! Слушай, а мы можем сыграть в игру", dev.chiller.contracts.titleFromRequest("Привет! Слушай, а мы можем сыграть в игру"), "a greeting is not a title")
+        assertEquals("Почини расчёт скидки", dev.chiller.contracts.titleFromRequest("Почини расчёт скидки\nв файле cart.py версии 1.2"))
+        assertEquals("Обнови до v1.2.3 и проверь", dev.chiller.contracts.titleFromRequest("Обнови до v1.2.3 и проверь"), "dots inside a version do not end a sentence")
+        val long = dev.chiller.contracts.titleFromRequest("x".repeat(100))
+        assertEquals(64, long.length); assertTrue(long.endsWith("…"))
+    }
+
     @Test fun searchFindsShownMessagesWithASnippetAroundTheMatch() = runTest {
         val root = Files.createTempDirectory("chiller-search")
         val store = JsonlEventStore(root)

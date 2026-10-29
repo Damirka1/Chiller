@@ -290,7 +290,22 @@ data class StoredEvent(val schemaVersion: Int = 1, val id: String = newId(), val
  * [workspace] is the folder the dialog is bound to (the latest `session.workspace`), null for a dialog without a folder.
  * [origin] is the project a dialog's own git working copy was made from, when [workspace] is that copy.
  */
-data class SessionInfo(val id: String, val title: String, val updatedAt: String, val workspace: String? = null, val origin: String? = null)
+/** [summary]: the opening request in full (bounded) when [title] shows only its first sentence; for a tooltip. */
+data class SessionInfo(val id: String, val title: String, val updatedAt: String, val workspace: String? = null, val origin: String? = null, val summary: String? = null)
+
+/**
+ * A dialog title from its opening request: the first sentence when it says enough (`Create dir deepseek and do it.`
+ * from a long task), else the start of the text; at most [limit] characters. Whitespace and line breaks collapse.
+ */
+fun titleFromRequest(text: String, limit: Int = 64): String {
+    val flat = text.trim().replace(Regex("\\s+"), " ")
+    // A sentence ends at . ! ? or … before a space and a capital letter, or at a line break in the original text.
+    val end = Regex("[.!?…](?=\\s+\\p{Lu})").find(flat)?.range?.first?.plus(1)
+    val lineEnd = text.trim().indexOf('\n').takeIf { it > 0 }?.let { text.trim().substring(0, it).trim().replace(Regex("\\s+"), " ").length }
+    val cut = listOfNotNull(end, lineEnd).minOrNull()
+    val sentence = cut?.let { flat.substring(0, it).trimEnd('.', ' ') }?.takeIf { it.length >= 8 } ?: flat
+    return if (sentence.length <= limit) sentence else sentence.take(limit - 1).trimEnd() + "…"
+}
 interface EventStore {
     suspend fun append(sessionId: String, type: String, payload: JsonObject): StoredEvent
     suspend fun read(sessionId: String): List<StoredEvent>

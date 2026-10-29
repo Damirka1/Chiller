@@ -279,6 +279,7 @@ internal fun SidebarSearch(query: String, onQuery: (String) -> Unit, focus: Focu
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 internal fun SessionRow(session: SessionInfo, selected: Boolean, running: Boolean, enabled: Boolean, onSelect: () -> Unit, onRename: () -> Unit, onDelete: () -> Unit, canDelete: Boolean, onExport: (String) -> Unit,
     nested: Boolean = false, project: String? = null, waiting: Boolean = false, onStop: (() -> Unit)? = null, unread: Boolean = false, isolated: Boolean = false) {
@@ -308,10 +309,20 @@ internal fun SessionRow(session: SessionInfo, selected: Boolean, running: Boolea
             else if (isolated) Icon(Icons.Outlined.AccountTree, "Отдельная копия", Modifier.size(12.dp), tint = c.faint) else if (!nested) Icon(Icons.AutoMirrored.Outlined.Chat, null, Modifier.size(14.dp), tint = if (selected) c.muted else c.faint)
         }
         Spacer(Modifier.width(9.dp))
-        Text(session.title.ifBlank { "Новый диалог" }, color = if (selected || !nested || unread) c.text else c.text.copy(alpha = .86f), fontSize = 13.sp, lineHeight = 19.sp,
-            fontWeight = if (unread) FontWeight.SemiBold else FontWeight.Normal, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+        val title = @Composable {
+            Text(session.title.ifBlank { "Новый диалог" }, color = if (selected || !nested || unread) c.text else c.text.copy(alpha = .86f), fontSize = 13.sp, lineHeight = 19.sp,
+                fontWeight = if (unread) FontWeight.SemiBold else FontWeight.Normal, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        // The title is the request's first sentence; the whole request shows on hover.
+        val full = session.summary
+        if (full == null) Box(Modifier.weight(1f)) { title() }
+        else TooltipArea(tooltip = {
+            Text(full, color = c.text, fontSize = 12.sp, lineHeight = 17.sp, modifier = Modifier.widthIn(max = 380.dp).clip(RoundedCornerShape(6.dp)).background(c.sidebar)
+                .border(1.dp, c.border, RoundedCornerShape(6.dp)).padding(horizontal = 10.dp, vertical = 8.dp))
+        }, modifier = Modifier.weight(1f), delayMillis = 700) { title() }
         if (project != null && !hovered && !menu) Text(project, color = c.faint, fontSize = 11.sp, lineHeight = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 70.dp).padding(start = 6.dp))
-        Box(Modifier.width(44.dp), contentAlignment = Alignment.CenterEnd) {
+        // At least the menu button's width; a longer label («23 мин», «ждёт ответа») widens the slot instead of being cut.
+        Box(Modifier.widthIn(min = 44.dp), contentAlignment = Alignment.CenterEnd) {
             if (hovered || menu || selected || rowFocused) {
                 Box {
                     ChillerIconButton(Icons.Outlined.MoreHoriz, "Действия диалога", { if (System.currentTimeMillis() - closedAt > 200) menu = !menu },
@@ -329,7 +340,7 @@ internal fun SessionRow(session: SessionInfo, selected: Boolean, running: Boolea
                         Spacer(Modifier.height(5.dp))
                     }
                 }
-            } else Text(if (waiting) "ждёт ответа" else if (running) "идёт" else relativeAge(session.updatedAt), color = if (waiting) c.focus else if (running) c.accent else c.faint, fontSize = 11.sp, lineHeight = 15.sp, maxLines = 1, modifier = Modifier.padding(end = 8.dp))
+            } else Text(if (waiting) "ждёт ответа" else if (running) "идёт" else relativeAge(session.updatedAt), color = if (waiting) c.focus else if (running) c.accent else c.faint, fontSize = 11.sp, lineHeight = 15.sp, maxLines = 1, softWrap = false, modifier = Modifier.padding(start = 6.dp, end = 8.dp))
         }
     }
 }
