@@ -1,5 +1,6 @@
 package dev.chiller.app.ui
 
+import dev.chiller.app.i18n.*
 import androidx.compose.animation.*
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -107,11 +108,11 @@ internal fun RenameDialog(session: SessionInfo, onDismiss: () -> Unit, onSave: (
     var title by remember(session.id) { mutableStateOf(session.title) }
     Dialog(onDismissRequest = onDismiss) {
         Column(Modifier.width(360.dp).clip(RoundedCornerShape(12.dp)).background(c.surface).padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-            Text("Название диалога", color = c.text, fontSize = 18.sp)
-            ChillerField(title, { title = it.take(120) }, "Название")
+            Text(strings.dialogs.dialogTitle, color = c.text, fontSize = 18.sp)
+            ChillerField(title, { title = it.take(120) }, strings.dialogs.title)
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                ChillerControl("Отмена", onDismiss)
-                ChillerControl("Сохранить", { onSave(title.trim()) }, style = ControlStyle.PRIMARY, enabled = title.trim().length in 1..120)
+                ChillerControl(strings.common.cancel, onDismiss)
+                ChillerControl(strings.dialogs.save, { onSave(title.trim()) }, style = ControlStyle.PRIMARY, enabled = title.trim().length in 1..120)
             }
         }
     }
@@ -138,23 +139,23 @@ internal fun SessionDeleteDialog(
                 .border(1.dp, c.border, RoundedCornerShape(13.dp)).padding(22.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            Text("Удалить диалог?", color = c.text, fontSize = 18.sp, fontWeight = FontWeight.Medium)
-            Text(session.title.ifBlank { "Новый диалог" }, color = c.muted, fontSize = 13.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Text(strings.dialogs.deleteDialogQuestion, color = c.text, fontSize = 18.sp, fontWeight = FontWeight.Medium)
+            Text(session.title.ifBlank { strings.common.newDialog }, color = c.muted, fontSize = 13.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
             when {
-                loading -> Text("Загружаю предварительный просмотр…", color = c.muted, fontSize = 12.sp, lineHeight = 18.sp)
+                loading -> Text(strings.dialogs.loadingPreview, color = c.muted, fontSize = 12.sp, lineHeight = 18.sp)
                 preview != null -> SelectionContainer {
                     Text(preview, color = c.text, fontSize = 12.sp, lineHeight = 19.sp,
                         modifier = Modifier.fillMaxWidth().heightIn(max = 240.dp).verticalScroll(rememberScrollState()).background(c.sidebar, RoundedCornerShape(8.dp)).padding(12.dp))
                 }
-                else -> Text(previewError ?: "Предварительный просмотр недоступен.", color = c.negative, fontSize = 12.sp, lineHeight = 18.sp)
+                else -> Text(previewError ?: strings.dialogs.previewUnavailable, color = c.negative, fontSize = 12.sp, lineHeight = 18.sp)
             }
             if (previewError != null && preview != null) Text(previewError, color = c.negative, fontSize = 12.sp, lineHeight = 18.sp)
             if (deleteError != null) Text(deleteError, color = c.negative, fontSize = 12.sp, lineHeight = 18.sp)
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
-                ChillerControl("Отмена", onDismiss, enabled = !deleting)
+                ChillerControl(strings.common.cancel, onDismiss, enabled = !deleting)
                 if (preview != null) {
                     Spacer(Modifier.width(8.dp))
-                    ChillerControl("Удалить диалог", onDelete, icon = Icons.Outlined.DeleteOutline, style = ControlStyle.PRIMARY, enabled = !loading && !deleting)
+                    ChillerControl(strings.dialogs.deleteDialog, onDelete, icon = Icons.Outlined.DeleteOutline, style = ControlStyle.PRIMARY, enabled = !loading && !deleting)
                 }
             }
         }
@@ -168,16 +169,16 @@ internal fun MessageEditDialog(
     val c = LocalChillerPalette.current
     Dialog(onDismissRequest = { if (!busy) onDismiss() }, properties = DialogProperties(dismissOnBackPress = !busy, dismissOnClickOutside = !busy)) {
         Column(Modifier.widthIn(min = 360.dp, max = 560.dp).clip(RoundedCornerShape(13.dp)).background(c.surface).border(1.dp, c.border, RoundedCornerShape(13.dp)).padding(22.dp), verticalArrangement = Arrangement.spacedBy(13.dp)) {
-            Text("Изменить сообщение", color = c.text, fontSize = 18.sp, fontWeight = FontWeight.Medium)
-            Text("Последующие ответы, инструменты и сообщения будут удалены из истории. Изменения файлов останутся на диске. Сохранение не запускает агента.", color = c.muted, fontSize = 12.sp, lineHeight = 18.sp)
-            Text("Текст сообщения", color = c.muted, fontSize = 12.sp)
+            Text(strings.dialogs.editMessage, color = c.text, fontSize = 18.sp, fontWeight = FontWeight.Medium)
+            Text(strings.dialogs.editNote, color = c.muted, fontSize = 12.sp, lineHeight = 18.sp)
+            Text(strings.dialogs.messageText, color = c.muted, fontSize = 12.sp)
             BasicTextField(text, onText, textStyle = TextStyle(color = c.text, fontSize = 13.sp, lineHeight = 20.sp), cursorBrush = SolidColor(c.text),
                 modifier = Modifier.fillMaxWidth().heightIn(min = 120.dp, max = 300.dp).clip(RoundedCornerShape(7.dp)).background(c.canvas).border(1.dp, c.border, RoundedCornerShape(7.dp)).padding(11.dp).verticalScroll(rememberScrollState()))
             error?.let { Text(it, color = c.negative, fontSize = 12.sp, lineHeight = 18.sp) }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                ChillerControl("Отмена", onDismiss, enabled = !busy)
+                ChillerControl(strings.common.cancel, onDismiss, enabled = !busy)
                 Spacer(Modifier.width(8.dp))
-                ChillerControl("Сохранить", onSubmit, icon = Icons.Outlined.Save, style = ControlStyle.PRIMARY, enabled = !busy && text.isNotBlank())
+                ChillerControl(strings.dialogs.saveAndSend, onSubmit, icon = Icons.Outlined.Save, style = ControlStyle.PRIMARY, enabled = !busy && text.isNotBlank())
             }
         }
     }
@@ -188,14 +189,14 @@ internal fun MessageDeleteDialog(text: String, error: String?, busy: Boolean, on
     val c = LocalChillerPalette.current
     Dialog(onDismissRequest = { if (!busy) onDismiss() }, properties = DialogProperties(dismissOnBackPress = !busy, dismissOnClickOutside = !busy)) {
         Column(Modifier.widthIn(min = 340.dp, max = 500.dp).clip(RoundedCornerShape(13.dp)).background(c.surface).border(1.dp, c.border, RoundedCornerShape(13.dp)).padding(22.dp), verticalArrangement = Arrangement.spacedBy(13.dp)) {
-            Text("Удалить ход диалога?", color = c.text, fontSize = 18.sp, fontWeight = FontWeight.Medium)
+            Text(strings.dialogs.deleteTurnQuestion, color = c.text, fontSize = 18.sp, fontWeight = FontWeight.Medium)
             if (text.isNotBlank()) Text(text.take(400), color = c.muted, fontSize = 12.sp, lineHeight = 18.sp, maxLines = 5, overflow = TextOverflow.Ellipsis)
-            Text("Это сообщение и связанные ответы и действия будут удалены из истории. Изменения, уже внесённые в файлы, останутся на диске.", color = c.muted, fontSize = 12.sp, lineHeight = 18.sp)
+            Text(strings.dialogs.deleteTurnNote, color = c.muted, fontSize = 12.sp, lineHeight = 18.sp)
             error?.let { Text(it, color = c.negative, fontSize = 12.sp, lineHeight = 18.sp) }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                ChillerControl("Отмена", onDismiss, enabled = !busy)
+                ChillerControl(strings.common.cancel, onDismiss, enabled = !busy)
                 Spacer(Modifier.width(8.dp))
-                ChillerControl("Удалить ход", onDelete, icon = Icons.Outlined.DeleteOutline, style = ControlStyle.PRIMARY, enabled = !busy)
+                ChillerControl(strings.dialogs.deleteTurn, onDelete, icon = Icons.Outlined.DeleteOutline, style = ControlStyle.PRIMARY, enabled = !busy)
             }
         }
     }
@@ -207,16 +208,16 @@ internal fun ExportPreview(content: String, format: String, onDismiss: () -> Uni
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Column(Modifier.width(680.dp).heightIn(max = 650.dp).clip(RoundedCornerShape(13.dp)).background(c.surface).border(1.dp, c.border, RoundedCornerShape(13.dp)).padding(23.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text("Экспорт ${if (format == "json") "JSON" else "Markdown"}", color = c.text, fontSize = 18.sp, letterSpacing = (-.4).sp)
-                Spacer(Modifier.weight(1f)); ChillerIconButton(Icons.Outlined.Close, "Закрыть экспорт", onDismiss)
+                Text(strings.dialogs.exportTitle(if (format == "json") "JSON" else "Markdown"), color = c.text, fontSize = 18.sp, letterSpacing = (-.4).sp)
+                Spacer(Modifier.weight(1f)); ChillerIconButton(Icons.Outlined.Close, strings.dialogs.closeExport, onDismiss)
             }
-            Text("Проверьте содержимое перед сохранением. Известные поля ключей скрыты; произвольный текст может содержать личные данные.", color = c.muted, fontSize = 12.sp, lineHeight = 19.sp)
+            Text(strings.dialogs.exportNote, color = c.muted, fontSize = 12.sp, lineHeight = 19.sp)
             SelectionContainer {
                 Text(content, color = c.text, fontFamily = ChillerFonts.mono, fontSize = 11.sp, lineHeight = 18.sp,
                     modifier = Modifier.fillMaxWidth().weight(1f, fill = false).heightIn(min = 150.dp, max = 430.dp).verticalScroll(rememberScrollState()).background(c.canvas).padding(13.dp))
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                ChillerControl("Отмена", onDismiss); Spacer(Modifier.width(8.dp)); ChillerControl("Сохранить файл…", onSave, style = ControlStyle.PRIMARY)
+                ChillerControl(strings.common.cancel, onDismiss); Spacer(Modifier.width(8.dp)); ChillerControl(strings.dialogs.saveFile, onSave, style = ControlStyle.PRIMARY)
             }
         }
     }

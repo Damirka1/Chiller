@@ -31,6 +31,8 @@ interface Strings {
     val conversation: ConversationStrings
     val run: RunStrings
     val turn: TurnStrings
+    val studio: StudioStrings
+    val dialogs: DialogStrings
     // groups
 }
 
@@ -378,6 +380,91 @@ interface TurnStrings {
     fun quote(text: String): String
     fun createdNotShown(path: String): String
     // end turn
+}
+
+interface StudioStrings {
+    val tabChanges: String
+    val tabAgents: String
+    val tabRun: String
+    val noChanges: String
+    val noChangesHint: String
+    val openImage: String
+    fun openImageNamed(name: String): String
+    val expandDiff: String
+    val undo: String
+    val noDiff: String
+    val closeDiff: String
+    val tagNew: String
+    val tagDeleted: String
+    val tagMoved: String
+    val noHelpers: String
+    val noHelpersHint: String
+    val agentQueued: String
+    val agentRunning: String
+    val agentDone: String
+    val agentFailed: String
+    val agentCancelled: String
+    val agentInterrupted: String
+    val stop: String
+    fun agentRound(round: Int, max: Int): String
+    fun agentActions(n: Int): String
+    fun agentErrors(n: Int): String
+    fun agentFilesRead(n: Int): String
+    fun agentMessages(processed: Int, total: Int): String
+    fun agentTokens(input: String, output: String): String
+    val report: String
+    val collapse: String
+    val more: String
+    val previewUnavailable: String
+    val loadingImage: String
+    val showInFolder: String
+    val zoomOut: String
+    val zoomIn: String
+    val fit: String
+    val closeViewer: String
+    val viewerHint: String
+    fun previewMoreLines(n: Int): String
+    val approveReplace: String
+    fun approveAllPlaces(n: Int): String
+    val approveCreate: String
+    val approveAppend: String
+    val approveEditLines: String
+    fun approveDeleteLines(start: Int?, end: Int?): String
+    fun approveInsertBefore(line: Int?): String
+    fun approveReplaceLines(start: Int?, end: Int?): String
+    fun approveLineEdits(n: Int): String
+    val approveDelete: String
+    val approveDeleteNote: String
+    val approveMove: String
+    val approveCreateFolder: String
+    val approveImage: String
+    fun approveTitle(title: String): String
+    val apply: String
+    val decline: String
+    val applyRest: String
+    // end studio
+}
+
+interface DialogStrings {
+    val dialogTitle: String
+    val title: String
+    val save: String
+    val deleteDialogQuestion: String
+    val loadingPreview: String
+    val previewUnavailable: String
+    val deleteDialog: String
+    val editMessage: String
+    val editNote: String
+    val messageText: String
+    val saveAndSend: String
+    val deleteTurnQuestion: String
+    val deleteTurnNote: String
+    val deleteTurn: String
+    fun exportTitle(format: String): String
+    val closeExport: String
+    val exportNote: String
+    val saveFile: String
+    // end dialogs
 }
 
 // interfaces

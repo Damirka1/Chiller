@@ -25,18 +25,21 @@ import kotlin.test.assertTrue
 
 @OptIn(ExperimentalTestApi::class)
 class ApprovalFlowTest {
+    // The default language; previews are built outside composition and read the global one.
+    @kotlin.test.BeforeTest fun english() { dev.chiller.app.i18n.I18n.current = dev.chiller.app.i18n.EnStrings }
+
     @TempDir lateinit var temp: Path
 
     @Test fun `previews come from the call's own arguments`() {
         fun request(tool: String, args: String) = ApprovalRequest(runId = "r", callId = "c", tool = tool, arguments = Json.parseToJsonElement(args).jsonObject)
         val replace = approvalPreview(request("replace_text", """{"path":"src/a.kt","snapshot_id":"s","old_text":"val x = 1\n","new_text":"val x = 2\nval y = 3"}"""))
-        assertEquals("Заменить текст", replace.title)
+        assertEquals("Replace text", replace.title)
         assertEquals("--- a/src/a.kt\n+++ b/src/a.kt\n@@\n-val x = 1\n+val x = 2\n+val y = 3", replace.diff)
         val created = approvalPreview(request("create_file", """{"path":"n.txt","content":"${"line\\n".repeat(205)}"}"""))
-        assertTrue(created.diff!!.startsWith("--- /dev/null\n+++ b/n.txt") && created.diff!!.endsWith("… ещё 5 строк"))
+        assertTrue(created.diff!!.startsWith("--- /dev/null\n+++ b/n.txt") && created.diff!!.endsWith("… 5 more lines"))
         val edits = approvalPreview(request("edit_file", """{"path":"b.kt","snapshot_id":"s","edits":[{"op":"delete","start_line":3,"end_line":4},{"op":"insert","before_line":9,"content":"x"}]}"""))
-        assertEquals("2 правки по номерам строк", edits.note)
-        assertTrue("@@ удалить строки 3–4" in edits.diff!! && "@@ вставить перед строкой 9\n+x" in edits.diff!!)
+        assertEquals("2 edits by line number", edits.note)
+        assertTrue("@@ delete lines 3–4" in edits.diff!! && "@@ insert before line 9\n+x" in edits.diff!!)
         assertEquals("→ c.txt", approvalPreview(request("move_file", """{"path":"a.txt","snapshot_id":"s","destination":"c.txt"}""")).note)
     }
 
@@ -89,10 +92,10 @@ class ApprovalFlowTest {
         val decisions = mutableListOf<Pair<Boolean, Boolean>>()
         val request = ApprovalRequest(runId = "r", callId = "c", tool = "create_file", arguments = buildJsonObject { put("path", "a.txt"); put("content", "x") })
         setContent { ChillerTheme(darkTheme = false, reducedMotion = true) { ApprovalCard(request) { approved, rest -> decisions += approved to rest } } }
-        onNodeWithText("Подтвердите правку · Создать файл").assertExists()
-        onNodeWithText("Отклонить").performClick()
-        onNodeWithText("Применить").performClick()
-        onNodeWithText("Применять остальные в этом ходе").performClick()
+        onNodeWithText("Confirm the edit · Create file").assertExists()
+        onNodeWithText("Decline").performClick()
+        onNodeWithText("Apply").performClick()
+        onNodeWithText("Apply the rest in this turn").performClick()
         assertEquals(listOf(false to false, true to false, true to true), decisions)
     }
 }

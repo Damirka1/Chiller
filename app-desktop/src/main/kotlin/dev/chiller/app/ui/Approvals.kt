@@ -1,5 +1,6 @@
 package dev.chiller.app.ui
 
+import dev.chiller.app.i18n.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
@@ -45,32 +46,32 @@ fun approvalPreview(request: ApprovalRequest): ApprovalPreview {
     fun str(name: String) = args[name]?.jsonPrimitive?.contentOrNull.orEmpty()
     val path = str("path")
     fun lines(prefix: Char, text: String) = text.trimEnd('\n').lines().let { all ->
-        all.take(PREVIEW_LINES).joinToString("\n") { "$prefix$it" } + if (all.size > PREVIEW_LINES) "\n… ещё ${all.size - PREVIEW_LINES} строк" else ""
+        all.take(PREVIEW_LINES).joinToString("\n") { "$prefix$it" } + if (all.size > PREVIEW_LINES) "\n" + I18n.current.studio.previewMoreLines(all.size - PREVIEW_LINES) else ""
     }
     fun header() = "--- a/$path\n+++ b/$path\n"
     return when (request.tool) {
-        "replace_text" -> ApprovalPreview("Заменить текст", path, header() + "@@\n" + lines('-', str("old_text")) + "\n" + lines('+', str("new_text")),
-            args["expected_count"]?.jsonPrimitive?.intOrNull?.takeIf { it > 1 }?.let { "Во всех $it местах" })
-        "create_file" -> ApprovalPreview("Создать файл", path, "--- /dev/null\n+++ b/$path\n@@\n" + lines('+', str("content")))
-        "append_file" -> ApprovalPreview("Дописать в конец", path, header() + "@@\n" + lines('+', str("content")))
+        "replace_text" -> ApprovalPreview(I18n.current.studio.approveReplace, path, header() + "@@\n" + lines('-', str("old_text")) + "\n" + lines('+', str("new_text")),
+            args["expected_count"]?.jsonPrimitive?.intOrNull?.takeIf { it > 1 }?.let { I18n.current.studio.approveAllPlaces(it) })
+        "create_file" -> ApprovalPreview(I18n.current.studio.approveCreate, path, "--- /dev/null\n+++ b/$path\n@@\n" + lines('+', str("content")))
+        "append_file" -> ApprovalPreview(I18n.current.studio.approveAppend, path, header() + "@@\n" + lines('+', str("content")))
         "edit_file" -> {
             val edits = args["edits"]?.jsonArray.orEmpty().map { it.jsonObject }
-            ApprovalPreview("Изменить строки", path, header() + edits.joinToString("\n") { edit ->
+            ApprovalPreview(I18n.current.studio.approveEditLines, path, header() + edits.joinToString("\n") { edit ->
                 val op = edit["op"]?.jsonPrimitive?.contentOrNull
                 val start = edit["start_line"]?.jsonPrimitive?.intOrNull; val end = edit["end_line"]?.jsonPrimitive?.intOrNull
                 val before = edit["before_line"]?.jsonPrimitive?.intOrNull
                 val content = edit["content"]?.jsonPrimitive?.contentOrNull.orEmpty()
                 when (op) {
-                    "delete" -> "@@ удалить строки $start–$end"
-                    "insert" -> "@@ вставить перед строкой $before\n" + lines('+', content)
-                    else -> "@@ заменить строки $start–$end\n" + lines('+', content)
+                    "delete" -> I18n.current.studio.approveDeleteLines(start, end)
+                    "insert" -> I18n.current.studio.approveInsertBefore(before) + "\n" + lines('+', content)
+                    else -> I18n.current.studio.approveReplaceLines(start, end) + "\n" + lines('+', content)
                 }
-            }, "${edits.size} ${plural(edits.size, "правка", "правки", "правок")} по номерам строк")
+            }, I18n.current.studio.approveLineEdits(edits.size))
         }
-        "delete_file" -> ApprovalPreview("Удалить файл", path, null, "Файл можно будет вернуть отменой")
-        "move_file" -> ApprovalPreview("Переместить файл", path, null, "→ ${str("destination")}")
-        "create_directory" -> ApprovalPreview("Создать папку", path, null)
-        "generate_image" -> ApprovalPreview("Создать картинку", path, null, str("prompt").take(400).ifEmpty { null })
+        "delete_file" -> ApprovalPreview(I18n.current.studio.approveDelete, path, null, I18n.current.studio.approveDeleteNote)
+        "move_file" -> ApprovalPreview(I18n.current.studio.approveMove, path, null, "→ ${str("destination")}")
+        "create_directory" -> ApprovalPreview(I18n.current.studio.approveCreateFolder, path, null)
+        "generate_image" -> ApprovalPreview(I18n.current.studio.approveImage, path, null, str("prompt").take(400).ifEmpty { null })
         else -> ApprovalPreview(request.tool, path, null)
     }
 }
@@ -86,7 +87,7 @@ internal fun ApprovalCard(request: ApprovalRequest, onDecide: (approved: Boolean
             Icon(Icons.Outlined.FactCheck, null, Modifier.size(16.dp), tint = c.accent)
             Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f)) {
-                Text("Подтвердите правку · ${preview.title}", color = c.text, fontSize = 13.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(strings.studio.approveTitle(preview.title), color = c.text, fontSize = 13.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(listOfNotNull(preview.path.ifEmpty { null }, preview.note).joinToString(" · "), color = c.muted, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis, fontFamily = ChillerFonts.mono)
             }
         }
@@ -94,10 +95,10 @@ internal fun ApprovalCard(request: ApprovalRequest, onDecide: (approved: Boolean
             Box(Modifier.fillMaxWidth().heightIn(max = 320.dp).verticalScroll(rememberScrollState())) { Diff(diff) }
         }
         Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            ChillerControl("Применить", { onDecide(true, false) }, icon = Icons.Outlined.Check, style = ControlStyle.PRIMARY)
-            ChillerControl("Отклонить", { onDecide(false, false) }, icon = Icons.Outlined.Close, style = ControlStyle.OUTLINE)
+            ChillerControl(strings.studio.apply, { onDecide(true, false) }, icon = Icons.Outlined.Check, style = ControlStyle.PRIMARY)
+            ChillerControl(strings.studio.decline, { onDecide(false, false) }, icon = Icons.Outlined.Close, style = ControlStyle.OUTLINE)
             Spacer(Modifier.weight(1f))
-            ChillerControl("Применять остальные в этом ходе", { onDecide(true, true) }, icon = Icons.Outlined.DoneAll)
+            ChillerControl(strings.studio.applyRest, { onDecide(true, true) }, icon = Icons.Outlined.DoneAll)
         }
     }
 }

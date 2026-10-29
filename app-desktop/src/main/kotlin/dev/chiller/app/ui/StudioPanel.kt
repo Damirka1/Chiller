@@ -1,5 +1,6 @@
 package dev.chiller.app.ui
 
+import dev.chiller.app.i18n.*
 import androidx.compose.animation.*
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
@@ -78,9 +79,9 @@ internal fun StudioPanel(
         Box(Modifier.width(1.dp).fillMaxHeight().background(c.border))
         Column(Modifier.weight(1f).fillMaxHeight().background(c.canvas)) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp).clip(RoundedCornerShape(9.dp)).background(c.sidebar).padding(3.dp), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                PanelTab("Изменения", files.size.takeIf { it > 0 }?.toString(), tab == "changes", Modifier.weight(1f)) { tab = "changes" }
-                PanelTab("Агенты", agents.size.takeIf { it > 0 }?.toString(), tab == "agents", Modifier.weight(1f), live = running > 0) { tab = "agents" }
-                PanelTab("Прогон", null, tab == "run", Modifier.weight(1f), live = run.status in setOf("preparing", "streaming", "executing")) { tab = "run" }
+                PanelTab(strings.studio.tabChanges, files.size.takeIf { it > 0 }?.toString(), tab == "changes", Modifier.weight(1f)) { tab = "changes" }
+                PanelTab(strings.studio.tabAgents, agents.size.takeIf { it > 0 }?.toString(), tab == "agents", Modifier.weight(1f), live = running > 0) { tab = "agents" }
+                PanelTab(strings.studio.tabRun, null, tab == "run", Modifier.weight(1f), live = run.status in setOf("preparing", "streaming", "executing")) { tab = "run" }
             }
             Box(Modifier.height(1.dp).fillMaxWidth().background(c.border.copy(alpha = .7f)))
             Crossfade(tab, animationSpec = tween(if (reduced) 0 else 160), label = "studio-tab") { current ->
@@ -115,7 +116,7 @@ private fun PanelTab(label: String, badge: String?, selected: Boolean, modifier:
 @Composable
 private fun ChangesTab(files: List<FileChanges>, onUndo: (String) -> Unit, canUndo: Boolean, modifier: Modifier) {
     val c = LocalChillerPalette.current
-    if (files.isEmpty()) { EmptyState(Icons.Outlined.Difference, "Пока без изменений", "Здесь появятся файлы, которые агент создал, изменил или удалил, с диффом и отменой.", modifier); return }
+    if (files.isEmpty()) { EmptyState(Icons.Outlined.Difference, strings.studio.noChanges, strings.studio.noChangesHint, modifier); return }
     var selected by remember { mutableStateOf<String?>(null) }
     var expandedDiff by remember { mutableStateOf<Pair<String, String>?>(null) }
     var viewedImage by remember { mutableStateOf<Pair<FilePresentation, androidx.compose.ui.graphics.ImageBitmap>?>(null) }
@@ -123,7 +124,7 @@ private fun ChangesTab(files: List<FileChanges>, onUndo: (String) -> Unit, canUn
     val (added, removed) = files.map { it.stats }.fold(0 to 0) { a, b -> a.first + b.first to a.second + b.second }
     Column(modifier) {
         Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 12.dp, top = 10.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text("${files.size} ${plural(files.size, "файл", "файла", "файлов")}", color = c.muted, fontSize = 12.sp, modifier = Modifier.weight(1f))
+            Text(strings.common.files(files.size), color = c.muted, fontSize = 12.sp, modifier = Modifier.weight(1f))
             DiffStat(added, removed)
         }
         Column(Modifier.heightIn(max = 236.dp).verticalScroll(rememberScrollState()).padding(horizontal = 8.dp)) {
@@ -145,14 +146,14 @@ private fun ChangesTab(files: List<FileChanges>, onUndo: (String) -> Unit, canUn
                     Row(Modifier.fillMaxWidth().background(c.sidebar.copy(alpha = .6f)).padding(start = 10.dp, end = 4.dp, top = 2.dp, bottom = 2.dp), verticalAlignment = Alignment.CenterVertically) {
                         Text("${index + 1}. ${toolLabel(change.name)}", color = c.muted, fontSize = 11.sp, modifier = Modifier.weight(1f))
                         change.diff?.let { val (a, r) = diffStats(it); DiffStat(a, r); Spacer(Modifier.width(6.dp)) }
-                        if (image != null) ChillerIconButton(Icons.Outlined.OpenInFull, "Открыть изображение", { viewedImage = image }, Modifier.size(26.dp))
-                        else change.diff?.let { ChillerIconButton(Icons.Outlined.OpenInFull, "Развернуть дифф", { expandedDiff = current.path to it }, Modifier.size(26.dp)) }
+                        if (image != null) ChillerIconButton(Icons.Outlined.OpenInFull, strings.studio.openImage, { viewedImage = image }, Modifier.size(26.dp))
+                        else change.diff?.let { ChillerIconButton(Icons.Outlined.OpenInFull, strings.studio.expandDiff, { expandedDiff = current.path to it }, Modifier.size(26.dp)) }
                         val id = if (canUndo) changeId(change.output) else null
-                        if (id != null) ChillerControl("Отменить", { onUndo(id) }, icon = Icons.AutoMirrored.Outlined.Undo)
+                        if (id != null) ChillerControl(strings.studio.undo, { onUndo(id) }, icon = Icons.AutoMirrored.Outlined.Undo)
                         else Spacer(Modifier.height(28.dp))
                     }
                     if (image != null) ChangedImage(current.path, image.second) { viewedImage = image }
-                    else change.diff?.let { Diff(it) } ?: Text("Без диффа", color = c.faint, fontSize = 11.sp, modifier = Modifier.padding(10.dp))
+                    else change.diff?.let { Diff(it) } ?: Text(strings.studio.noDiff, color = c.faint, fontSize = 11.sp, modifier = Modifier.padding(10.dp))
                 }
             }
         }
@@ -163,7 +164,7 @@ private fun ChangesTab(files: List<FileChanges>, onUndo: (String) -> Unit, canUn
             Column(Modifier.fillMaxWidth(.88f).fillMaxHeight(.86f).clip(RoundedCornerShape(14.dp)).background(c.surface).border(1.dp, c.border, RoundedCornerShape(14.dp))) {
                 Row(Modifier.fillMaxWidth().padding(start = 18.dp, end = 10.dp, top = 10.dp, bottom = 10.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text(path, color = c.text, fontSize = 13.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                    ChillerIconButton(Icons.Outlined.Close, "Закрыть дифф", { expandedDiff = null })
+                    ChillerIconButton(Icons.Outlined.Close, strings.studio.closeDiff, { expandedDiff = null })
                 }
                 Box(Modifier.height(1.dp).fillMaxWidth().background(c.border))
                 Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(12.dp)) { Diff(diff) }
@@ -176,9 +177,9 @@ private fun ChangesTab(files: List<FileChanges>, onUndo: (String) -> Unit, canUn
 private fun FileRow(file: FileChanges, selected: Boolean, onClick: () -> Unit) {
     val c = LocalChillerPalette.current
     val (icon, tint, tag) = when (file.kind) {
-        "created" -> Triple(Icons.Outlined.NoteAdd, c.positive, "новый")
-        "deleted" -> Triple(Icons.Outlined.DeleteOutline, c.negative, "удалён")
-        "moved" -> Triple(Icons.Outlined.DriveFileMove, c.muted, "перемещён")
+        "created" -> Triple(Icons.Outlined.NoteAdd, c.positive, strings.studio.tagNew)
+        "deleted" -> Triple(Icons.Outlined.DeleteOutline, c.negative, strings.studio.tagDeleted)
+        "moved" -> Triple(Icons.Outlined.DriveFileMove, c.muted, strings.studio.tagMoved)
         else -> Triple(Icons.Outlined.Edit, c.muted, null)
     }
     val interaction = remember { MutableInteractionSource() }
@@ -205,8 +206,8 @@ private fun FileRow(file: FileChanges, selected: Boolean, onClick: () -> Unit) {
 @Composable
 private fun AgentsTab(agents: List<SubagentSnapshot>, onCancel: (String) -> Unit, modifier: Modifier) {
     if (agents.isEmpty()) {
-        EmptyState(Icons.Outlined.Hub, "Помощников пока нет",
-            "Основной агент может запустить до трёх помощников только на чтение: они параллельно ищут и читают код и присылают отчёт. Прогресс и итоги появятся здесь.", modifier)
+        EmptyState(Icons.Outlined.Hub, strings.studio.noHelpers,
+            strings.studio.noHelpersHint, modifier)
         return
     }
     LazyColumn(modifier, contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -219,12 +220,12 @@ private fun AgentCard(agent: SubagentSnapshot, onCancel: (String) -> Unit) {
     val c = LocalChillerPalette.current
     var open by remember(agent.id) { mutableStateOf(false) }
     val (label, color) = when (agent.status) {
-        SubagentStatus.QUEUED -> "в очереди" to c.muted
-        SubagentStatus.RUNNING -> "работает" to c.accent
-        SubagentStatus.COMPLETED -> "готово" to c.positive
-        SubagentStatus.FAILED -> "ошибка" to c.negative
-        SubagentStatus.CANCELLED -> "остановлен" to c.muted
-        SubagentStatus.INTERRUPTED -> "прерван" to c.muted
+        SubagentStatus.QUEUED -> strings.studio.agentQueued to c.muted
+        SubagentStatus.RUNNING -> strings.studio.agentRunning to c.accent
+        SubagentStatus.COMPLETED -> strings.studio.agentDone to c.positive
+        SubagentStatus.FAILED -> strings.studio.agentFailed to c.negative
+        SubagentStatus.CANCELLED -> strings.studio.agentCancelled to c.muted
+        SubagentStatus.INTERRUPTED -> strings.studio.agentInterrupted to c.muted
     }
     val shape = RoundedCornerShape(11.dp)
     Column(Modifier.fillMaxWidth().clip(shape).background(c.surface).border(1.dp, if (agent.status == SubagentStatus.RUNNING) c.accent.copy(alpha = .45f) else c.border, shape).padding(12.dp),
@@ -238,7 +239,7 @@ private fun AgentCard(agent: SubagentSnapshot, onCancel: (String) -> Unit) {
                 Text(agent.taskId, color = c.text, fontSize = 12.sp, fontWeight = FontWeight.Medium, fontFamily = ChillerFonts.mono, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(label, color = color, fontSize = 11.sp)
             }
-            if (!agent.status.isTerminal) ChillerControl("Остановить", { onCancel(agent.id) }, icon = Icons.Outlined.Stop)
+            if (!agent.status.isTerminal) ChillerControl(strings.studio.stop, { onCancel(agent.id) }, icon = Icons.Outlined.Stop)
         }
         Text(agent.goal, color = c.text, fontSize = 12.sp, lineHeight = 18.sp, maxLines = if (open) 12 else 3, overflow = TextOverflow.Ellipsis)
         // Round progress: filled segments for finished rounds, a live one for the current round.
@@ -249,10 +250,10 @@ private fun AgentCard(agent: SubagentSnapshot, onCancel: (String) -> Unit) {
                 Box(Modifier.weight(1f).height(4.dp).clip(CircleShape).background(when { done -> color.copy(alpha = .75f); now -> color.copy(alpha = .4f); else -> c.border }))
             }
         }
-        Text(listOfNotNull("раунд ${agent.rounds}/${agent.maxRounds}", "${agent.toolCalls} ${plural(agent.toolCalls, "действие", "действия", "действий")}",
-            agent.failedToolCalls.takeIf { it > 0 }?.let { "ошибок $it" }, agent.readPaths.size.takeIf { it > 0 }?.let { "прочитано файлов $it" },
-            agent.acceptedMessages.takeIf { it > 0 }?.let { "сообщений ${agent.processedMessages}/$it" },
-            agent.usage.promptTokens?.let { "${compactTokens(it)} → ${compactTokens(agent.usage.completionTokens)} ток." }).joinToString(" · "), color = c.faint, fontSize = 11.sp)
+        Text(listOfNotNull(strings.studio.agentRound(agent.rounds, agent.maxRounds), strings.studio.agentActions(agent.toolCalls),
+            agent.failedToolCalls.takeIf { it > 0 }?.let { strings.studio.agentErrors(it) }, agent.readPaths.size.takeIf { it > 0 }?.let { strings.studio.agentFilesRead(it) },
+            agent.acceptedMessages.takeIf { it > 0 }?.let { strings.studio.agentMessages(agent.processedMessages, it) },
+            agent.usage.promptTokens?.let { strings.studio.agentTokens(compactTokens(it), compactTokens(agent.usage.completionTokens)) }).joinToString(" · "), color = c.faint, fontSize = 11.sp)
         if (agent.status == SubagentStatus.RUNNING && agent.activity.isNotBlank()) Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(Icons.Outlined.Bolt, null, Modifier.size(12.dp), tint = c.muted)
             Spacer(Modifier.width(5.dp))
@@ -261,13 +262,13 @@ private fun AgentCard(agent: SubagentSnapshot, onCancel: (String) -> Unit) {
         agent.error?.takeIf { agent.status != SubagentStatus.COMPLETED }?.let { Text(it, color = if (agent.status == SubagentStatus.FAILED) c.negative else c.muted, fontSize = 11.sp, lineHeight = 16.sp) }
         agent.result?.let { result ->
             Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(c.sidebar.copy(alpha = .7f)).padding(10.dp)) {
-                Text("Отчёт", color = c.faint, fontSize = 10.sp, modifier = Modifier.padding(bottom = 4.dp))
+                Text(strings.studio.report, color = c.faint, fontSize = 10.sp, modifier = Modifier.padding(bottom = 4.dp))
                 AnimatedContent(open, label = "report") { expanded ->
                     if (expanded) MarkdownText(result) else Text(inlineMarkdownPlain(result.lineSequence().firstOrNull { it.isNotBlank() }.orEmpty()), color = c.text, fontSize = 12.sp, lineHeight = 18.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 }
             }
         }
-        if (agent.result != null || agent.goal.length > 160) ChillerControl(if (open) "Свернуть" else "Подробнее", { open = !open }, icon = if (open) Icons.Outlined.KeyboardArrowUp else Icons.Outlined.KeyboardArrowDown)
+        if (agent.result != null || agent.goal.length > 160) ChillerControl(if (open) strings.studio.collapse else strings.studio.more, { open = !open }, icon = if (open) Icons.Outlined.KeyboardArrowUp else Icons.Outlined.KeyboardArrowDown)
     }
 }
 
@@ -304,9 +305,9 @@ private fun rememberChangedImage(path: String): Pair<FilePresentation, androidx.
 private fun ChangedImage(path: String, image: androidx.compose.ui.graphics.ImageBitmap, onOpen: () -> Unit) {
     val c = LocalChillerPalette.current
     Box(Modifier.fillMaxWidth().background(c.sidebar.copy(alpha = .4f)).padding(10.dp), contentAlignment = Alignment.Center) {
-        androidx.compose.foundation.Image(image, "Открыть изображение ${path.substringAfterLast('/')}", contentScale = androidx.compose.ui.layout.ContentScale.Fit,
+        androidx.compose.foundation.Image(image, strings.studio.openImageNamed(path.substringAfterLast('/')), contentScale = androidx.compose.ui.layout.ContentScale.Fit,
             modifier = Modifier.heightIn(max = 220.dp).clip(RoundedCornerShape(6.dp)).pointerHoverIcon(PointerIcon.Hand)
-                .clickable(role = Role.Button, onClickLabel = "Открыть изображение", onClick = onOpen))
+                .clickable(role = Role.Button, onClickLabel = strings.studio.openImage, onClick = onOpen))
     }
     Text("${image.width} × ${image.height}", color = c.faint, fontSize = 10.sp, modifier = Modifier.padding(start = 10.dp, bottom = 8.dp))
 }
