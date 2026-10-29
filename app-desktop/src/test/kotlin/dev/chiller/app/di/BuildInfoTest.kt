@@ -22,8 +22,9 @@ class BuildInfoTest {
 
     @Test fun `copied details leave out the data folder`() {
         val data = SettingsData("u", "m", false, false, version = "1.2.0-rc.2", build = "#57", commit = "f37143b0a1b2", dataDir = "/Users/someone/.chiller")
+        dev.chiller.app.i18n.I18n.current = dev.chiller.app.i18n.EnStrings
         val text = aboutText(aboutRows(data))
-        assertTrue(text.startsWith("Chiller\nВерсия: 1.2.0-rc.2\nСборка: #57\nКоммит: f37143b0a1b2"))
+        assertTrue(text.startsWith("Chiller\nVersion: 1.2.0-rc.2\nBuild: #57\nCommit: f37143b0a1b2"), text)
         assertFalse("someone" in text)
     }
 }

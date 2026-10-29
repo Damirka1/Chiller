@@ -25,13 +25,13 @@ class SettingsLayoutTest {
                 SettingsPage(data, SettingsActions(applyConnection = { url, _, _, _ -> applied = url }), SettingsSection.CONNECTION, {}, showNav = false)
             }
         }
-        onNodeWithContentDescription("Провайдеры").performTextInput("OpenAI")
+        onNodeWithContentDescription("Providers").performTextInput("OpenAI")
         onNode(hasText("OpenAI") and !hasSetTextAction()).performClick()
-        onNodeWithContentDescription("Адрес API").performScrollTo().performTextReplacement("https://example.com/v1")
-        onNodeWithContentDescription("Провайдеры").performScrollTo().performTextReplacement("нет такого провайдера")
-        onNodeWithText("Провайдеры не найдены").assertExists()
+        onNodeWithContentDescription("API address").performScrollTo().performTextReplacement("https://example.com/v1")
+        onNodeWithContentDescription("Providers").performScrollTo().performTextReplacement("no such provider")
+        onNodeWithText("No providers found").assertExists()
         onNodeWithText("https://example.com/v1").assertExists()
-        onNodeWithText("Применить").performScrollTo().performClick()
+        onNodeWithText("Apply").performScrollTo().performClick()
         assertEquals("https://example.com/v1", applied)
     }
 

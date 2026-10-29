@@ -70,6 +70,200 @@ interface SettingsStrings {
     val notificationsHint: String
     val systemNotifications: String
     val systemNotificationsHint: String
+    val saveUnavailable: String
+    val providers: String
+    val searchByName: String
+    val addProvider: String
+    val cloud: String
+    val local: String
+    val myConnections: String
+    val noKeyNeeded: String
+    val keyFromEnv: String
+    val keySaved: String
+    val keySet: String
+    val keyNeeded: String
+    val noProvidersFound: String
+    val ownProvider: String
+    val ownAddress: String
+    val ownProviderNote: String
+    val anyServerNote: String
+    val name: String
+    val apiAddress: String
+    val localNoKey: String
+    val keyFromEnvHint: String
+    fun keySavedHint(store: String): String
+    val keySetHint: String
+    val pasteKey: String
+    val apiKey: String
+    fun keyStoredNote(store: String): String
+    val keySessionNote: String
+    fun modelLine(catalog: String): String
+    val refreshList: String
+    val modelNoList: String
+    val modelIdHint: String
+    val modelAfterApply: String
+    fun whereKey(link: String): String
+    val modelReasoning: String
+    val modelReasoningHint: String
+    val providerProfile: String
+    val keepProfile: String
+    val auto: String
+    val full: String
+    val compact: String
+    val apply: String
+    val cancelCheck: String
+    val checkConnection: String
+    val deleteKey: String
+    val deleteProvider: String
+    val notApplied: String
+    val applyNote: String
+    val verifiedInChiller: String
+    val budget: String
+    val budgetNote: String
+    val limitSpending: String
+    fun budgetOnFor(model: String, address: String): String
+    val off: String
+    val budgetLimit: String
+    val priceInput: String
+    val priceOutput: String
+    fun priceImage(model: String): String
+    val inputCeiling: String
+    val ceilingNote: String
+    fun budgetBound(saved: String, current: String): String
+    fun saveFor(model: String): String
+    val currentModel: String
+    val saved: String
+    val proxy: String
+    val proxyNote: String
+    val proxySystem: String
+    val proxyManual: String
+    val proxyOff: String
+    val proxySystemHint: String
+    val proxyManualHint: String
+    val proxyOffHint: String
+    val proxyAddress: String
+    val proxyBypass: String
+    val save: String
+    val proxySaved: String
+    val runLimits: String
+    val runLimitsNote: String
+    val taskTime: String
+    val taskTimeNote: String
+    fun minutes(n: Int): String
+    val noLimit: String
+    val modelSteps: String
+    val modelStepsNote: String
+    val sharedBudget: String
+    val sharedBudgetNote: String
+    val outputTokensNote: String
+    val replyLength: String
+    val modelMaximum: String
+    val modelMaximumNote: String
+    fun noLimitWarning(backstop: Int): String
+    val capabilities: String
+    val helpers: String
+    val helpersHint: String
+    val projectInstructions: String
+    val projectInstructionsHint: String
+    val processCommands: String
+    val processCommandsHint: String
+    val webSearch: String
+    val webSearchHint: String
+    val windowSnapshots: String
+    val windowSnapshotsHint: String
+    val captureUnsupported: String
+    val captureEnableFirst: String
+    val captureWindow: String
+    fun captureSelected(app: String, title: String): String
+    val captureNone: String
+    val captureEmpty: String
+    val autoVerify: String
+    val autoVerifyNote: String
+    val verifyAfterEdits: String
+    val verifyAfterEditsHint: String
+    val fixAttempts: String
+    val openProjectForCheck: String
+    fun checkCommandFor(project: String): String
+    val checkCommandExample: String
+    fun useSuggestion(command: String): String
+    val processesOffWarning: String
+    val modelProfile: String
+    val modelProfileNote: String
+    fun profileFor(model: String, profile: String): String
+    val theModel: String
+    fun autoByIdAndName(name: String): String
+    val autoById: String
+    fun tools(list: String): String
+    val images: String
+    val imagesOn: String
+    val imagesOff: String
+    val on: String
+    val offShort: String
+    val imageProvider: String
+    val imageProviderNote: String
+    val sameAsChat: String
+    val imageModel: String
+    val imageToolOff: String
+    val imageNoModel: String
+    fun imageDrawsWith(model: String, edits: Boolean): String
+    val temperature: String
+    fun recommended(value: String): String
+    fun profileValue(value: String): String
+    val byDefault: String
+    val requestExtras: String
+    val requestExtrasNote: String
+    val saveFields: String
+    val whichProfile: String
+    val whichProfileNote: String
+    val modelComparison: String
+    val recentProjects: String
+    val recentProjectsNote: String
+    val emptyYet: String
+    val removeShort: String
+    val appData: String
+    val appDataNote: String
+    val dataFolder: String
+    val requestTraces: String
+    val demoProjects: String
+    val none: String
+    fun demoFolders(n: Int, path: String): String
+    val reallyDelete: String
+    val delete: String
+    val open: String
+    val keyNewDialog: String
+    val keyOpenProject: String
+    val keySearch: String
+    val keyJump: String
+    val keyAllCommands: String
+    val keyNewInProject: String
+    val keySend: String
+    val keyStop: String
+    val keySettings: String
+    val keyEsc: String
+    val keyModelMenu: String
+    val keySidebar: String
+    val keyRowMenu: String
+    val keySections: String
+    val keyTab: String
+    val aboutVersion: String
+    val aboutBuild: String
+    val aboutCommit: String
+    val aboutRuntime: String
+    val aboutSystem: String
+    val aboutData: String
+    val preRelease: String
+    val tagline: String
+    val copied: String
+    val copyDetails: String
+    val githubRepo: String
+    val diagnostics: String
+    val diagnosticsNote: String
+    val checking: String
+    val checkEnvironment: String
+    fun permissionsLine(processes: Boolean, web: Boolean): String
+    fun screenshotsLine(supported: Boolean): String
+    val whatWasChecked: String
+    val whatWasCheckedNote: String
     // end settings
 }
 
