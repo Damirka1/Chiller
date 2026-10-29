@@ -86,6 +86,8 @@ class AgentCoordinator(
     private val environment: String = hostEnvironment(),
     /** When set, every file change waits for the user's yes or no before it runs. */
     private val approvals: ApprovalGate? = null,
+    /** Wall-clock limit of one task in minutes; 0 lets it run until it finishes or is stopped. */
+    private val maxRunMinutes: Int = 10,
 ) {
     private val json = Json { encodeDefaults = true; ignoreUnknownKeys = true }
     private val _state = MutableStateFlow(RunState())
@@ -98,6 +100,7 @@ class AgentCoordinator(
     init {
         // Up to 1000: the desktop's "no step limit" runs with a 500-step backstop.
         require(maxRounds in 1..1_000) { "maxRounds must be between 1 and 1000" }
+        require(maxRunMinutes in 0..1_440) { "maxRunMinutes must be between 0 and 1440" }
         // "Model maximum" arrives as Int.MAX_VALUE: each round asks for at most half the context window, and the
         // provider clamps that to the model's real ceiling.
         require(maxOutputTokens >= 1) { "maxOutputTokens must be positive" }
@@ -211,10 +214,11 @@ class AgentCoordinator(
                 try {
                     (provider as? RunBudgetProvider)?.beginRun()
                     subagents?.begin(id)
-                    withTimeout(10 * 60_000L) { run(text, mode, allowProcesses, allowNetwork, allowScreenshots, attachments, id, onAccepted, stats) }
+                    val work: suspend () -> Unit = { run(text, mode, allowProcesses, allowNetwork, allowScreenshots, attachments, id, onAccepted, stats) }
+                    if (maxRunMinutes > 0) withTimeout(maxRunMinutes * 60_000L) { work() } else work()
                 } catch (timeout: TimeoutCancellationException) {
                     withContext(NonCancellable) {
-                        val message = "Лимит времени задачи (10 минут) достигнут. Проверьте результаты и продолжите задачу."
+                        val message = "Лимит времени задачи ($maxRunMinutes мин) достигнут. Проверьте результаты и продолжите задачу; лимит меняется в Настройки → Агент."
                         events.append(sessionId, "run.failed", buildJsonObject { put("runId", id); put("message", message) })
                         _state.update { it.copy(status = "failed", error = message, streamingText = "", activeModelId = null, runDurationMs = stats.durationMs) }
                     }

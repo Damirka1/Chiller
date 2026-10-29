@@ -127,7 +127,9 @@ class DesktopController(
     private val http = HttpClient(CIO) {
         engine { useSystemTrust() }
         followRedirects = false
-        install(HttpTimeout) { connectTimeoutMillis = 15_000; socketTimeoutMillis = 120_000; requestTimeoutMillis = 600_000 }
+        // One streamed step of a slow local model may outlast ten minutes; a stalled stream still ends on the socket
+        // timeout, and the whole task on its own time limit. Images and the model list set their own limits.
+        install(HttpTimeout) { connectTimeoutMillis = 15_000; socketTimeoutMillis = 120_000; requestTimeoutMillis = 60 * 60_000L }
     }
 
     suspend fun initialize() {
@@ -1259,7 +1261,7 @@ class DesktopController(
         val engine = AgentCoordinator(provider, tools, events, processes, s.sessionId, modelOverride ?: s.settings.model, s.settings.thinking, maxRounds = options.effectiveMaxRounds, maxOutputTokens = maxOutput,
             projectInstructions = instructions?.text, traces = traceSink(s.sessionId), subagents = supervisor.takeIf { helpers }, systemPrompt = if (folderless) ModelProfiles.CHAT_PROMPT else modelProfile.systemPrompt, projectMap = map, scope = scope,
             // With a cost budget the prompt must stay within the input ceiling its reservations assume.
-            approvals = approvals,
+            approvals = approvals, maxRunMinutes = options.maxRunMinutes,
             contextWindowTokens = (s.catalog.models.firstOrNull { it.id == (modelOverride ?: s.settings.model) }?.contextWindow ?: 32_768).let { window ->
                 if (cost == null) s.catalog.models.firstOrNull { it.id == (modelOverride ?: s.settings.model) }?.contextWindow
                 else minOf(window, s.settings.costBudget.inputTokenCeiling + maxOutput.coerceAtMost(window / 2))

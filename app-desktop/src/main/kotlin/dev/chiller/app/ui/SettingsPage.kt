@@ -417,6 +417,15 @@ private fun AgentSection(data: SettingsData, actions: SettingsActions) {
     VerifyCard(data, actions)
     Card {
         SectionTitle("Лимиты прогона", "Ограничивают одну задачу. Применяются со следующего сообщения, история сохраняется.")
+        Text("Время на задачу", color = c.text, fontSize = 13.sp)
+        Text("Сколько может идти одна задача, считая все шаги, команды и помощников. Медленной локальной модели может понадобиться больше 10 минут.",
+            color = c.faint, fontSize = 11.sp, lineHeight = 16.sp)
+        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            val minutes = listOf(10, 30, 60, 120).let { if (a.maxRunMinutes != AgentOptions.UNLIMITED && a.maxRunMinutes !in it) (it + a.maxRunMinutes).sorted() else it }
+            (minutes.map { it to "$it мин" } + (AgentOptions.UNLIMITED to "Без лимита")).forEach { (v, label) ->
+                ChillerControl(label, { actions.agent(a.copy(maxRunMinutes = v)) }, style = if (a.maxRunMinutes == v) ControlStyle.SELECTED else ControlStyle.QUIET)
+            }
+        }
         Text("Шагов модели за задачу", color = c.text, fontSize = 13.sp)
         Text("Каждый шаг — один запрос к модели; большой файл или длинная задача может занять десятки шагов", color = c.faint, fontSize = 11.sp, lineHeight = 16.sp)
         Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -448,7 +457,7 @@ private fun AgentSection(data: SettingsData, actions: SettingsActions) {
         Text("«Максимум модели» просит столько, сколько разрешает сама модель (например, у DeepSeek Flash до 384k): предел узнаётся из ответа провайдера и запоминается. " +
             "Рассуждения модели расходуют этот же лимит. Если ответ всё же упрётся в предел, обрезанный вызов не выполняется, а агент продолжит, записывая файл частями.",
             color = c.faint, fontSize = 11.sp, lineHeight = 16.sp)
-        if (a.maxRounds == AgentOptions.UNLIMITED || a.maxRequests == AgentOptions.UNLIMITED || a.totalOutputTokens == AgentOptions.UNLIMITED)
+        if (a.maxRounds == AgentOptions.UNLIMITED || a.maxRequests == AgentOptions.UNLIMITED || a.totalOutputTokens == AgentOptions.UNLIMITED || a.maxRunMinutes == AgentOptions.UNLIMITED)
             Text("Без лимита задача идёт, пока не закончит, пока вы её не остановите или до страховочных ${AgentOptions.UNLIMITED_ROUNDS_BACKSTOP} шагов. Следите за расходом токенов в Studio → Прогон.",
                 color = c.negative, fontSize = 11.sp, lineHeight = 16.sp)
     }

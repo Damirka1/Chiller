@@ -97,12 +97,15 @@ data class AgentOptions(
     val imageModel: String = "auto",
     /** Endpoint generate_image calls, with that endpoint's own key; empty means the chat endpoint. */
     val imageBaseUrl: String = "",
+    /** Wall-clock minutes one task may run; 0 is no limit. */
+    val maxRunMinutes: Int = 10,
 ) {
     fun sanitized() = copy(autoVerifyAttempts = autoVerifyAttempts.coerceIn(1, 3), maxRounds = unlimitedOr(maxRounds, 4, 200), maxOutputTokens = unlimitedOr(maxOutputTokens, 1024, 1_048_576),
         maxRequests = unlimitedOr(maxRequests, 1, 500), totalOutputTokens = unlimitedOr(totalOutputTokens, 1024, 4_194_304),
         profile = profile.takeIf { it in setOf("auto", "full", "compact") } ?: "auto", temperature = temperature?.coerceIn(0.0, 2.0), requestExtras = requestExtras.take(4000),
         vision = vision.takeIf { it in setOf("auto", "on", "off") } ?: "auto", imageModel = imageModel.trim().take(200).ifEmpty { "auto" },
-        imageBaseUrl = imageBaseUrl.trim().trimEnd('/').take(500).takeIf { it.isEmpty() || endpointAllowed(it) } ?: "")
+        imageBaseUrl = imageBaseUrl.trim().trimEnd('/').take(500).takeIf { it.isEmpty() || endpointAllowed(it) } ?: "",
+        maxRunMinutes = unlimitedOr(maxRunMinutes, 1, 1_440))
 
     /** Model steps per task; "no limit" still stops at a backstop so a looping run cannot go on forever. */
     val effectiveMaxRounds: Int get() = if (maxRounds == UNLIMITED) UNLIMITED_ROUNDS_BACKSTOP else maxRounds

@@ -951,6 +951,29 @@ class AgentCoordinatorTest {
         assertTrue(f.coordinator.state.value.usageIncomplete)
     }
 
+    @Test fun taskTimeLimitFollowsTheSettingAndCanBeLifted() = runTest {
+        val provider = ScriptedProvider { _ -> flow {
+            kotlinx.coroutines.delay(25 * 60_000L)
+            emit(ModelEvent.Completed(AgentMessage("assistant", "late but done"), "stop"))
+        } }
+        val longer = fixture(provider, dispatcher = StandardTestDispatcher(testScheduler), maxRunMinutes = 30)
+        longer.coordinator.send("work", ExecutionMode.WORKSPACE_EDIT)
+        advanceUntilIdle()
+        assertEquals("completed", longer.coordinator.state.value.status, "25 minutes fit into a 30-minute limit")
+        val unlimited = fixture(ScriptedProvider { _ -> flow {
+            kotlinx.coroutines.delay(5 * 60 * 60_000L)
+            emit(ModelEvent.Completed(AgentMessage("assistant", "done"), "stop"))
+        } }, dispatcher = StandardTestDispatcher(testScheduler), maxRunMinutes = 0)
+        unlimited.coordinator.send("work", ExecutionMode.WORKSPACE_EDIT)
+        advanceUntilIdle()
+        assertEquals("completed", unlimited.coordinator.state.value.status, "no limit: five hours are fine")
+        val shorter = fixture(provider, dispatcher = StandardTestDispatcher(testScheduler), maxRunMinutes = 20)
+        shorter.coordinator.send("work", ExecutionMode.WORKSPACE_EDIT)
+        advanceUntilIdle()
+        assertEquals("failed", shorter.coordinator.state.value.status)
+        assertTrue(shorter.coordinator.state.value.error.orEmpty().contains("20 мин"))
+    }
+
     @Test fun taskDeadlineIsNotReportedAsUserCancellation() = runTest {
         val provider = ScriptedProvider { _ -> flow {
             kotlinx.coroutines.delay(601_000)
@@ -961,7 +984,7 @@ class AgentCoordinatorTest {
         f.coordinator.send("work", ExecutionMode.WORKSPACE_EDIT)
         advanceUntilIdle()
         assertEquals("failed", f.coordinator.state.value.status)
-        assertTrue(f.coordinator.state.value.error.orEmpty().contains("10 минут"))
+        assertTrue(f.coordinator.state.value.error.orEmpty().contains("10 мин"))
         assertTrue(events.records.none { it.type == "run.cancelled" })
         assertTrue(events.records.any { it.type == "run.failed" })
     }
@@ -1069,10 +1092,11 @@ class AgentCoordinatorTest {
         maxOutputTokens: Int = 4096,
         thinking: Boolean = false,
         approvals: ApprovalGate? = null,
+        maxRunMinutes: Int = 10,
     ): Fixture {
         val scope = CoroutineScope(SupervisorJob() + dispatcher)
         val processes = RecordingProcesses()
-        return Fixture(AgentCoordinator(provider, tools, eventStore, processes, "session", model, thinking = thinking, projectInstructions = instructions, traces = traces, scope = scope, contextWindowTokens = contextWindow, maxOutputTokens = maxOutputTokens, approvals = approvals), processes)
+        return Fixture(AgentCoordinator(provider, tools, eventStore, processes, "session", model, thinking = thinking, projectInstructions = instructions, traces = traces, scope = scope, contextWindowTokens = contextWindow, maxOutputTokens = maxOutputTokens, approvals = approvals, maxRunMinutes = maxRunMinutes), processes)
     }
 
     private data class Fixture(val coordinator: AgentCoordinator, val processes: RecordingProcesses)
