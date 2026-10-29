@@ -223,7 +223,7 @@ internal fun Conversation(state: RunState, reduced: Boolean, onAnswer: (String) 
                 }
                 else state.messages.lastOrNull { it.role == "user" }?.content?.let { text -> ChillerControl("Вернуть текст в поле", { onRestoreDraft(text) }) }
             } } }
-            if (!canUndo && (state.status == "interrupted" || state.activities.any { it.status == "interrupted" })) item(key = "recover-interrupted") {
+            if (!canUndo && needsRecovery(state)) item(key = "recover-interrupted") {
                 Column(entryModifier("recover-interrupted").padding(start = 34.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
                     Text("Неизвестные действия не повторяются; агент сначала проверит состояние.", color = c.muted, fontSize = 11.sp, lineHeight = 16.sp)
                     ChillerControl("Проверить и продолжить", onRecoverInterrupted, icon = Icons.Outlined.Refresh, style = ControlStyle.OUTLINE)
@@ -242,6 +242,17 @@ internal fun Conversation(state: RunState, reduced: Boolean, onAnswer: (String) 
             }
         }
     }
+}
+
+/**
+ * The recovery offer applies while nothing runs and an interrupted step is still open: the run itself was restored as
+ * interrupted, or an interrupted call has no result yet. Once a new message closed the gap, the offer goes away.
+ */
+internal fun needsRecovery(state: RunState): Boolean {
+    if (state.status in setOf("preparing", "streaming", "executing")) return false
+    if (state.status == "interrupted") return true
+    val answered = state.messages.filter { it.role == "tool" }.mapNotNull { it.toolCallId }.toSet()
+    return state.activities.any { it.status == "interrupted" && it.toolCallId != null && it.toolCallId !in answered }
 }
 
 /** Status text with a soft light sweep, so a waiting run reads as alive. Static with reduced motion. */
