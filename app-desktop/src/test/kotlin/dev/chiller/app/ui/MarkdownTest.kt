@@ -81,4 +81,13 @@ class MarkdownTest {
             "<tr><td>17.10.2026</td><td>+9.5 °C</td><td>тепло &lt;ясно&gt;</td></tr>" +
             "<tr><td>23.10.2026</td><td>+3.7 °C</td><td>t&lt;0 &amp; ветер</td></tr></tbody></table>", tableAsHtml(table))
     }
+
+    @Test fun picturesBecomeBlocksOrTheirDescription() {
+        assertEquals(listOf(MdBlock.Paragraph("Лови жабу."), MdBlock.Image("Toad", "toad_wednesday.png")),
+            parseMarkdownBlocks("Лови жабу.\n\n![Toad](toad_wednesday.png)"))
+        assertEquals(listOf(MdBlock.Image("", "img/a.png")), parseMarkdownBlocks("![](img/a.png \"title\")"))
+        // Inside a sentence a picture keeps its description; code keeps its thin padding.
+        assertEquals("Смотри схема и  код ", inlineMarkdownPlain("Смотри ![схема](https://example.com/a.png) и `код`"))
+        assertEquals("ссылка, жирный, курсив", inlineMarkdownPlain("[ссылка](https://x.y), **жирный**, *курсив*"))
+    }
 }

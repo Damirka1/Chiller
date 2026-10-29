@@ -1,5 +1,6 @@
 package dev.chiller.app.ui
 
+import dev.chiller.app.i18n.*
 import dev.chiller.contracts.*
 
 data class ConversationEntry(val index: Int, val message: AgentMessage, val activities: List<Activity>)
@@ -24,8 +25,8 @@ fun activityGroupLabel(activities: List<Activity>): String {
     val paths = activities.map { it.target }.filter { it.isNotBlank() }.distinct()
     val count = paths.size
     return when {
-        complete && paths.size == activities.map { it.target }.distinct().size && count > 0 && activities.all { it.name == "read_file" } -> "Прочитано файлов: $count"
-        complete && activities.all { it.target.isNotBlank() && it.name in setOf("edit_file", "replace_text", "append_file", "create_file", "move_file", "delete_file", "generate_image") } -> "Изменено файлов: $count"
-        else -> "Действий: ${activities.size}"
+        complete && paths.size == activities.map { it.target }.distinct().size && count > 0 && activities.all { it.name == "read_file" } -> I18n.current.screens.filesRead(count)
+        complete && activities.all { it.target.isNotBlank() && it.name in setOf("edit_file", "replace_text", "append_file", "create_file", "move_file", "delete_file", "generate_image") } -> I18n.current.screens.filesChanged(count)
+        else -> I18n.current.screens.actionsCount(activities.size)
     }
 }

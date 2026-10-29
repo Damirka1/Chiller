@@ -1,5 +1,6 @@
 package dev.chiller.app.ui
 
+import dev.chiller.app.i18n.*
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.core.tween
@@ -54,6 +55,9 @@ import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.window.PopupProperties
 import dev.chiller.app.di.ModelCatalogState
+import dev.chiller.app.di.PickerProvider
+import androidx.compose.material.icons.outlined.ChevronRight
+import androidx.compose.material.icons.outlined.ExpandMore
 import dev.chiller.design.LocalChillerPalette
 import dev.chiller.design.LocalChillerReducedMotion
 
@@ -148,9 +152,10 @@ internal fun MenuDivider() {
 internal fun ModelPickerPopover(
     model: String, models: List<String>, configured: Boolean, running: Boolean, catalog: ModelCatalogState, contextNote: String?,
     onRefresh: () -> Unit, onCancelRefresh: () -> Unit, onClose: () -> Unit, onModel: (String) -> Unit, onSettings: () -> Unit,
+    providers: List<PickerProvider> = emptyList(), onProviderModel: (String, String) -> Unit = { _, _ -> },
 ) {
     ChillerPopover(onDismiss = onClose, width = 320.dp) {
-        ModelPickerContent(model, models, configured, running, catalog, contextNote, onRefresh, onCancelRefresh, onClose, onModel, onSettings)
+        ModelPickerContent(model, models, configured, running, catalog, contextNote, onRefresh, onCancelRefresh, onClose, onModel, onSettings, providers, onProviderModel)
     }
 }
 
@@ -158,9 +163,12 @@ internal fun ModelPickerPopover(
 internal fun ModelPickerContent(
     model: String, models: List<String>, configured: Boolean, running: Boolean, catalog: ModelCatalogState, contextNote: String?,
     onRefresh: () -> Unit, onCancelRefresh: () -> Unit, onClose: () -> Unit, onModel: (String) -> Unit, onSettings: () -> Unit,
+    providers: List<PickerProvider> = emptyList(), onProviderModel: (String, String) -> Unit = { _, _ -> },
 ) {
     val c = LocalChillerPalette.current
+    val text = strings // read before lambdas that are not composable
     var filter by remember { mutableStateOf("") }
+    var openProvider by remember { mutableStateOf<String?>(null) }
     val discovered = catalog.chatModels.map { it.id }
     val known = (listOf(model) + discovered + models).filter { it.isNotBlank() }.distinct().take(40)
     val query = filter.trim()
@@ -188,33 +196,51 @@ internal fun ModelPickerContent(
             BasicTextField(
                 filter, { filter = it }, singleLine = true,
                 textStyle = TextStyle(color = c.text, fontSize = 13.sp, lineHeight = 20.sp, letterSpacing = 0.sp), cursorBrush = SolidColor(c.text),
-                modifier = Modifier.weight(1f).focusRequester(focus).semantics { contentDescription = "Поиск модели" },
-                decorationBox = { inner -> Box { if (filter.isEmpty()) Text("Найти модель", color = c.faint, fontSize = 13.sp, lineHeight = 20.sp); inner() } },
+                modifier = Modifier.weight(1f).focusRequester(focus).semantics { contentDescription = text.composer.modelSearchA11y },
+                decorationBox = { inner -> Box { if (filter.isEmpty()) Text(strings.composer.findModel, color = c.faint, fontSize = 13.sp, lineHeight = 20.sp); inner() } },
             )
-            if (catalog.status == "loading") SmallIcon(Icons.Outlined.Close, "Отменить загрузку списка", onCancelRefresh)
-            else SmallIcon(Icons.Outlined.Refresh, "Обновить список моделей", onRefresh, enabled = !running)
+            if (catalog.status == "loading") SmallIcon(Icons.Outlined.Close, strings.composer.cancelListLoad, onCancelRefresh)
+            else SmallIcon(Icons.Outlined.Refresh, strings.composer.refreshModels, onRefresh, enabled = !running)
         }
         MenuDivider()
         Text(
-            listOfNotNull(catalogLine(catalog, configured), contextNote).joinToString(" · "),
+            listOfNotNull(catalogLine(catalog, configured, strings.composer), contextNote).joinToString(" · "),
             color = if (catalog.status == "failed") c.negative else c.faint, fontSize = 11.sp, lineHeight = 15.sp, maxLines = 2, overflow = TextOverflow.Ellipsis,
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
         )
         Column(Modifier.heightIn(max = 280.dp).verticalScroll(rememberScrollState())) {
             shown.forEachIndexed { index, id ->
                 MenuRow(
-                    catalog.models.firstOrNull { it.id == id }?.displayName?.takeIf { it.isNotBlank() } ?: modelLabel(id), { pick(id) }, subtitle = modelSubtitle(id, catalog), selected = id == model, highlighted = index == highlight,
-                    tag = if (id != model && id !in discovered) "вручную" else null,
+                    catalog.models.firstOrNull { it.id == id }?.displayName?.takeIf { it.isNotBlank() } ?: modelLabel(id), { pick(id) }, subtitle = modelSubtitle(id, catalog, strings.composer), selected = id == model, highlighted = index == highlight,
+                    tag = if (id != model && id !in discovered) strings.composer.manual else null,
                 )
             }
             when {
-                shown.isEmpty() && known.isNotEmpty() -> EmptyNote("Ничего не найдено по запросу «$query»")
-                catalog.status == "ready" && catalog.chatModels.isEmpty() -> EmptyNote("Провайдер не вернул ни одной модели. Задайте ID вручную в настройках.")
+                shown.isEmpty() && known.isNotEmpty() -> EmptyNote(strings.composer.nothingFoundModel(query))
+                catalog.status == "ready" && catalog.chatModels.isEmpty() -> EmptyNote(strings.composer.noModelsFromProvider)
+            }
+            // Other providers: a model picked there moves this dialog to that provider from the next message.
+            val otherProviders = providers.mapNotNull { provider ->
+                val matching = if (query.isEmpty()) provider.models else provider.models.filter { it.contains(query, true) || modelLabel(it).contains(query, true) }
+                if (query.isNotEmpty() && matching.isEmpty() && !provider.name.contains(query, true)) null else provider to matching
+            }
+            if (otherProviders.isNotEmpty()) {
+                MenuDivider()
+                Text(strings.composer.otherProviders, color = c.faint, fontSize = 11.sp, modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 2.dp))
+                otherProviders.forEach { (provider, matching) ->
+                    val open = query.isNotEmpty() || openProvider == provider.baseUrl
+                    MenuRow(provider.name, { openProvider = if (openProvider == provider.baseUrl) null else provider.baseUrl },
+                        subtitle = provider.baseUrl.substringAfter("://"), icon = if (open) Icons.Outlined.ExpandMore else Icons.Outlined.ChevronRight, enabled = !running)
+                    if (open) {
+                        matching.forEach { id -> MenuRow("   " + modelLabel(id), { onProviderModel(provider.baseUrl, id); onClose() }, subtitle = if (modelLabel(id) != id) "   $id" else null, enabled = !running) }
+                        if (provider.models.isEmpty()) MenuRow("   " + strings.composer.connectAndPickFirst, { onProviderModel(provider.baseUrl, ""); onClose() }, enabled = !running)
+                    }
+                }
             }
         }
         MenuDivider()
-        MenuRow("Настройки подключения", onSettings, icon = Icons.Outlined.Tune)
-        Text("Модель сменится со следующего сообщения", color = c.faint, fontSize = 11.sp, lineHeight = 15.sp, modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 2.dp))
+        MenuRow(strings.composer.connectionSettings, onSettings, icon = Icons.Outlined.Tune)
+        Text(strings.composer.switchNote, color = c.faint, fontSize = 11.sp, lineHeight = 15.sp, modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 2.dp))
     }
 }
 
@@ -238,25 +264,25 @@ private fun SmallIcon(icon: ImageVector, label: String, onClick: () -> Unit, ena
     ) { Icon(icon, null, Modifier.size(15.dp), tint = if (enabled) c.muted else c.faint.copy(alpha = .45f)) }
 }
 
-internal fun catalogLine(catalog: ModelCatalogState, configured: Boolean): String = when (catalog.status) {
-    "loading" -> "Загружаю список моделей…"
-    "failed" -> catalog.message.ifBlank { "Список моделей не получен" }
+internal fun catalogLine(catalog: ModelCatalogState, configured: Boolean, s: ComposerStrings): String = when (catalog.status) {
+    "loading" -> s.catalogLoading
+    "failed" -> catalog.message.ifBlank { s.catalogFailed }
     "ready" -> {
-        val base = if (catalog.chatModels.isEmpty()) "Список пуст — задайте ID вручную" else "Доступно моделей: ${catalog.chatModels.size}"
+        val base = if (catalog.chatModels.isEmpty()) s.catalogEmpty else s.catalogCount(catalog.chatModels.size)
         val time = catalog.fetchedAt?.let(::formatCheckTime)
         val line = if (time.isNullOrBlank()) base else "$base · $time"
-        if (catalog.stale) "устарел · $line" else line
+        if (catalog.stale) s.catalogStale(line) else line
     }
-    else -> if (configured) "Список не загружен — обновите" else "Ключ API не задан"
+    else -> if (configured) s.catalogNotLoaded else s.noApiKey
 }
 
 /** Secondary line for a row: the exact id when the label is friendly, plus declared limits. */
-internal fun modelSubtitle(id: String, catalog: ModelCatalogState): String? {
+internal fun modelSubtitle(id: String, catalog: ModelCatalogState, s: ComposerStrings): String? {
     val model = catalog.models.firstOrNull { it.id == id }
     val parts = buildList {
         if (modelLabel(id) != id || !model?.displayName.isNullOrBlank()) add(id)
-        model?.contextWindow?.let { add("контекст ${formatTokens(it)}") }
-        model?.maxOutputTokens?.let { add("вывод ${formatTokens(it)}") }
+        model?.contextWindow?.let { add(s.contextWindow(formatTokens(it))) }
+        model?.maxOutputTokens?.let { add(s.outputLimit(formatTokens(it))) }
     }
     return parts.takeIf { it.isNotEmpty() }?.joinToString(" · ")
 }
@@ -267,6 +293,7 @@ private fun formatTokens(value: Int): String = if (value >= 1_000) "${(value + 5
 @Composable
 internal fun ContextChips(workspace: String?, onChoose: () -> Unit, enabled: Boolean, mentioned: List<String> = emptyList(), onRemoveMention: (String) -> Unit = {}) {
     val c = LocalChillerPalette.current
+    val text = strings // read before lambdas that are not composable
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
     Row(Modifier.padding(bottom = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -279,14 +306,14 @@ internal fun ContextChips(workspace: String?, onChoose: () -> Unit, enabled: Boo
         ) {
             Icon(if (workspace == null) Icons.Outlined.CreateNewFolder else Icons.Outlined.Folder, null, Modifier.size(12.dp), tint = if (workspace == null) c.faint else c.muted)
             Spacer(Modifier.width(5.dp))
-            Text(workspace?.substringAfterLast('/') ?: "Папка не выбрана", color = if (workspace == null) c.faint else c.muted, fontSize = 11.sp, lineHeight = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 220.dp))
+            Text(workspace?.let(::folderName) ?: strings.composer.noFolderChosen, color = if (workspace == null) c.faint else c.muted, fontSize = 11.sp, lineHeight = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 220.dp))
         }
         mentioned.take(6).forEach { path ->
             Row(Modifier.clip(RoundedCornerShape(6.dp)).background(c.accent.copy(alpha = .10f)).padding(start = 7.dp, end = 3.dp, top = 3.dp, bottom = 3.dp), verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.Outlined.Description, null, Modifier.size(12.dp), tint = c.accent)
                 Spacer(Modifier.width(4.dp))
                 Text(path.substringAfterLast('/'), color = c.text, fontSize = 11.sp, lineHeight = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 160.dp))
-                Box(Modifier.padding(start = 2.dp).size(16.dp).clip(CircleShape).pointerHoverIcon(PointerIcon.Hand).clickable(role = Role.Button) { onRemoveMention(path) }.semantics { contentDescription = "Убрать $path" }, contentAlignment = Alignment.Center) {
+                Box(Modifier.padding(start = 2.dp).size(16.dp).clip(CircleShape).pointerHoverIcon(PointerIcon.Hand).clickable(role = Role.Button) { onRemoveMention(path) }.semantics { contentDescription = text.composer.remove(path) }, contentAlignment = Alignment.Center) {
                     Icon(Icons.Outlined.Close, null, Modifier.size(11.dp), tint = c.muted)
                 }
             }
@@ -300,7 +327,7 @@ internal fun ContextChips(workspace: String?, onChoose: () -> Unit, enabled: Boo
 internal fun MentionPopover(matches: List<String>, highlighted: Int, onPick: (String) -> Unit, onDismiss: () -> Unit) {
     val c = LocalChillerPalette.current
     ChillerPopover(onDismiss, 380.dp, focusable = false) {
-        Text("Файлы проекта · ↑↓ выбрать · ↵ вставить", color = c.faint, fontSize = 11.sp, modifier = Modifier.padding(start = 16.dp, top = 8.dp, bottom = 4.dp))
+        Text(strings.composer.mentionHint, color = c.faint, fontSize = 11.sp, modifier = Modifier.padding(start = 16.dp, top = 8.dp, bottom = 4.dp))
         matches.forEachIndexed { index, path ->
             MenuRow(path.substringAfterLast('/'), { onPick(path) }, subtitle = path.substringBeforeLast('/', "").ifEmpty { null }, icon = Icons.Outlined.Description, highlighted = index == highlighted)
         }
@@ -315,9 +342,10 @@ internal fun MentionPopover(matches: List<String>, highlighted: Int, onPick: (St
 @Composable
 internal fun ContextMeter(tokens: Int, window: Int?, estimated: Boolean = true) {
     val c = LocalChillerPalette.current
+    val text = strings // read before lambdas that are not composable
     val fraction = window?.takeIf { it > 0 }?.let { (tokens.toFloat() / it).coerceIn(0f, 1f) }
     val color = when { fraction == null -> c.faint; fraction > .9f -> c.negative; fraction > .7f -> c.muted; else -> c.accent }
-    Row(Modifier.semantics { contentDescription = "Контекст: ${if (estimated) "примерно" else "вход последнего запроса,"} $tokens токенов" + (window?.let { " из $it" } ?: "") }, verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.semantics { contentDescription = text.composer.contextA11y(estimated, tokens, window) }, verticalAlignment = Alignment.CenterVertically) {
         if (fraction != null) {
             androidx.compose.foundation.Canvas(Modifier.size(14.dp)) {
                 val stroke = androidx.compose.ui.graphics.drawscope.Stroke(width = 2.dp.toPx(), cap = androidx.compose.ui.graphics.StrokeCap.Round)
@@ -326,6 +354,6 @@ internal fun ContextMeter(tokens: Int, window: Int?, estimated: Boolean = true) 
             }
             Spacer(Modifier.width(6.dp))
         }
-        Text("${if (estimated) "≈ " else ""}${compactTokens(tokens.toLong())}" + (window?.let { " / ${compactTokens(it.toLong())}" } ?: " ток."), color = c.faint, fontSize = 11.sp, lineHeight = 16.sp, maxLines = 1)
+        Text("${if (estimated) "≈ " else ""}${compactTokens(tokens.toLong())}" + (window?.let { " / ${compactTokens(it.toLong())}" } ?: strings.composer.tokensShort), color = c.faint, fontSize = 11.sp, lineHeight = 16.sp, maxLines = 1)
     }
 }

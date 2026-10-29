@@ -10,6 +10,10 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class CustomProviderTest {
+    // Helpers read the global language; these checks are written against the Russian texts.
+    @kotlin.test.BeforeTest fun russian() { dev.chiller.app.i18n.I18n.current = dev.chiller.app.i18n.RuStrings; dev.chiller.contracts.CoreLanguage.russian = true }
+    @kotlin.test.AfterTest fun english() { dev.chiller.app.i18n.I18n.current = dev.chiller.app.i18n.EnStrings; dev.chiller.contracts.CoreLanguage.russian = false }
+
     @TempDir lateinit var directory: Path
 
     @Test fun `invalid providers are refused with a reason`() {
@@ -17,7 +21,7 @@ class CustomProviderTest {
         assertNull(good.normalized().problem())
         assertEquals("https://gateway.example.com/ai/api/v1", good.normalized().baseUrl)
         assertNotNull(good.copy(name = " ").problem())
-        assertNotNull(good.copy(baseUrl = "http://gateway.example.com/v1").problem(), "remote HTTP is refused")
+        assertNull(good.copy(baseUrl = "http://gateway.example.com/v1").problem(), "remote HTTP is allowed")
         assertNull(good.copy(baseUrl = "http://localhost:8000/v1").problem(), "loopback HTTP is fine")
         assertNotNull(good.copy(baseUrl = "https://user:pw@gateway.example.com/v1").problem())
         assertNotNull(good.copy(keyVariable = "QARMET-KEY").problem())

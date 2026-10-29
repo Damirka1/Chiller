@@ -206,7 +206,6 @@ class ModelCatalogTest {
             "not a url",
             "ftp://example.invalid",
             "example.invalid",
-            "http://example.invalid",
             "http://user:pass@localhost",
             "http://localhost?x=1",
             "http://localhost#frag",

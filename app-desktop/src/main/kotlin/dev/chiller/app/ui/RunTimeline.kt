@@ -1,5 +1,6 @@
 package dev.chiller.app.ui
 
+import dev.chiller.app.i18n.*
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
@@ -36,7 +37,7 @@ import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -65,16 +66,16 @@ private val FILE_EFFECTS = setOf("edit_file", "replace_text", "append_file", "cr
 /** Short user-facing state for the current run, derived only from engine state. */
 internal fun runProgressLabel(state: RunState): String? = when {
     state.recoveryNotice != null && state.status == "streaming" -> state.recoveryNotice
-    state.question != null -> "Ожидает вашего ответа"
-    state.status == "preparing" -> "Подготавливает запрос…"
-    state.status == "streaming" && state.streamingText.isBlank() -> "Ждёт ответа модели…"
-    state.status == "streaming" -> "Модель пишет…"
+    state.question != null -> I18n.current.run.waitingYou
+    state.status == "preparing" -> I18n.current.run.preparingRequest
+    state.status == "streaming" && state.streamingText.isBlank() -> I18n.current.run.waitingModel
+    state.status == "streaming" -> I18n.current.run.modelWriting
     state.status == "executing" -> state.activities.lastOrNull { it.status == "running" }?.let {
         "${toolLabel(it.name)}${if (it.target.isNotBlank()) " · ${it.target}" else ""}"
-    } ?: "Выполняет действие…"
-    state.status == "completed" -> "Ответ готов"
-    state.status == "cancelled" -> "Задача остановлена"
-    state.status == "interrupted" -> "Прогон прерван"
+    } ?: I18n.current.run.runningAction
+    state.status == "completed" -> I18n.current.run.replyReady
+    state.status == "cancelled" -> I18n.current.run.taskStopped
+    state.status == "interrupted" -> I18n.current.run.runInterrupted
     else -> null
 }
 
@@ -116,7 +117,7 @@ internal fun ToolGroup(activities: List<Activity>, reduced: Boolean, onUndo: (St
                 Text(activityGroupLabel(activities), color = c.text, fontSize = 12.sp, lineHeight = 18.sp)
                 val (added, removed) = activities.mapNotNull { it.diff }.map(::diffStats).fold(0 to 0) { a, b -> a.first + b.first to a.second + b.second }
                 if (added + removed > 0) { Spacer(Modifier.width(8.dp)); DiffStat(added, removed) }
-                if (failed.isNotEmpty()) Text("  ·  ошибок: ${failed.size}", color = c.negative, fontSize = 12.sp, lineHeight = 18.sp)
+                if (failed.isNotEmpty()) Text(strings.run.errorsCount(failed.size), color = c.negative, fontSize = 12.sp, lineHeight = 18.sp)
             }
         }
         val visible = compactToolActivities(activities, open)
@@ -147,7 +148,7 @@ private fun HeaderRow(open: Boolean, onClick: () -> Unit, content: @Composable R
     ) {
         content()
         Spacer(Modifier.weight(1f))
-        Icon(if (open) Icons.Outlined.KeyboardArrowUp else Icons.Outlined.KeyboardArrowDown, if (open) "Свернуть" else "Развернуть", Modifier.size(15.dp), tint = c.faint)
+        Icon(if (open) Icons.Outlined.KeyboardArrowUp else Icons.Outlined.KeyboardArrowDown, if (open) strings.run.collapse else strings.run.expand, Modifier.size(15.dp), tint = c.faint)
     }
 }
 
@@ -178,13 +179,15 @@ internal fun ToolRow(activity: Activity, reduced: Boolean, onUndo: (String) -> U
             Spacer(Modifier.width(9.dp))
             Text(toolLabel(activity.name), color = if (failed) c.negative else c.muted, fontSize = 12.sp, lineHeight = 18.sp)
             Spacer(Modifier.width(8.dp))
-            Text(activity.target, color = c.text, fontSize = 12.sp, lineHeight = 18.sp, fontFamily = FontFamily.Monospace, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+            // A path keeps its file name visible (`deepseek/…/_preview.py`); a command keeps its start.
+            Text(activity.target, color = c.text, fontSize = 12.sp, lineHeight = 18.sp, fontFamily = ChillerFonts.mono, maxLines = 1,
+                overflow = if (' ' in activity.target.trim()) TextOverflow.Ellipsis else TextOverflow.MiddleEllipsis, modifier = Modifier.weight(1f))
             activity.diff?.let { val (a, r) = diffStats(it); if (a + r > 0) { Spacer(Modifier.width(8.dp)); DiffStat(a, r) } }
             Spacer(Modifier.width(8.dp))
             when {
-                failed -> StatusTag("ошибка", c.negative)
-                running -> StatusTag("выполняется", c.muted)
-                activity.status in UNCERTAIN -> StatusTag("прервано", c.muted)
+                failed -> StatusTag(strings.run.tagError, c.negative)
+                running -> StatusTag(strings.run.tagRunning, c.muted)
+                activity.status in UNCERTAIN -> StatusTag(strings.run.tagInterrupted, c.muted)
                 !success -> StatusTag(activity.status, c.muted)
             }
             Icon(if (open) Icons.Outlined.KeyboardArrowUp else Icons.Outlined.KeyboardArrowDown, null, Modifier.size(15.dp), tint = c.faint)
@@ -194,13 +197,52 @@ internal fun ToolRow(activity: Activity, reduced: Boolean, onUndo: (String) -> U
             Column(Modifier.fillMaxWidth().background(c.sidebar.copy(alpha = .5f))) {
                 if (activity.diff != null) Diff(activity.diff!!)
                 else if (activity.output.isNotBlank() && presentedFile == null) SelectionContainer {
-                    Text(prettyOutput(activity.output), color = c.muted, fontSize = 11.sp, lineHeight = 18.sp, fontFamily = FontFamily.Monospace, modifier = Modifier.fillMaxWidth().padding(12.dp), maxLines = 24, overflow = TextOverflow.Ellipsis)
+                    Text(prettyOutput(activity.output), color = c.muted, fontSize = 11.sp, lineHeight = 18.sp, fontFamily = ChillerFonts.mono, modifier = Modifier.fillMaxWidth().padding(12.dp), maxLines = 24, overflow = TextOverflow.Ellipsis)
                 }
-                else Text("Без вывода", color = c.faint, fontSize = 11.sp, modifier = Modifier.padding(12.dp))
+                else Text(strings.run.noOutput, color = c.faint, fontSize = 11.sp, modifier = Modifier.padding(12.dp))
                 val id = if (canUndo && success && activity.name in FILE_EFFECTS) changeId(activity.output) else null
                 if (id != null) Box(Modifier.fillMaxWidth().padding(5.dp), contentAlignment = Alignment.CenterEnd) {
-                    ChillerControl("Отменить правку", { onUndo(id) }, icon = Icons.AutoMirrored.Outlined.Undo)
+                    ChillerControl(strings.run.undoEdit, { onUndo(id) }, icon = Icons.AutoMirrored.Outlined.Undo)
                 }
+            }
+        }
+    }
+}
+
+/**
+ * One step's reasoning, shaped like a tool row: collapsed it shows one line (the opening thought, or the newest one while
+ * the model is still thinking); opened, the full text in a bounded box that scrolls on its own.
+ */
+@Composable
+internal fun ReasoningStep(text: String, live: Boolean, reduced: Boolean, initiallyOpen: Boolean = false) {
+    val c = LocalChillerPalette.current
+    var open by remember { mutableStateOf(initiallyOpen) }
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    val shape = RoundedCornerShape(8.dp)
+    val lines = text.lineSequence().map { it.trim().trimStart('#', '*', '-', ' ') }.filter { it.isNotBlank() }
+    val preview = (if (live) lines.lastOrNull() else lines.firstOrNull()).orEmpty()
+    Column(Modifier.fillMaxWidth().clip(shape).border(1.dp, c.border, shape)) {
+        Row(
+            Modifier.fillMaxWidth().background(if (hovered) c.hover.copy(alpha = .5f) else Color.Transparent).hoverable(interaction).pointerHoverIcon(PointerIcon.Hand)
+                .clickable(interactionSource = interaction, indication = null, role = Role.Button, onClickLabel = if (open) strings.run.collapseReasoning else strings.run.showReasoning) { open = !open }
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(Modifier.size(16.dp), contentAlignment = Alignment.Center) {
+                if (live) Pulse(c.accent) else Icon(Icons.Outlined.Psychology, null, Modifier.size(15.dp), tint = c.muted)
+            }
+            Spacer(Modifier.width(9.dp))
+            Text(if (live) strings.run.thinking else strings.run.reasoning, color = c.muted, fontSize = 12.sp, lineHeight = 18.sp)
+            Spacer(Modifier.width(8.dp))
+            Text(if (open) "" else preview, color = c.faint, fontSize = 12.sp, lineHeight = 18.sp, fontStyle = FontStyle.Italic, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+            Spacer(Modifier.width(8.dp))
+            Icon(if (open) Icons.Outlined.KeyboardArrowUp else Icons.Outlined.KeyboardArrowDown, null, Modifier.size(15.dp), tint = c.faint)
+        }
+        AnimatedVisibility(open, enter = if (reduced) EnterTransition.None else expandVertically(tween(180)) + fadeIn(tween(120)), exit = if (reduced) ExitTransition.None else shrinkVertically(tween(160)) + fadeOut(tween(100))) {
+            SelectionContainer {
+                Text(text.trim(), color = c.muted, fontSize = 12.sp, lineHeight = 19.sp,
+                    modifier = Modifier.fillMaxWidth().background(c.sidebar.copy(alpha = .5f)).heightIn(max = 320.dp).verticalScroll(rememberScrollState()).padding(horizontal = 14.dp, vertical = 10.dp))
             }
         }
     }
@@ -222,9 +264,9 @@ internal fun decodePreviewImage(bytes: ByteArray): ImageBitmap? = runCatching {
 }.getOrNull()
 
 internal fun formatPresentedSize(sizeBytes: Long): String = when {
-    sizeBytes < 1024 -> "$sizeBytes Б"
-    sizeBytes < 1024 * 1024 -> "%.1f КБ".format(java.util.Locale.ROOT, sizeBytes / 1024.0).replace('.', ',')
-    else -> "%.1f МБ".format(java.util.Locale.ROOT, sizeBytes / (1024.0 * 1024.0)).replace('.', ',')
+    sizeBytes < 1024 -> I18n.current.run.sizeBytes(sizeBytes)
+    sizeBytes < 1024 * 1024 -> I18n.current.run.sizeKb(sizeBytes / 1024.0)
+    else -> I18n.current.run.sizeMb(sizeBytes / (1024.0 * 1024.0))
 }
 
 @Composable
@@ -236,9 +278,9 @@ private fun StatusTag(text: String, color: Color) {
 internal fun DiffStat(added: Int, removed: Int) {
     val c = LocalChillerPalette.current
     Row {
-        if (added > 0) Text("+$added", color = c.positive, fontSize = 11.sp, lineHeight = 16.sp, fontFamily = FontFamily.Monospace)
+        if (added > 0) Text("+$added", color = c.positive, fontSize = 11.sp, lineHeight = 16.sp, fontFamily = ChillerFonts.mono)
         if (added > 0 && removed > 0) Spacer(Modifier.width(5.dp))
-        if (removed > 0) Text("−$removed", color = c.negative, fontSize = 11.sp, lineHeight = 16.sp, fontFamily = FontFamily.Monospace)
+        if (removed > 0) Text("−$removed", color = c.negative, fontSize = 11.sp, lineHeight = 16.sp, fontFamily = ChillerFonts.mono)
     }
 }
 
@@ -258,7 +300,7 @@ internal fun Diff(diff: String) {
             diff.lineSequence().take(500).forEach { line ->
                 val added = line.startsWith('+') && !line.startsWith("+++ ")
                 val removed = line.startsWith('-') && !line.startsWith("--- ")
-                Text(line, fontFamily = FontFamily.Monospace, fontSize = 11.sp, lineHeight = 19.sp, letterSpacing = 0.sp,
+                Text(line, fontFamily = ChillerFonts.mono, fontSize = 11.sp, lineHeight = 19.sp, letterSpacing = 0.sp,
                     color = when { added -> c.positive; removed -> c.negative; else -> c.muted },
                     modifier = Modifier.fillMaxWidth().background(when { added -> c.added; removed -> c.removed; else -> c.canvas }).padding(horizontal = 12.dp))
             }
@@ -312,14 +354,14 @@ internal fun latestPlan(state: RunState): List<Pair<String, String>>? {
 internal fun runSummaryParts(state: RunState): List<String> {
     if (state.modelRounds == 0) return emptyList()
     return buildList {
-        add("${state.modelRounds} ${plural(state.modelRounds, "раунд", "раунда", "раундов")}")
-        add("${state.toolCalls} ${plural(state.toolCalls, "действие", "действия", "действий")}" + if (state.failedToolCalls > 0) " (ошибок: ${state.failedToolCalls})" else "")
+        add(I18n.current.run.rounds(state.modelRounds))
+        add(I18n.current.run.actions(state.toolCalls, state.failedToolCalls))
         state.runDurationMs?.let { add(formatDuration(it)) }
         val usage = state.usage
-        if (usage.promptTokens != null || usage.completionTokens != null) add("${compactTokens(usage.promptTokens)} → ${compactTokens(usage.completionTokens)} токенов")
-        if (state.usageIncomplete) add("расход известен частично")
+        if (usage.promptTokens != null || usage.completionTokens != null) add(I18n.current.run.tokensFlow(compactTokens(usage.promptTokens), compactTokens(usage.completionTokens)))
+        if (state.usageIncomplete) add(I18n.current.run.usagePartial)
         val prompt = usage.promptTokens; val cached = usage.cachedPromptTokens
-        if (prompt != null && cached != null && prompt > 0) add("кэш ${(cached * 100 / prompt)}%")
+        if (prompt != null && cached != null && prompt > 0) add(I18n.current.run.cacheShare(cached * 100 / prompt))
     }
 }
 
@@ -345,15 +387,16 @@ internal fun latestFailedCommands(state: RunState): Int {
 }
 
 internal fun formatDuration(ms: Long): String = when {
-    ms < 1_000 -> "$ms мс"
-    ms < 60_000 -> "%.1f с".format(java.util.Locale.ROOT, ms / 1000.0).replace('.', ',')
-    else -> "${ms / 60_000} мин ${ms % 60_000 / 1000} с"
+    ms < 1_000 -> I18n.current.run.durationMs(ms)
+    ms < 60_000 -> I18n.current.run.durationSeconds(ms / 1000.0)
+    else -> I18n.current.run.durationMinutes(ms / 60_000, ms % 60_000 / 1000)
 }
 
 internal fun compactTokens(value: Long?): String = when {
     value == null -> "?"
     value >= 10_000 -> "${(value + 500) / 1000}k"
-    value >= 1_000 -> "%.1fk".format(java.util.Locale.ROOT, value / 1000.0).replace('.', ',')
+    // A decimal comma in Russian, a point in English.
+    value >= 1_000 -> "%.1fk".format(java.util.Locale.ROOT, value / 1000.0).let { if (I18n.current.language == Language.RU) it.replace('.', ',') else it }
     else -> value.toString()
 }
 
@@ -398,7 +441,7 @@ internal fun RunPanel(state: RunState, modifier: Modifier, onOpenTrace: (() -> U
     val c = LocalChillerPalette.current
     Column(modifier.verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         if (state.modelRounds == 0 && state.status == "idle") {
-            Text("Метрики появятся после первого запуска в этом диалоге.", color = c.muted, fontSize = 12.sp, lineHeight = 18.sp)
+            Text(strings.run.metricsLater, color = c.muted, fontSize = 12.sp, lineHeight = 18.sp)
             return@Column
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -408,30 +451,30 @@ internal fun RunPanel(state: RunState, modifier: Modifier, onOpenTrace: (() -> U
             (state.activeModelId)?.let { Text(modelLabel(it), color = c.faint, fontSize = 11.sp) }
         }
         val usage = state.usage
-        if (state.usageIncomplete) Text("Провайдер сообщил расход не для всех запросов. Значения ниже неполные.", color = c.muted, fontSize = 12.sp)
+        if (state.usageIncomplete) Text(strings.run.usageIncompleteNote, color = c.muted, fontSize = 12.sp)
         val cacheShare = usage.promptTokens?.takeIf { it > 0 }?.let { p -> usage.cachedPromptTokens?.let { "${it * 100 / p}%" } }
         MetricGrid(listOf(
-            "Раунды" to state.modelRounds.toString(),
-            "Действия" to state.toolCalls.toString(),
-            "Ошибки инструментов" to state.failedToolCalls.toString(),
-            "Неуспешные команды" to latestFailedCommands(state).toString(),
-            "Время" to (state.runDurationMs?.let(::formatDuration) ?: "—"),
-            "Вход, всего ток." to compactTokens(usage.promptTokens).replace("?", "—"),
-            "Выход, всего ток." to compactTokens(usage.completionTokens).replace("?", "—"),
-            "Из кэша" to (cacheShare ?: "—"),
-            "Контекст ≈" to (state.contextEstimatedTokens?.let { compactTokens(it.toLong()) } ?: "—"),
+            strings.run.statRounds to state.modelRounds.toString(),
+            strings.run.statActions to state.toolCalls.toString(),
+            strings.run.statToolErrors to state.failedToolCalls.toString(),
+            strings.run.statFailedCommands to latestFailedCommands(state).toString(),
+            strings.run.statTime to (state.runDurationMs?.let(::formatDuration) ?: "—"),
+            strings.run.statInput to compactTokens(usage.promptTokens).replace("?", "—"),
+            strings.run.statOutput to compactTokens(usage.completionTokens).replace("?", "—"),
+            strings.run.statCache to (cacheShare ?: "—"),
+            strings.run.statContext to (state.contextEstimatedTokens?.let { compactTokens(it.toLong()) } ?: "—"),
         ))
         if (agents.isNotEmpty()) {
             val total = agents.fold(dev.chiller.contracts.TokenUsage()) { acc, a -> acc + a.usage }
             MetricGrid(listOf(
-                "Помощники" to "${agents.count { it.status == dev.chiller.contracts.SubagentStatus.COMPLETED }}/${agents.size}",
-                "Их токены" to "${compactTokens(total.promptTokens).replace("?", "—")} → ${compactTokens(total.completionTokens).replace("?", "—")}",
+                strings.run.statHelpers to "${agents.count { it.status == dev.chiller.contracts.SubagentStatus.COMPLETED }}/${agents.size}",
+                strings.run.statHelperTokens to "${compactTokens(total.promptTokens).replace("?", "—")} → ${compactTokens(total.completionTokens).replace("?", "—")}",
             ))
         }
-        Text("Токены суммируются за все раунды последнего прогона; «—» — значение не сообщено. Контекст — текущая оценка по символам / 4. Неуспешные команды — процессы с ненулевым кодом выхода или тайм-аутом; ошибка запуска учитывается среди ошибок инструментов.", color = c.faint, fontSize = 11.sp, lineHeight = 16.sp)
-        onOpenTrace?.let { ChillerControl("Трассировка запросов", it, icon = Icons.Outlined.ReceiptLong, style = ControlStyle.OUTLINE) }
+        Text(strings.run.statsNote, color = c.faint, fontSize = 11.sp, lineHeight = 16.sp)
+        onOpenTrace?.let { ChillerControl(strings.run.requestTrace, it, icon = Icons.Outlined.ReceiptLong, style = ControlStyle.OUTLINE) }
         latestPlan(state)?.let { steps ->
-            Text("План модели · ${steps.count { it.second == "done" }}/${steps.size}", color = c.muted, fontSize = 12.sp)
+            Text(strings.run.modelPlanProgress(steps.count { it.second == "done" }, steps.size), color = c.muted, fontSize = 12.sp)
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 steps.forEach { (step, status) ->
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -448,9 +491,9 @@ internal fun RunPanel(state: RunState, modifier: Modifier, onOpenTrace: (() -> U
                 }
             }
         }
-        if (state.droppedContextMessages > 0) Text("Из контекста убрано старых сообщений: ${state.droppedContextMessages}", color = c.muted, fontSize = 12.sp, lineHeight = 18.sp)
+        if (state.droppedContextMessages > 0) Text(strings.run.droppedMessages(state.droppedContextMessages), color = c.muted, fontSize = 12.sp, lineHeight = 18.sp)
         if (state.reasoning.isNotBlank()) {
-            Text("Рассуждения последнего раунда", color = c.muted, fontSize = 12.sp)
+            Text(strings.run.lastRoundReasoning, color = c.muted, fontSize = 12.sp)
             SelectionContainer {
                 Text(state.reasoning, color = c.muted, fontSize = 12.sp, lineHeight = 19.sp, modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(c.sidebar).padding(12.dp))
             }
@@ -475,15 +518,12 @@ private fun MetricGrid(items: List<Pair<String, String>>) {
     }
 }
 
-private fun runStatusLabel(status: String) = when (status) {
-    "preparing" -> "Подготовка"; "streaming" -> "Модель отвечает"; "executing" -> "Выполняются действия"
-    "completed" -> "Завершён"; "failed" -> "Ошибка"; "cancelled" -> "Остановлен"; "interrupted" -> "Прерван"; else -> "Последний прогон"
-}
+private fun runStatusLabel(status: String) = I18n.current.run.statusLabel(status)
 
 internal fun runErrorDescription(error: String): String = when {
-    error.contains("INCOMPLETE_TOOL_CALL") -> "Ответ достиг лимита, и попытки восстановления исчерпаны. Незавершённый вызов не выполнен. Продолжите задачу меньшими частями или увеличьте лимит ответа."
-    error.contains("INCOMPLETE_STREAM") -> "Соединение оборвалось до завершения ответа. Незавершённые вызовы не выполнялись. Проверьте подключение и продолжите задачу."
-    error.contains("current request or newest exchange exceeds") -> "Запрос или последний обмен не помещается в контекст. Сократите запрос либо начните новый диалог с сохранённой памятью задачи."
-    error.contains("Общий бюджет") -> "Бюджет задачи исчерпан. Увеличьте его в настройках агента и продолжите задачу."
+    error.contains("INCOMPLETE_TOOL_CALL") -> I18n.current.run.errorIncompleteToolCall
+    error.contains("INCOMPLETE_STREAM") -> I18n.current.run.errorIncompleteStream
+    error.contains("current request or newest exchange exceeds") -> I18n.current.run.errorContextOverflow
+    error.contains("shared budget") || error.contains("Общий бюджет") -> I18n.current.run.errorBudget
     else -> error
 }

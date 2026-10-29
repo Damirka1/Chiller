@@ -1,5 +1,6 @@
 package dev.chiller.app.ui
 
+import dev.chiller.app.i18n.*
 import java.awt.Image
 import java.awt.RenderingHints
 import java.awt.image.BufferedImage
@@ -28,10 +29,10 @@ fun textPasteTarget(text: String, limitBytes: Int = 5_120): TextPasteTarget = wh
 
 fun pasteLabelForImage(image: Image): String {
     val w = image.getWidth(null); val h = image.getHeight(null)
-    return if (w > 0 && h > 0) "Изображение $w×$h" else "Изображение"
+    return if (w > 0 && h > 0) I18n.current.screens.pastedImage(w, h) else I18n.current.screens.pastedImagePlain
 }
 
-fun pasteLabelForText(text: String): String = "Текст · ${formatPresentedSize(text.length.toLong())}"
+fun pasteLabelForText(text: String): String = I18n.current.screens.pastedText(formatPresentedSize(text.length.toLong()))
 
 /** The encoded PNG and whether it had to be scaled down to fit the attachment limit. */
 data class EncodedPaste(val png: ByteArray, val width: Int, val height: Int, val scaled: Boolean)

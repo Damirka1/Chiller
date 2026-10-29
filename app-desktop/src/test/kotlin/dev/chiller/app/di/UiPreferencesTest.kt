@@ -9,6 +9,20 @@ import kotlin.test.assertTrue
 
 class UiPreferencesTest {
     @Test
+    fun projectExpansionIsKeptAndBounded() = runBlocking {
+        val store = UiPreferencesStore(Files.createTempDirectory("ui-preferences-projects"))
+        val many = (1..250).associate { "/p/$it" to (it % 2 == 0) } + ("" to true)
+        store.save(UiPreferences(projectExpansion = many))
+        val loaded = store.load().projectExpansion
+        assertEquals(200, loaded.size)
+        assertEquals(true, loaded["/p/250"])
+        assertFalse("" in loaded)
+        assertTrue(store.load().systemNotifications, "system notifications are on unless turned off")
+        store.save(UiPreferences(systemNotifications = false))
+        assertFalse(store.load().systemNotifications)
+    }
+
+    @Test
     fun missingFileAndMissingFieldsUseDefaults() = runBlocking {
         val directory = Files.createTempDirectory("ui-preferences-defaults")
         val store = UiPreferencesStore(directory)

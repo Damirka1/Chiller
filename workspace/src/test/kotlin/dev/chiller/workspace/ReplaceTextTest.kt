@@ -29,6 +29,17 @@ class ReplaceTextTest {
         assertEquals("def f():\r\n    value = 2\r\n    return value\r\n\r\nprint(f() + 1)\r\n", Files.readString(root.resolve("a.py")))
     }
 
+    @Test fun longMissingBlocksPointToLineEdits() = workspace { root, ws ->
+        Files.writeString(root.resolve("big.txt"), (1..60).joinToString("\n") { "line $it" } + "\n")
+        val snap = ws.read(ReadFileRequest("big.txt"))
+        val long = (1..40).joinToString("\n") { "line ${if (it == 20) "twenty" else it.toString()}" }
+        val error = assertFailsWith<ToolException> { ws.replaceText("big.txt", snap.snapshotId, long, "x") }
+        assertEquals("NO_MATCH", error.code)
+        assertTrue(error.recovery.orEmpty().contains("old_text has 40 lines") && "edit_file" in error.recovery.orEmpty(), error.recovery)
+        val short = assertFailsWith<ToolException> { ws.replaceText("big.txt", snap.snapshotId, "line 3\nline four", "x") }
+        assertFalse("edit_file" in short.recovery.orEmpty(), "a short old_text keeps the usual hint")
+    }
+
     @Test fun refusesAmbiguousOrMissingTextWithoutWriting() = workspace { root, ws ->
         Files.writeString(root.resolve("a.txt"), "x = 1\nx = 1\n")
         val snap = ws.read(ReadFileRequest("a.txt"))

@@ -18,6 +18,10 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 class AgentCoordinatorTest {
+    // User-facing core texts follow the app's language; these checks are written against the Russian ones.
+    @kotlin.test.BeforeTest fun russian() { dev.chiller.contracts.CoreLanguage.russian = true }
+    @kotlin.test.AfterTest fun english() { dev.chiller.contracts.CoreLanguage.russian = false }
+
     @Test fun terminalRunsAlwaysReleaseOwnedProcesses() = runTest {
         for (fail in listOf(false, true)) {
             val provider = ScriptedProvider { flow {
@@ -30,6 +34,29 @@ class AgentCoordinatorTest {
             assertEquals(1, fixture.processes.stoppedRuns.size)
             assertEquals(if (fail) "failed" else "completed", fixture.coordinator.state.value.status)
         }
+    }
+
+    @Test fun eachStepKeepsItsOwnReasoningInTheJournal() = runTest {
+        val tools = RecordingTools()
+        val requests = mutableListOf<ModelRequest>()
+        val provider = ScriptedProvider { request -> flow {
+            requests += request
+            if (requests.size == 1) {
+                emit(ModelEvent.ReasoningDelta("Need to read the file first."))
+                emit(ModelEvent.Completed(AgentMessage("assistant", null, listOf(ToolCall("r1", "read", "{}"))), "tool_calls"))
+            } else {
+                emit(ModelEvent.ReasoningDelta("The file is fine; answer."))
+                emit(ModelEvent.Completed(AgentMessage("assistant", "All good."), "stop"))
+            }
+        } }
+        val events = MemoryEvents()
+        val fixture = fixture(provider, tools, eventStore = events, dispatcher = StandardTestDispatcher(testScheduler))
+        fixture.coordinator.send("check", ExecutionMode.WORKSPACE_EDIT)
+        advanceUntilIdle()
+        val replies = fixture.coordinator.state.value.messages.filter { it.role == "assistant" }
+        assertEquals(listOf("Need to read the file first.", "The file is fine; answer."), replies.map { it.reasoning })
+        assertEquals(listOf("Need to read the file first.", "The file is fine; answer."),
+            events.records.filter { it.type == "message" && it.payload["role"]?.jsonPrimitive?.content == "assistant" }.map { it.payload["reasoning"]?.jsonPrimitive?.content })
     }
 
     @Test fun incompleteModelStreamNeverExecutesToolCalls() = runTest {
@@ -499,14 +526,15 @@ class AgentCoordinatorTest {
         assertEquals("call-1", restored.coordinator.state.value.activities.single().toolCallId)
     }
 
-    @Test fun interruptedToolHistoryRejectsContinuationWithoutCallingProvider() = runTest {
+    @Test fun interruptedToolHistoryIsClosedAsUnknownWhenTheUserContinues() = runTest {
         val oldCall = ToolCall("call-interrupted", "write", "{}")
         val events = MemoryEvents().apply {
             append("session", "message", Json.encodeToJsonElement(AgentMessage("assistant", toolCalls = listOf(oldCall))).jsonObject)
             append("session", "tool.prepared", buildJsonObject { put("callId", oldCall.id); put("name", oldCall.name); put("arguments", buildJsonObject { put("path", "src/main.kt") }) })
             append("session", "run.failed", buildJsonObject { put("runId", "run-old"); put("message", "old failure") })
         }
-        val provider = ScriptedProvider { error("provider must not receive an incomplete tool group") }
+        val requests = mutableListOf<ModelRequest>()
+        val provider = ScriptedProvider { request -> flow { requests += request; emit(ModelEvent.Completed(AgentMessage("assistant", "checked"), "stop")) } }
         val tools = RecordingTools()
         val fixture = fixture(provider, tools, events, StandardTestDispatcher(testScheduler))
         fixture.coordinator.restore()
@@ -515,10 +543,12 @@ class AgentCoordinatorTest {
         var accepted = false
         fixture.coordinator.send("continue", ExecutionMode.WORKSPACE_EDIT) { accepted = true }
         advanceUntilIdle()
-        assertEquals(false, accepted)
-        assertEquals(0, provider.calls)
-        assertTrue(tools.executed.isEmpty())
-        assertEquals("failed", fixture.coordinator.state.value.status)
+        assertEquals(true, accepted)
+        assertTrue(tools.executed.isEmpty(), "the interrupted write is never replayed")
+        assertEquals("completed", fixture.coordinator.state.value.status)
+        // The provider never sees an incomplete tool group: the old call is answered as unknown before the new message.
+        val sent = requests.single().messages
+        assertTrue(sent.any { it.role == "tool" && it.toolCallId == oldCall.id && it.content.orEmpty().contains("OUTCOME_UNKNOWN") })
     }
 
     @Test fun restoreExposesInterruptedQuestionPromptWithoutResumingIt() = runTest {
@@ -528,7 +558,7 @@ class AgentCoordinatorTest {
             append("session", "message", Json.encodeToJsonElement(AgentMessage("assistant", toolCalls = listOf(questionCall))).jsonObject)
             append("session", "tool.prepared", buildJsonObject { put("callId", questionCall.id); put("name", questionCall.name); put("arguments", Json.parseToJsonElement(questionCall.arguments)) })
         }
-        val provider = ScriptedProvider { error("restored question must not resume the provider") }
+        val provider = ScriptedProvider { flow { emit(ModelEvent.Completed(AgentMessage("assistant", "going on"), "stop")) } }
         val tools = RecordingTools()
         val fixture = fixture(provider, tools, events, StandardTestDispatcher(testScheduler))
 
@@ -540,11 +570,108 @@ class AgentCoordinatorTest {
         assertEquals("Which target should I use?", restored.question?.question)
         assertEquals(listOf("A", "B"), restored.question?.options)
         assertTrue(restored.error.orEmpty().contains("cannot resume automatically"))
-        assertTrue(restored.error.orEmpty().contains("start a new chat"))
+        assertTrue(restored.error.orEmpty().contains("new message"))
         fixture.coordinator.send("continue", ExecutionMode.WORKSPACE_EDIT)
         advanceUntilIdle()
-        assertEquals(0, provider.calls)
-        assertTrue(tools.executed.isEmpty())
+        assertTrue(tools.executed.isEmpty(), "the old question is not asked again by itself")
+        assertEquals("completed", fixture.coordinator.state.value.status)
+    }
+
+    @Test fun fileChangesWaitForTheUsersDecision() = runTest {
+        val written = mutableListOf<String>()
+        val tools = object : ToolExecutor {
+            override val specs = listOf(ToolSpec("write", "write", JsonObject(emptyMap()), ToolEffect.FILE_WRITE), ToolSpec("read", "read", JsonObject(emptyMap()), ToolEffect.READ))
+            override suspend fun execute(call: ToolCall, context: ToolContext): ToolResult { if (call.name == "write") written += call.id; return ToolResult(true) }
+        }
+        var round = 0
+        val provider = ScriptedProvider { flow {
+            val calls = when (round++) {
+                0 -> listOf(ToolCall("r1", "read", "{}"), ToolCall("w1", "write", """{"path":"a.txt"}"""))
+                1 -> listOf(ToolCall("w2", "write", """{"path":"b.txt"}"""))
+                2 -> listOf(ToolCall("w3", "write", """{"path":"c.txt"}"""))
+                else -> emptyList()
+            }
+            emit(ModelEvent.Completed(AgentMessage("assistant", if (calls.isEmpty()) "done" else null, toolCalls = calls), if (calls.isEmpty()) "stop" else "tool_calls"))
+        } }
+        val approvals = PendingApprovals()
+        val events = MemoryEvents()
+        val f = fixture(provider, tools, events, StandardTestDispatcher(testScheduler), approvals = approvals)
+        f.coordinator.send("work", ExecutionMode.WORKSPACE_EDIT)
+        runCurrent()
+        // Reads run; the write waits with its full arguments.
+        assertEquals("w1", approvals.request.value?.callId)
+        assertEquals("a.txt", approvals.request.value!!.arguments["path"]!!.jsonPrimitive.content)
+        approvals.decide(false); runCurrent()
+        assertTrue(written.isEmpty())
+        assertTrue(f.coordinator.state.value.messages.any { it.role == "tool" && it.toolCallId == "w1" && "DECLINED_BY_USER" in it.content.orEmpty() })
+        assertEquals("w2", approvals.request.value?.callId)
+        approvals.decide(true, restOfRun = true); advanceUntilIdle()
+        assertEquals(listOf("w2", "w3"), written, "the rest of this run goes through without asking")
+        // Every decision is journaled, the ones "the rest of this run" covered included.
+        assertEquals(listOf(false, true, true), events.records.filter { it.type == "tool.approval" }.map { it.payload["approved"]!!.jsonPrimitive.boolean })
+    }
+
+    @Test fun stoppingWhileAChangeWaitsForApprovalRestoresAsStopped() = runTest {
+        val events = MemoryEvents()
+        val tools = object : ToolExecutor {
+            override val specs = listOf(ToolSpec("write", "write", JsonObject(emptyMap()), ToolEffect.FILE_WRITE))
+            override suspend fun execute(call: ToolCall, context: ToolContext): ToolResult = error("a declined or stopped change never runs")
+        }
+        val provider = ScriptedProvider { flow { emit(ModelEvent.Completed(AgentMessage("assistant", toolCalls = listOf(ToolCall("w1", "write", "{}"))), "tool_calls")) } }
+        val approvals = PendingApprovals()
+        val running = fixture(provider, tools, events, StandardTestDispatcher(testScheduler), approvals = approvals)
+        running.coordinator.send("work", ExecutionMode.WORKSPACE_EDIT)
+        runCurrent()
+        assertEquals("w1", approvals.request.value?.callId)
+        running.coordinator.stop()
+        val restored = fixture(ScriptedProvider { error("no provider on restore") }, tools, events, StandardTestDispatcher(testScheduler)).coordinator
+        restored.restore()
+        assertEquals("cancelled", restored.state.value.status)
+        assertTrue(restored.state.value.messages.last { it.role == "tool" }.content.orEmpty().contains("nothing was written"))
+    }
+
+    @Test fun planModeOffersOnlyReadOnlyServerTools() = runTest {
+        val offered = mutableListOf<List<String>>()
+        val tools = object : ToolExecutor {
+            override val specs = listOf(ToolSpec("mcp__gh__search", "", JsonObject(emptyMap()), ToolEffect.READ), ToolSpec("mcp__gh__create_issue", "", JsonObject(emptyMap()), ToolEffect.EXTERNAL))
+            override suspend fun execute(call: ToolCall, context: ToolContext) = ToolResult(true)
+        }
+        val provider = ScriptedProvider { request -> offered += request.tools.map { it.name }; flow { emit(ModelEvent.Completed(AgentMessage("assistant", "ok"), "stop")) } }
+        val f = fixture(provider, tools, dispatcher = StandardTestDispatcher(testScheduler))
+        f.coordinator.send("plan", ExecutionMode.PLAN); advanceUntilIdle()
+        f.coordinator.send("edit", ExecutionMode.WORKSPACE_EDIT); advanceUntilIdle()
+        assertEquals(listOf(listOf("mcp__gh__search"), listOf("mcp__gh__search", "mcp__gh__create_issue")), offered)
+    }
+
+    @Test fun stoppingWhileOnlyAQuestionWaitsRestoresAsStopped() = runTest {
+        suspend fun stopWhileWaiting(calls: List<ToolCall>): RunState {
+            val events = MemoryEvents()
+            val waiting = CompletableDeferred<Unit>()
+            val tools = object : ToolExecutor {
+                override val specs = listOf(ToolSpec("ask_user", "ask", JsonObject(emptyMap()), ToolEffect.READ), ToolSpec("write", "write", JsonObject(emptyMap()), ToolEffect.FILE_WRITE))
+                override suspend fun execute(call: ToolCall, context: ToolContext): ToolResult {
+                    if (call.name != "ask_user") return ToolResult(true)
+                    waiting.complete(Unit); awaitCancellation()
+                }
+            }
+            val provider = ScriptedProvider { flow { emit(ModelEvent.Completed(AgentMessage("assistant", toolCalls = calls), "tool_calls")) } }
+            val running = fixture(provider, tools, events, StandardTestDispatcher(testScheduler))
+            running.coordinator.send("work", ExecutionMode.WORKSPACE_EDIT)
+            runCurrent()
+            assertTrue(waiting.isCompleted)
+            running.coordinator.stop()
+            val restored = fixture(ScriptedProvider { error("restore must not call the provider") }, tools, events, StandardTestDispatcher(testScheduler)).coordinator
+            restored.restore()
+            return restored.state.value
+        }
+        val question = ToolCall("q1", "ask_user", "{\"question\":\"A or B?\"}")
+        val stopped = stopWhileWaiting(listOf(question))
+        assertEquals("cancelled", stopped.status)
+        assertEquals(null, stopped.question)
+        assertTrue(stopped.messages.last { it.role == "tool" }.content.orEmpty().contains("CANCELLED"))
+        // A write in the same batch may have happened: its outcome stays unknown and nothing is settled.
+        val mixed = stopWhileWaiting(listOf(ToolCall("w1", "write", "{}"), question))
+        assertEquals("interrupted", mixed.status)
     }
 
     @Test fun repeatedErrorsSaveEveryBatchResultAndAllowManualContinuation() = runTest {
@@ -697,6 +824,35 @@ class AgentCoordinatorTest {
         assertEquals("idle", f.coordinator.state.value.status)
     }
 
+    @Test fun aNewMessageAfterAnInterruptedStepContinuesWithoutRepeatingIt() = runTest {
+        val entered = CompletableDeferred<Unit>()
+        var started = 0
+        val tools = RecordingTools().apply { onExecute = { started++; entered.complete(Unit); awaitCancellation() } }
+        val requests = mutableListOf<ModelRequest>()
+        val provider = ScriptedProvider { request -> flow {
+            requests += request
+            if (requests.size == 1) emit(ModelEvent.Completed(AgentMessage("assistant", toolCalls = listOf(ToolCall("pending", "write", "{}"))), "tool_calls"))
+            else emit(ModelEvent.Completed(AgentMessage("assistant", "Checked and continued."), "stop"))
+        } }
+        val events = MemoryEvents()
+        val f = fixture(provider, tools, events, StandardTestDispatcher(testScheduler))
+        f.coordinator.send("write", ExecutionMode.WORKSPACE_EDIT)
+        runCurrent()
+        entered.await()
+        f.coordinator.stop()
+        assertEquals("cancelled", f.coordinator.state.value.status)
+
+        f.coordinator.send("Продолжай", ExecutionMode.WORKSPACE_EDIT)
+        advanceUntilIdle()
+        assertEquals("completed", f.coordinator.state.value.status, f.coordinator.state.value.error)
+        assertEquals(1, started, "the interrupted call is not run again")
+        val sent = requests.last().messages
+        val unknown = sent.indexOfFirst { it.role == "tool" && it.toolCallId == "pending" }
+        assertTrue(unknown >= 0 && sent[unknown].content!!.contains("OUTCOME_UNKNOWN"))
+        assertTrue(unknown < sent.indexOfLast { it.role == "user" && it.content == "Продолжай" }, "the gap is closed before the new message")
+        assertTrue(events.records.any { it.type == "run.recovered" })
+    }
+
     @Test fun stoppingDuringStreamCancelsRoundBeforeAnyToolExecution() = runTest {
         val started = CompletableDeferred<Unit>()
         val tools = RecordingTools()
@@ -831,6 +987,29 @@ class AgentCoordinatorTest {
         assertTrue(f.coordinator.state.value.usageIncomplete)
     }
 
+    @Test fun taskTimeLimitFollowsTheSettingAndCanBeLifted() = runTest {
+        val provider = ScriptedProvider { _ -> flow {
+            kotlinx.coroutines.delay(25 * 60_000L)
+            emit(ModelEvent.Completed(AgentMessage("assistant", "late but done"), "stop"))
+        } }
+        val longer = fixture(provider, dispatcher = StandardTestDispatcher(testScheduler), maxRunMinutes = 30)
+        longer.coordinator.send("work", ExecutionMode.WORKSPACE_EDIT)
+        advanceUntilIdle()
+        assertEquals("completed", longer.coordinator.state.value.status, "25 minutes fit into a 30-minute limit")
+        val unlimited = fixture(ScriptedProvider { _ -> flow {
+            kotlinx.coroutines.delay(5 * 60 * 60_000L)
+            emit(ModelEvent.Completed(AgentMessage("assistant", "done"), "stop"))
+        } }, dispatcher = StandardTestDispatcher(testScheduler), maxRunMinutes = 0)
+        unlimited.coordinator.send("work", ExecutionMode.WORKSPACE_EDIT)
+        advanceUntilIdle()
+        assertEquals("completed", unlimited.coordinator.state.value.status, "no limit: five hours are fine")
+        val shorter = fixture(provider, dispatcher = StandardTestDispatcher(testScheduler), maxRunMinutes = 20)
+        shorter.coordinator.send("work", ExecutionMode.WORKSPACE_EDIT)
+        advanceUntilIdle()
+        assertEquals("failed", shorter.coordinator.state.value.status)
+        assertTrue(shorter.coordinator.state.value.error.orEmpty().contains("20 мин"))
+    }
+
     @Test fun taskDeadlineIsNotReportedAsUserCancellation() = runTest {
         val provider = ScriptedProvider { _ -> flow {
             kotlinx.coroutines.delay(601_000)
@@ -841,7 +1020,7 @@ class AgentCoordinatorTest {
         f.coordinator.send("work", ExecutionMode.WORKSPACE_EDIT)
         advanceUntilIdle()
         assertEquals("failed", f.coordinator.state.value.status)
-        assertTrue(f.coordinator.state.value.error.orEmpty().contains("10 минут"))
+        assertTrue(f.coordinator.state.value.error.orEmpty().contains("10 мин"))
         assertTrue(events.records.none { it.type == "run.cancelled" })
         assertTrue(events.records.any { it.type == "run.failed" })
     }
@@ -948,10 +1127,12 @@ class AgentCoordinatorTest {
         contextWindow: Int? = null,
         maxOutputTokens: Int = 4096,
         thinking: Boolean = false,
+        approvals: ApprovalGate? = null,
+        maxRunMinutes: Int = 10,
     ): Fixture {
         val scope = CoroutineScope(SupervisorJob() + dispatcher)
         val processes = RecordingProcesses()
-        return Fixture(AgentCoordinator(provider, tools, eventStore, processes, "session", model, thinking = thinking, projectInstructions = instructions, traces = traces, scope = scope, contextWindowTokens = contextWindow, maxOutputTokens = maxOutputTokens), processes)
+        return Fixture(AgentCoordinator(provider, tools, eventStore, processes, "session", model, thinking = thinking, projectInstructions = instructions, traces = traces, scope = scope, contextWindowTokens = contextWindow, maxOutputTokens = maxOutputTokens, approvals = approvals, maxRunMinutes = maxRunMinutes), processes)
     }
 
     private data class Fixture(val coordinator: AgentCoordinator, val processes: RecordingProcesses)

@@ -1,5 +1,6 @@
 package dev.chiller.app.di
 
+import dev.chiller.app.i18n.*
 import dev.chiller.agent.ModelProfile
 import dev.chiller.agent.ModelProfiles
 import dev.chiller.contracts.ProviderModel
@@ -26,6 +27,24 @@ fun imageModelFor(options: AgentOptions, catalog: ModelCatalogState): ProviderMo
     "off" -> null
     "auto" -> catalog.models.firstOrNull { it.imageGeneration == true }
     else -> catalog.entry(choice) ?: ProviderModel(choice)
+}
+
+/** Where generate_image goes: the endpoint chosen for images, else the chat endpoint. */
+fun imageEndpoint(settings: DesktopSettings): String = settings.agent.imageBaseUrl.ifBlank { settings.baseUrl }
+
+/** The models generate_image picks from: the live chat catalog on the chat endpoint, else the one cached for the image endpoint. */
+fun imageCatalog(settings: DesktopSettings, catalog: ModelCatalogState): ModelCatalogState {
+    val endpoint = normalizeEndpoint(imageEndpoint(settings))
+    if (endpoint == normalizeEndpoint(settings.baseUrl)) return catalog
+    return settings.modelCatalogs[endpoint]?.let { ModelCatalogState("ready", it.models, fetchedAt = it.fetchedAt) } ?: ModelCatalogState()
+}
+
+/** Other endpoints whose cached catalog lists an image model, as (url, name); the chosen one stays even if its cache is gone. */
+fun imageProviderChoices(settings: DesktopSettings): List<Pair<String, String>> {
+    val chat = normalizeEndpoint(settings.baseUrl)
+    val listed = settings.modelCatalogs.filter { (endpoint, cached) -> endpoint != chat && cached.models.any { it.imageGeneration == true } }.keys
+    val chosen = settings.agent.imageBaseUrl.takeIf { it.isNotBlank() && normalizeEndpoint(it) != chat }?.let(::normalizeEndpoint)
+    return (listed + listOfNotNull(chosen)).distinct().map { url -> url to (ProviderPresets.byOrigin(url, settings.customProviders)?.name ?: url) }
 }
 
 /** The catalog entry for a model id, if the endpoint listed it. */
@@ -55,9 +74,9 @@ fun parseRequestExtras(text: String): JsonObject? =
 fun validateRequestExtras(text: String): String? {
     val trimmed = text.trim()
     if (trimmed.isEmpty()) return null
-    if (trimmed.length > 4000) return "Не больше 4000 символов"
-    val parsed = runCatching { Json.parseToJsonElement(trimmed) }.getOrNull() ?: return "Это не JSON"
-    val obj = parsed as? JsonObject ?: return "Нужен JSON-объект {…}"
+    if (trimmed.length > 4000) return I18n.current.di.extrasTooLong
+    val parsed = runCatching { Json.parseToJsonElement(trimmed) }.getOrNull() ?: return I18n.current.di.extrasNotJson
+    val obj = parsed as? JsonObject ?: return I18n.current.di.extrasNotObject
     val reserved = obj.keys.filter { it in RESERVED_REQUEST_FIELDS }
-    return if (reserved.isNotEmpty()) "Служебные поля игнорируются: ${reserved.joinToString()}" else null
+    return if (reserved.isNotEmpty()) I18n.current.di.extrasReservedPrefix + reserved.joinToString() else null
 }

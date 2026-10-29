@@ -1,5 +1,6 @@
 package dev.chiller.app
 
+import dev.chiller.app.i18n.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.Density
@@ -25,6 +26,8 @@ import java.awt.Frame
 import javax.swing.JFileChooser
 
 fun main() {
+    // Before any client asks for the default proxy selector: every request follows the proxy settings.
+    dev.chiller.app.di.NetworkProxy.install()
     // The JDK's java.net.http clients (web tools) trust the system certificate store as the provider clients do.
     javax.net.ssl.SSLContext.setDefault(dev.chiller.providers.SystemTrust.sslContext)
     chillerApplication()
@@ -48,6 +51,21 @@ private fun chillerApplication() = application {
         value = dev.chiller.app.di.UiPreferencesStore(directory).load()
     }
     val initialPreferences = savedPreferences ?: return@application
+    // One language for the whole app: composables read LocalStrings (ChillerApp provides it), other code I18n.current.
+    val strings = stringsFor(Language.fromId(state.uiPreferences.language))
+    SideEffect { I18n.current = strings; dev.chiller.contracts.CoreLanguage.russian = strings.language == Language.RU }
+    // Background news reach the system while the window is not in focus; the tray icon exists only while they are on.
+    val trayState = rememberTrayState()
+    val raise = remember { MutableSharedFlow<String?>(extraBufferCapacity = 4) }
+    var lastNotice by remember { mutableStateOf<String?>(null) }
+    if (!preview && state.uiPreferences.systemNotifications && isTraySupported) Tray(
+        icon = androidx.compose.ui.res.painterResource("chiller-icon.png"), state = trayState, tooltip = "Chiller",
+        onAction = { raise.tryEmit(lastNotice) },
+        menu = {
+            Item(strings.app.openChiller) { raise.tryEmit(null) }
+            Item(strings.app.quit) { scope.launch { controller.close(); exitApplication() } }
+        },
+    )
     val windowState = rememberWindowState(
         width = (if (preview) System.getenv("CHILLER_PREVIEW_WIDTH")?.toIntOrNull()?.coerceIn(800, 1800)?.toFloat() ?: 1280f else initialPreferences.windowWidth).dp,
         height = (if (preview) System.getenv("CHILLER_PREVIEW_HEIGHT")?.toIntOrNull()?.coerceIn(600, 1200)?.toFloat() ?: 860f else initialPreferences.windowHeight).dp,
@@ -90,6 +108,35 @@ private fun chillerApplication() = application {
         }
         val macTitleBar = remember(mac) { if (!mac) null else TitleBarSpec(dragArea = { modifier -> WindowDraggableArea(modifier) { androidx.compose.foundation.layout.Box(androidx.compose.ui.Modifier.fillMaxSize()) } }) }
         // A finished task while the window is in the background asks for attention once (Dock bounce / taskbar flash).
+        // Clicking the system notification or the tray icon brings the window back, with the dialog the news was about.
+        LaunchedEffect(Unit) {
+            raise.collect { sessionId ->
+                if (windowState.isMinimized) windowState.isMinimized = false
+                window.toFront(); window.requestFocus()
+                if (sessionId != null) controller.selectSession(sessionId)
+            }
+        }
+        var announced by remember { mutableStateOf(emptySet<String>()) }
+        LaunchedEffect(state.notices) {
+            val fresh = state.notices.filter { it.id !in announced }
+            announced = state.notices.map { it.id }.toSet()
+            if (preview || !state.uiPreferences.systemNotifications || window.isActive) return@LaunchedEffect
+            fresh.lastOrNull()?.let { notice ->
+                lastNotice = notice.sessionId
+                val type = when (notice.tone) { "negative" -> Notification.Type.Error; "attention" -> Notification.Type.Warning; else -> Notification.Type.Info }
+                trayState.sendNotification(Notification(notice.title, notice.message, type))
+            }
+        }
+        // A background dialog finishing does the same.
+        var backgroundRuns by remember { mutableStateOf(emptySet<String>()) }
+        LaunchedEffect(state.runningSessions) {
+            val finished = backgroundRuns - state.runningSessions - state.sessionId
+            if (finished.isNotEmpty() && !window.isActive) runCatching {
+                if (java.awt.Taskbar.isTaskbarSupported() && java.awt.Taskbar.getTaskbar().isSupported(java.awt.Taskbar.Feature.USER_ATTENTION))
+                    java.awt.Taskbar.getTaskbar().requestUserAttention(true, false)
+            }
+            backgroundRuns = state.runningSessions
+        }
         var wasActive by remember { mutableStateOf(false) }
         LaunchedEffect(active, state.run.status) {
             if (wasActive && !active && state.run.status in setOf("completed", "failed") && !window.isActive) runCatching {
@@ -105,29 +152,30 @@ private fun chillerApplication() = application {
             Unit
         }
         val menu = listOf(
-            AppMenuSection("Файл", listOf(
+            AppMenuSection(strings.app.menuFile, listOf(
                 listOf(
-                    AppMenuItem("Новый диалог", Key.N, "N", enabled = !active) { actions.tryEmit(DesktopAction.NEW_CHAT) },
-                    AppMenuItem("Открыть проект…", Key.O, "O", enabled = !active, onClick = chooseWorkspace),
-                    AppMenuItem("Закрыть проект", enabled = !active && state.settings.workspace != null) { scope.launch { controller.closeWorkspace() } },
+                    // A running dialog goes on in the background, so these stay available.
+                    AppMenuItem(strings.app.menuNewDialog, Key.N, "N") { actions.tryEmit(DesktopAction.NEW_CHAT) },
+                    AppMenuItem(strings.app.menuOpenProject, Key.O, "O", onClick = chooseWorkspace),
+                    AppMenuItem(strings.app.menuCloseProject, enabled = state.settings.workspace != null) { scope.launch { controller.closeWorkspace() } },
                 ),
                 listOf(
-                    AppMenuItem("Экспорт Markdown…", enabled = !active && state.run.messages.isNotEmpty()) { scope.launch { controller.prepareExport("markdown") } },
-                    AppMenuItem("Экспорт JSON…", enabled = !active && state.run.messages.isNotEmpty()) { scope.launch { controller.prepareExport("json") } },
+                    AppMenuItem(strings.app.menuExportMarkdown, enabled = !active && state.run.messages.isNotEmpty()) { scope.launch { controller.prepareExport("markdown") } },
+                    AppMenuItem(strings.app.menuExportJson, enabled = !active && state.run.messages.isNotEmpty()) { scope.launch { controller.prepareExport("json") } },
                 ),
-                listOf(AppMenuItem("Настройки…", Key.Comma, ",", enabled = !active) { actions.tryEmit(DesktopAction.SETTINGS) }),
+                listOf(AppMenuItem(strings.app.menuSettings, Key.Comma, ",", enabled = !active) { actions.tryEmit(DesktopAction.SETTINGS) }),
             )),
-            AppMenuSection("Диалог", listOf(listOf(
-                AppMenuItem("Отправить", Key.Enter, "↵", enabled = !active) { actions.tryEmit(DesktopAction.SEND) },
-                AppMenuItem("Остановить", Key.Period, ".", enabled = active) { actions.tryEmit(DesktopAction.STOP) },
+            AppMenuSection(strings.app.menuDialog, listOf(listOf(
+                AppMenuItem(strings.app.menuSend, Key.Enter, "↵", enabled = !active) { actions.tryEmit(DesktopAction.SEND) },
+                AppMenuItem(strings.app.menuStop, Key.Period, ".", enabled = active) { actions.tryEmit(DesktopAction.STOP) },
             ))),
-            AppMenuSection("Вид", listOf(listOf(
+            AppMenuSection(strings.app.menuView, listOf(listOf(
                 AppMenuItem("Focus") { actions.tryEmit(DesktopAction.FOCUS) },
                 AppMenuItem("Studio") { actions.tryEmit(DesktopAction.STUDIO) },
-                AppMenuItem("Боковая панель") { actions.tryEmit(DesktopAction.SIDEBAR) },
+                AppMenuItem(strings.app.menuSidebar) { actions.tryEmit(DesktopAction.SIDEBAR) },
             ))),
-            AppMenuSection("Инструменты", listOf(listOf(AppMenuItem("Сравнение моделей", enabled = !active) { actions.tryEmit(DesktopAction.COMPARE) }))),
-            AppMenuSection("Справка", listOf(listOf(AppMenuItem("Демо: все инструменты", enabled = !active) { scope.launch { controller.startDemo() } }))),
+            AppMenuSection(strings.app.menuTools, listOf(listOf(AppMenuItem(strings.app.menuCompare, enabled = !active) { actions.tryEmit(DesktopAction.COMPARE) }))),
+            AppMenuSection(strings.app.menuHelp, listOf(listOf(AppMenuItem(strings.app.menuDemo, enabled = !active) { scope.launch { controller.startDemo() } }))),
         )
         // Windows on the JetBrains Runtime: the app draws its own title bar under the native caption buttons, and the menu
         // moves into the toolbar. Anywhere else the system frame and menu bar stay.
@@ -164,6 +212,30 @@ private fun chillerApplication() = application {
             onRevealFile = { path -> scope.launch { controller.revealFile(path) } },
             onDeleteMessage = controller::deleteMessage,
             onRecoverInterrupted = { scope.launch { controller.recoverInterrupted() } },
+            onContinueElsewhere = { chooseDirectory(window, null, mac)?.let { path -> controller.continueInFolder(path) } },
+            editApproval = dev.chiller.app.ui.EditApproval(state.settings.confirmEdits, { value -> scope.launch { controller.setConfirmEdits(value) } }, controller::decideApproval,
+                web = state.settings.agent.allowNetwork, onWeb = { value -> scope.launch { controller.updateAgentOptions(state.settings.agent.copy(allowNetwork = value)) } }),
+            onSearchMessages = controller::searchMessages,
+            notices = state.notices, onOpenNotice = { notice -> scope.launch { controller.selectSession(notice.sessionId) } }, onDismissNotice = controller::dismissNotice,
+            projects = dev.chiller.app.ui.ProjectsModel(
+                pinned = state.settings.pinnedWorkspaces, hidden = state.settings.hiddenWorkspaces,
+                folderLocked = state.folderLocked, workspaceMissing = state.workspaceMissing,
+                excluded = controller::isAppFolder,
+                running = state.runningSessions, waiting = state.waitingSessions, unread = state.unreadSessions,
+                origins = state.sessionOrigins, worktree = state.worktree,
+                onIsolate = { scope.launch { controller.isolateInWorktree() } },
+                worktreeChanges = { controller.worktreeChanges() }, onApplyWorktree = { controller.applyWorktree() },
+                onRemoveWorktree = { scope.launch { controller.removeWorktree() } },
+                onStop = { id -> scope.launch { controller.stopSession(id) } },
+                onNewIn = { root -> scope.launch { controller.newSessionIn(root) } },
+                onPin = { root, pinned -> scope.launch { controller.pinWorkspace(root, pinned) } },
+                onRemove = { root -> scope.launch { controller.removeRecentWorkspace(root) } },
+                onReveal = { root -> runCatching { java.awt.Desktop.getDesktop().open(java.io.File(root)) } },
+                onRelocate = { root ->
+                    val parent = generateSequence(java.io.File(root)) { it.parentFile }.firstOrNull { it.isDirectory }?.path
+                    chooseDirectory(window, parent, mac)?.let { path -> scope.launch { controller.relocateWorkspace(root, path) } }
+                },
+            ),
             onEditMessage = controller::editMessage,
             onStop = { scope.launch { controller.stop() } },
             onNewSession = { scope.launch { controller.newSession() } },
@@ -179,8 +251,10 @@ private fun chillerApplication() = application {
                 captureTargets = state.captureTargets, selectedCaptureTarget = state.selectedCaptureTarget, screenshotSupported = controller.screenshotSupported,
                 workspace = state.settings.workspace, verifyCommand = state.settings.workspace?.let { state.settings.verifyCommands[it] }.orEmpty(),
                 suggestedVerifyCommand = state.settings.workspace?.let { root -> runCatching { dev.chiller.app.di.suggestVerifyCommand(java.nio.file.Path.of(root)) }.getOrNull() },
-                agent = state.settings.agent, customProviders = state.settings.customProviders,
-                costBudget = state.settings.costBudget, imageModel = dev.chiller.app.di.imageModelFor(state.settings.agent, state.catalog)?.id, recent = state.settings.recentWorkspaces, dataDir = controller.dataDirectory().toString(), demoCount = demoCount,
+                agent = state.settings.agent, customProviders = state.settings.customProviders, proxy = state.settings.proxy,
+                mcpServers = state.settings.mcpServers, mcpStates = state.mcp,
+                costBudget = state.settings.costBudget, imageModel = dev.chiller.app.di.imageModelFor(state.settings.agent, dev.chiller.app.di.imageCatalog(state.settings, state.catalog))?.id,
+                imageCatalog = dev.chiller.app.di.imageCatalog(state.settings, state.catalog), imageProviders = dev.chiller.app.di.imageProviderChoices(state.settings), recent = state.settings.recentWorkspaces, dataDir = controller.dataDirectory().toString(), demoCount = demoCount,
                 version = dev.chiller.app.di.BuildInfo.displayVersion, build = dev.chiller.app.di.BuildInfo.build, commit = dev.chiller.app.di.BuildInfo.commit,
                 runtime = dev.chiller.app.di.BuildInfo.runtime, os = dev.chiller.app.di.BuildInfo.os,
             ),
@@ -199,7 +273,9 @@ private fun chillerApplication() = application {
                 saveCredential = { scope.launch { controller.saveCredential() } },
                 saveCustomProvider = { provider, key, done -> scope.launch { done(controller.saveCustomProvider(provider, key)) } },
                 deleteCustomProvider = { id -> scope.launch { controller.deleteCustomProvider(id) } },
+                saveMcpServers = { servers, done -> scope.launch { done(controller.saveMcpServers(servers)) } },
                 costBudget = { budget, done -> scope.launch { done(controller.updateCostBudget(budget)) } },
+                saveProxy = { proxy, done -> scope.launch { done(controller.updateProxy(proxy)) } },
                 deleteCredential = { scope.launch { controller.deleteCredential() } },
                 agent = { options -> scope.launch { controller.updateAgentOptions(options) } },
                 setVerifyCommand = { root, command -> controller.setVerifyCommand(root, command) },
@@ -210,7 +286,7 @@ private fun chillerApplication() = application {
                 openUrl = { url -> runCatching { java.awt.Desktop.getDesktop().browse(java.net.URI(url)) } },
                 deleteDemos = { scope.launch { controller.deleteDemoProjects(); demoCount = controller.demoProjectCount() } },
             ),
-            titleBar = titleBar, buildStamp = BuildStamp.value,
+            titleBar = titleBar, buildStamp = BuildStamp.value, paletteMenu = menu,
             onOpenTrace = {
                 val trace = controller.tracePath(state.sessionId).toFile()
                 runCatching {
@@ -228,6 +304,7 @@ private fun chillerApplication() = application {
             actions = actions,
             preferences = state.uiPreferences, onPreferences = { scope.launch { controller.updateUiPreferences(it) } },
             models = controller.configuredModels(), onSelectModel = controller::selectModel,
+            providers = controller.pickerProviders(), onSelectProviderModel = controller::selectProviderModel,
             onRenameSession = controller::renameSession,
             onPreviewDeleteSession = controller::previewSessionDeletion,
             onDeleteSession = controller::deleteSession,
@@ -238,7 +315,7 @@ private fun chillerApplication() = application {
             onDismissExport = controller::dismissExport,
             onSaveExport = {
                 val extension = if (state.exportFormat == "json") "json" else "md"
-                val picker = FileDialog(window, "Сохранить экспорт", FileDialog.SAVE)
+                val picker = FileDialog(window, I18n.current.app.saveExport, FileDialog.SAVE)
                 picker.file = "chiller-${(state.exportSessionId ?: state.sessionId).take(8)}.$extension"
                 picker.isVisible = true
                 val path = picker.files.firstOrNull()?.toPath()
@@ -260,7 +337,7 @@ private fun chooseDirectory(owner: Frame, current: String?, mac: Boolean): Path?
     val previous = System.getProperty(key)
     return try {
         System.setProperty(key, "true")
-        val picker = FileDialog(owner, "Открыть проект", FileDialog.LOAD)
+        val picker = FileDialog(owner, I18n.current.app.openProject, FileDialog.LOAD)
         picker.directory = current ?: System.getProperty("user.home")
         picker.isVisible = true
         val result = picker.files.firstOrNull()?.toPath()

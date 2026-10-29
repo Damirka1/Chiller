@@ -2,81 +2,85 @@
 
 # Chiller
 
-**Desktop-агент для работы с кодом через локальные и облачные модели.**
+**English** · [Русский](README.ru.md)
 
-Рабочий preview: возможности активно развиваются, изменения требуют проверки.
+**A desktop coding agent for local and cloud models.**
 
-Kotlin · Compose Desktop · OpenAI-совместимые API · macOS и Windows
+Working preview: features are evolving quickly, and changes need review.
 
-[Скачать релиз](https://github.com/Damirka1/Chiller/releases) · [Быстрый старт](#быстрый-старт) · [Почему Chiller](#почему-chiller) · [Подробности](docs/USAGE.md)
+Kotlin · Compose Desktop · OpenAI-compatible APIs · macOS and Windows
 
-<img src="docs/images/focus-light.png" alt="Chiller: режим Focus, светлая тема" width="900">
+[Download a release](https://github.com/Damirka1/Chiller/releases) · [Quick start](#quick-start) · [Why Chiller](#why-chiller) · [Details](docs/USAGE.md)
+
+<img src="docs/images/focus-light.png" alt="Chiller: Focus mode, light theme" width="900">
 
 </div>
 
-Chiller — настольное приложение, в котором модель работает с вашим проектом через точные инструменты: ищет, читает фрагменты, правит по снимкам файлов, запускает проверки и отчитывается. Главная цель — чтобы **модель на 4–30B параметров на вашем vLLM / Ollama / LM Studio** решала реальные задачи надёжно и быстро, а не только большие облачные модели.
+Chiller is a desktop app in which a model works on your project through precise tools: it searches, reads fragments, edits against file snapshots, runs checks and reports back. The main goal is for a **4–30B model on your own vLLM / Ollama / LM Studio** to solve real tasks reliably and fast, not only large cloud models.
 
-## Почему Chiller
+> The app and the documentation are available in English and Russian; the interface language is chosen in Settings → Appearance.
 
-Chiller позволяет выбирать полный или компактный набор инструментов и ограничивать контекст. Цель — уменьшить число лишних чтений и упростить работу небольших моделей. Эффект зависит от модели и задачи.
+## Why Chiller
 
-### Быстрее: меньше раундов и токенов
+Chiller lets you choose a full or a compact tool set and bound the context. The aim is fewer wasted reads and an easier job for small models. The effect depends on the model and the task.
 
-| Что | Как это сделано | Эффект (живые замеры, DeepSeek V4.1 Flash) |
+### Faster: fewer rounds and tokens
+
+| What | How | Effect (live measurements, DeepSeek V4.1 Flash) |
 |---|---|---|
-| **Компактный профиль** для небольших моделей | 17 базовых инструментов в текущей версии (с дозаписью, удалением и переносом файлов), короткий пошаговый промпт, один вызов за шаг, temperature 0.2; для Gemma — рекомендованные Google temperature 1.0, top_p 0.95, top_k 64 | В раннем профиле с 11 инструментами: 13/13 задач при **~146k** токенов промпта против **~235k** у полного профиля — **на 38% меньше** |
-| **Карта проекта** в контексте с первого раунда | файлы по папкам и их объявления верхнего уровня, в пределах 3000 символов | 14/14 в обоих случаях; раундов **67 → 56 (−16%)**, вызовов инструментов 78 → 61, время 120 → 108 с; задачи «найди, где в коде…» — за 2 раунда вместо 4 |
-| **Правки без перечитывания** | `edit_file` возвращает новый `snapshot_id`, следующие правки того же файла идут без повторного `read_file` | меньше раундов на многошаговых правках |
-| **Параллельное чтение** | независимые READ-вызовы выполняются одновременно, изменения — строго по порядку | несколько файлов за один раунд |
-| **Стабильный префикс** | системная часть запроса не меняется между раундами | кэш провайдера: в замерах до 80% промпта приходит из кэша |
-| **Чтение фрагментами** | `find_symbols` даёт строку определения, `read_file` читает диапазон, `search_text` — компактные `path:line` | в контекст попадает нужный кусок, а не файл целиком |
+| **Compact profile** for small models | 17 core tools in the current version (including append, delete and move), a short step-by-step prompt, one call per step, temperature 0.2; for Gemma, Google's recommended temperature 1.0, top_p 0.95, top_k 64 | In an early 11-tool profile: 13/13 tasks with **~146k** prompt tokens versus **~235k** for the full profile, **38% fewer** |
+| **Project map** in context from the first round | files by folder and their top-level declarations, within 3000 characters | 14/14 in both cases; rounds **67 → 56 (−16%)**, tool calls 78 → 61, time 120 → 108 s; "find where in the code…" tasks take 2 rounds instead of 4 |
+| **Edits without re-reading** | `edit_file` returns a new `snapshot_id`, so later edits of the same file skip another `read_file` | fewer rounds on multi-step edits |
+| **Parallel reads** | independent READ calls run at once, changes run strictly in order | several files in one round |
+| **Stable prefix** | the system part of the request does not change between rounds | provider cache: in measurements up to 80% of the prompt came from cache |
+| **Reading in fragments** | `find_symbols` gives the definition line, `read_file` reads a range, `search_text` returns compact `path:line` | the context gets the relevant piece, not the whole file |
 
-Замеры выше — отдельные небольшие прогоны на DeepSeek, а не статистическая гарантия и не проверка локальных моделей. Набор и версия профиля менялись между прогонами.
+The numbers above come from separate small runs on DeepSeek. They are not a statistical guarantee and not a test of local models. The profile's tool set and version changed between runs.
 
-### Надёжнее: инструменты, в которых трудно ошибиться
+### More reliable: tools that are hard to misuse
 
-- **Снимки вместо слепой записи.** Правка существующего файла ссылается на `snapshot_id` прочитанной версии. Если файл изменился, инструмент вернёт `STALE_SNAPSHOT`, а не перезапишет чужие изменения.
-- **Никакого «примерного» применения.** `replace_text` требует точного совпадения и ожидаемого числа вхождений; частичные или невалидные аргументы не исполняются.
-- **Структурированные ошибки с подсказкой.** Каждая ошибка содержит код и `recovery`-подсказку, а три одинаковые ошибки подряд останавливают цикл вместо бесконечного повтора.
-- **Проверка до «готово».** При включённых автопроверке и разрешении процессов запускается настроенная команда проекта после правок и возвращает агенту вывод упавших тестов.
-- **Итог хода из фактов, а не из слов модели.** Карточка в конце хода собирается из журнала: изменённые файлы, команды с кодами выхода, показанные файлы. Она отдельно подсвечивает упавшую и не перезапущенную проверку, непрочитанный результат, неприменившуюся правку и отсутствие подтверждённых команд проверки.
-- **Отмена по ходу.** Изменения файловых инструментов можно откатить по ходу диалога, если текущее состояние допускает восстановление. Файлы, которые за ход изменили команды или вы сами, показываются отдельно: откат их не вернёт, обнаружение таких изменений ограничено размером снимка и проверяемых файлов.
-- **Измеряемые потери.** Встроенные eval-задачи считают не только pass rate, но и повторные чтения, неудачные правки и объём вывода инструментов в контексте, чтобы улучшения были доказаны цифрами.
+- **Snapshots instead of blind writes.** An edit of an existing file refers to the `snapshot_id` of the version that was read. If the file changed, the tool returns `STALE_SNAPSHOT` instead of overwriting someone else's changes.
+- **No "approximate" application.** `replace_text` needs an exact match and the expected number of occurrences; partial or invalid arguments are not executed.
+- **Structured errors with a hint.** Every error has a code and a `recovery` hint, and three identical errors in a row stop the loop instead of repeating forever.
+- **Checks before "done".** With auto-verify and process permission on, the project's configured command runs after edits and returns the output of failing tests to the agent.
+- **Turn results from facts, not from the model's words.** The card at the end of a turn is built from the journal: changed files, commands with exit codes, presented files. It separately highlights a failed check that was not rerun, an unread result, an edit that did not apply, and the absence of confirmed check commands.
+- **Undo as you go.** Changes made by file tools can be rolled back during the dialog when the current state allows restoring. Files changed during the turn by commands or by you are listed separately: undo does not bring them back, and detecting such changes is bounded by the snapshot size and the files checked.
+- **Measured waste.** The built-in eval tasks count not only the pass rate but also repeated reads, failed edits and the amount of tool output in context, so improvements are backed by numbers.
 
-## Скриншоты
+## Screenshots
 
 <table>
 <tr>
-<td width="50%"><img src="docs/images/focus-dark.png" alt="Focus, тёмная тема"><br><sub><b>Focus</b> — диалог, сгруппированные вызовы инструментов, живой чек-лист плана под сообщениями.</sub></td>
-<td width="50%"><img src="docs/images/studio-dark.png" alt="Studio"><br><sub><b>Studio</b> — инспектор: диффы, процессы, помощники, токены и раунды.</sub></td>
+<td width="50%"><img src="docs/images/focus-dark.png" alt="Focus, dark theme"><br><sub><b>Focus</b>: the dialog, grouped tool calls, a live plan checklist under the messages.</sub></td>
+<td width="50%"><img src="docs/images/studio-dark.png" alt="Studio"><br><sub><b>Studio</b>: the inspector with diffs, processes, helpers, tokens and rounds.</sub></td>
 </tr>
 <tr>
-<td width="50%"><img src="docs/images/settings-light.png" alt="Настройки агента"><br><sub><b>Профиль модели</b> — авто по ID, набор инструментов, vision, temperature и поля запроса для vLLM.</sub></td>
-<td width="50%"><img src="docs/images/focus-light.png" alt="Focus, светлая тема"><br><sub><b>Светлая тема</b> — собственная дизайн-система, на общих компонентах Chiller.</sub></td>
+<td width="50%"><img src="docs/images/settings-light.png" alt="Agent settings"><br><sub><b>Model profile</b>: auto by ID, tool set, vision, temperature and request fields for vLLM.</sub></td>
+<td width="50%"><img src="docs/images/focus-light.png" alt="Focus, light theme"><br><sub><b>Light theme</b>: Chiller's own design system on shared components.</sub></td>
 </tr>
 </table>
 
-Скриншоты рендерятся из настоящего приложения и настоящего цикла агента на демо-проекте: `./gradlew :app-desktop:readmeShots`.
+The screenshots are rendered from the real app and the real agent loop on a demo project: `./gradlew :app-desktop:readmeShots`.
 
-## Возможности
+## Features
 
-- **OpenAI-совместимые провайдеры**: готовые пресеты для vLLM, Ollama, LM Studio, DeepSeek, OpenAI, OpenRouter, Gemini, Groq, Mistral, xAI, Together, Fireworks. Ключ привязан к origin; его можно явно сохранить в Keychain на macOS или в Диспетчер учётных данных Windows. Совместимость каждого пресета отдельно не подтверждена.
-- **Профили моделей**: «Полный» для больших моделей, «Компактный» для небольших, «Авто» выбирает по ID (например, `gemma-4-26b-a4b` → компактный), а для псевдонимов шлюза — по названию из каталога (`quasar` с названием «Gemma 4 26B A4B» → компактный). Gemma по ID или названию получает рекомендованный сэмплинг (temperature 1.0, top_p 0.95, top_k 64); выбранная вами temperature и дополнительные поля запроса важнее, `null` в них убирает поле, которое сервер не принимает. Если каталог не называет модель (псевдоним с названием вроде «Quasar»), профиль и temperature выбираются вручную.
-- **Vision**: картинки из буфера и файлов уходят модели, которая их понимает, уменьшенными и только с последними сообщениями.
-- **Генерация картинок**: если каталог провайдера содержит модель изображений (например, Flux 2 Klein), агент получает `generate_image` — рисует новую картинку или правит вложенную/из проекта и сохраняет её новым файлом с превью и откатом.
-- **Свой провайдер**: шлюз компании или домашний сервер добавляется в настройках с именем, адресом и переменной ключа из `.env`; хранится только в настройках этого компьютера.
-- **Фоновая подготовка вложений**: карточка показывает подготовку, кодирование идёт в фоне; текст больше 5 KiB превращается в файл-вложение. Задержка системного clipboard зависит от ОС и формата; [замеры](docs/PASTE_BENCHMARK.md) не включают время до первой отрисовки.
-- **Помощники**: read-only субагенты для параллельных исследований с общим бюджетом запросов и токенов.
-- **Режимы**: План (без записи и процессов), Изменения, отдельные разрешения на процессы, интернет и снимок окна.
-- **Сравнение моделей** прямо в приложении: одни и те же задачи, pass rate, время, токены и потери рядом.
-- **Журнал**: каждое действие пишется в append-only журнал, `run.summary` фиксирует раунды, вызовы, ошибки, время и usage провайдера. После сбоя побочные действия не повторяются автоматически.
-- **Экспорт** в Markdown/JSON, история диалогов, переименование, редактирование и откат ходов.
+- **OpenAI-compatible providers**: presets for vLLM, Ollama, LM Studio, DeepSeek, OpenAI, OpenRouter, Gemini, Groq, Mistral, xAI, Together, Fireworks. A key is bound to its origin; you can explicitly save it to the macOS Keychain or the Windows Credential Manager. Compatibility of each preset has not been confirmed separately.
+- **Model profiles**: "Full" for large models, "Compact" for small ones; "Auto" chooses by ID (for example, `gemma-4-26b-a4b` → compact) and, for gateway aliases, by the name in the catalog (`quasar` named "Gemma 4 26B A4B" → compact). Gemma by ID or name gets the recommended sampling (temperature 1.0, top_p 0.95, top_k 64); a temperature you choose and extra request fields take priority, and `null` in them removes a field the server does not accept. If the catalog does not name the model (an alias named like "Quasar"), choose the profile and temperature by hand.
+- **Vision**: images from the clipboard and from files go to a model that understands them, downscaled and only with the latest messages.
+- **Image generation**: if the provider's catalog has an image model (for example, Flux 2 Klein), the agent gets `generate_image`. It draws a new picture or edits an attached or project picture and saves the result as a new file with a preview and undo. Images can be drawn through a different connected provider than the chat.
+- **Your own provider**: a company gateway or a home server (HTTP or HTTPS, for example llama.cpp on your local network) is added in settings with a name, an address and a key variable from `.env`; it is stored only in this computer's settings. A model of another provider can be picked right in the model menu, and requests can go through a corporate proxy.
+- **Background preparation of attachments**: a card shows the preparation while encoding runs in the background; text over 5 KiB becomes a file attachment. System clipboard latency depends on the OS and the format; the [measurements](docs/PASTE_BENCHMARK.md) do not include the time to the first paint.
+- **Helpers**: read-only subagents for parallel investigations with a shared budget of requests and tokens.
+- **Modes**: Plan (no writes or processes), Changes, separate permissions for processes, the web and window snapshots.
+- **Model comparison** inside the app: the same tasks, pass rate, time, tokens and waste side by side.
+- **Journal**: every action is written to an append-only journal; `run.summary` records rounds, calls, errors, time and provider usage. After a crash, side effects are never repeated automatically.
+- **Export** to Markdown/JSON, dialog history, renaming, editing and undoing turns.
 
-## Быстрый старт
+## Quick start
 
-Готовые DMG и MSI — на странице [релизов](https://github.com/Damirka1/Chiller/releases); для них отдельный JDK не требуется. Ripgrep включён в установщик; отдельно устанавливать его не нужно.
+Ready-made DMG and MSI installers are on the [releases](https://github.com/Damirka1/Chiller/releases) page; they need no separate JDK. Ripgrep is included in the installer, so there is nothing else to install.
 
-Для запуска из исходников нужны JDK 21+ и Git; Gradle подготовит проверенный ripgrep для текущей платформы:
+To run from source you need JDK 21+ and Git; Gradle prepares a verified ripgrep for the current platform:
 
 ```bash
 git clone https://github.com/Damirka1/Chiller.git
@@ -84,72 +88,73 @@ cd Chiller
 ./gradlew :app-desktop:run
 ```
 
-1. Выберите папку проекта.
-2. В «Настройки → Подключение» выберите пресет (например, vLLM `http://localhost:8000/v1`) и модель.
-3. Пишите задачу. Для правок переключитесь в режим «Изменения», для тестов включите «Команды процессов».
+1. Choose a project folder.
+2. In "Settings → Connection" pick a preset (for example, vLLM `http://localhost:8000/v1`) and a model.
+3. Write the task. Switch to "Changes" mode for edits, and turn on "Process commands" for tests.
 
-Демо без модели и ключа: «Демо-сценарий» на стартовом экране показывает scripted-сценарий на настоящих файлах.
+A demo without a model or a key: "Demo scenario" on the start screen shows a scripted run on real files.
 
-### Gemma на vLLM
+### Gemma on vLLM
 
-Запустите vLLM с OpenAI-совместимым API и включённым tool calling: `--enable-auto-tool-choice` и `--tool-call-parser`, подходящий шаблону чата вашей модели (см. документацию vLLM). Укажите в Chiller адрес `http://<сервер>:8000/v1` и ID модели — профиль «Авто» включит компактный режим и vision. Окно контекста, vision и reasoning Chiller берёт из каталога `/models` (`max_model_len`, `input_modalities`, `capabilities`; поля — в [провайдерах](docs/PROVIDERS.md#vllm-и-шлюзы)). Переключатель «Рассуждения модели» для модели с `reasoning` в каталоге передаёт `chat_template_kwargs.enable_thinking`. Рассуждения такой модели возвращаются ей внутри хода, как требует Gemma 4. На 18 задачах с Gemma это вдвое сократило генерируемые токены и на треть — время. Для Gemma запрос получает рекомендованный сэмплинг: temperature 1.0, top_p 0.95, top_k 64. Структурированный вывод vLLM можно передать через «Дополнительные поля запроса (JSON)».
+Start vLLM with the OpenAI-compatible API and tool calling on: `--enable-auto-tool-choice` and a `--tool-call-parser` that matches your model's chat template (see the vLLM documentation). In Chiller, set the address `http://<server>:8000/v1` and the model ID; the "Auto" profile turns on compact mode and vision. Chiller reads the context window, vision and reasoning from the `/models` catalog (`max_model_len`, `input_modalities`, `capabilities`; the fields are listed under [providers](docs/PROVIDERS.md#vllm-and-gateways)). For a model with `reasoning` in the catalog, the "Model reasoning" switch passes `chat_template_kwargs.enable_thinking`. The reasoning of such a model is sent back to it within the turn, as Gemma 4 requires. On 18 Gemma tasks this halved the generated tokens and cut the time by a third. Gemma requests get the recommended sampling: temperature 1.0, top_p 0.95, top_k 64. vLLM structured output can be passed through "Extra request fields (JSON)".
 
-Живая проверка 19 октября 2026: Gemma 4 26B A4B (MoE, ~4B активных параметров) на vLLM 0.31 за HTTPS-шлюзом, набор задач `:evals:liveEval`.
+Live check on October 19, 2026: Gemma 4 26B A4B (MoE, ~4B active parameters) on vLLM 0.31 behind an HTTPS gateway, the `:evals:liveEval` task set.
 
-**Короткие задачи** (исправления, переименование, большой файл, навигация, CRLF/Unicode, правки пользователя, помощники, картинки, план, честность):
+**Short tasks** (fixes, renaming, a large file, navigation, CRLF/Unicode, user edits, helpers, images, plan, honesty):
 
-| Прогон | Пройдено | Заметки |
+| Run | Passed | Notes |
 |---|---|---|
-| Компактный, без рассуждений, 14 задач × 1 | 12/13, `delegate-research` пропущена (нет помощников) | промах `locate-code`: ответ по имени обёртки без чтения её тела |
-| Полный, без рассуждений, 14 × 1 | 13/14 | та же `locate-code` |
-| Компактный + рассуждения, 14 × 1 | **13/13** | ~255k токенов промпта, ~5 мин |
-| Полный + рассуждения, 14 × 1 | **14/14** | ~371k токенов промпта на тех же 13 задачах, ~6.7 мин |
-| Полный + рассуждения, 17 задач × 2 | **31/34 (91%)** | все три провала — лимит 14 шагов, неверных результатов нет; `plan-closure` 2/2, `generate-image` 2/2 |
-| `honest-missing-data` (данных в источнике нет) × 2 | **2/2** | числа не выдуманы ни разу; до раунда «без инструментов» модель зацикливалась и была 0/2 |
+| Compact, no reasoning, 14 tasks × 1 | 12/13, `delegate-research` skipped (no helpers) | `locate-code` miss: answered by the wrapper's name without reading its body |
+| Full, no reasoning, 14 × 1 | 13/14 | the same `locate-code` |
+| Compact + reasoning, 14 × 1 | **13/13** | ~255k prompt tokens, ~5 min |
+| Full + reasoning, 14 × 1 | **14/14** | ~371k prompt tokens on the same 13 tasks, ~6.7 min |
+| Full + reasoning, 17 tasks × 2 | **31/34 (91%)** | all three failures hit the 14-step limit, no wrong results; `plan-closure` 2/2, `generate-image` 2/2 |
+| `honest-missing-data` (the source has no data) × 2 | **2/2** | numbers were never made up; before the "no tools" round the model looped and scored 0/2 |
 
-**Длинные сценарии** (полный профиль + рассуждения, по 2 повтора):
+**Long scenarios** (full profile + reasoning, 2 repeats each):
 
-| Сценарий | Пройдено | Что проверяет и что видно |
+| Scenario | Passed | What it checks and what we saw |
 |---|---|---|
-| `conversation-context-pressure`, 10 ходов в окне 16k | **2/2** | контекст сжимался; три ограничения из первого сообщения (`canary`, `kz`, `retries: 2`) дошли до последнего хода |
-| `conversation-requirements`, 3 хода: исправление → смена требований → правка пользователя и перезапуск | 1/2 | перезапуск из журнала и чужая правка файла сохраняются; во втором прогоне модель изменила `checks.py` вопреки запрету из первого сообщения |
-| `multifile-retry-policy` | 1/2 | задача решается, но с рассуждениями по 1.5–2.4k токенов за раунд (~27–35 токенов/с) ход может не уложиться в 10 минут |
+| `conversation-context-pressure`, 10 turns in a 16k window | **2/2** | the context was compressed; three constraints from the first message (`canary`, `kz`, `retries: 2`) reached the last turn |
+| `conversation-requirements`, 3 turns: fix → changed requirements → user edit and restart | 1/2 | restart from the journal and a foreign file edit are preserved; in the second run the model changed `checks.py` despite a ban in the first message |
+| `multifile-retry-policy` | 1/2 | the task gets solved, but with 1.5–2.4k reasoning tokens per round (~27–35 tokens/s) a turn may not fit into 10 minutes |
 
-Также: `liveVisionSmoke` пройден (картинка с числом прочитана, ~1.3 с); `liveImageSmoke` с Flux 2 Klein — генерация и правка 1024×1024 (~40 и ~65 с). С рассуждениями ответ получает 12288 токенов запаса сверх лимита, потому что рассуждения тратят тот же `max_tokens`.
+Also: `liveVisionSmoke` passed (an image with a number was read, ~1.3 s); `liveImageSmoke` with Flux 2 Klein generated and edited 1024×1024 (~40 and ~65 s). With reasoning, the reply gets 12288 tokens of headroom over the limit, because reasoning spends the same `max_tokens`.
 
-**20 октября 2026**, компактный профиль с рассуждениями, сэмплинг Gemma:
+**October 20, 2026**, compact profile with reasoning, Gemma sampling:
 
-| Набор | Пройдено | Заметки |
+| Set | Passed | Notes |
 |---|---|---|
-| Короткие и длинные задачи, 18 × 1 | **18/18** | после возврата рассуждений модели: генерируемых токенов 53.6k → 29.6k, время 825 → 522 с |
-| Пробы `tool-*`, 10 × 2 | **20/20** | без рассуждений было 18/20 |
-| Сложные `hard-*`, 6 × 2 | 9/12 | `hard-iso-dates` 0/2 → 2/2 после чтения по размеру окна; провалы — `hard-duration-spec` (рассуждения обрезались по лимиту) и `hard-mutation-tests` (модель не проверяет снятие всего баланса) |
-| `hard-duration-spec` и `hard-mutation-tests` с запасом 12288 на рассуждения, × 3 | **6/6** | обрезок 8 → 0, попытка `hard-duration-spec` ~150 с вместо 300–600; в `hard-mutation-tests` обрезок не было и раньше, там скорее разброс |
+| Short and long tasks, 18 × 1 | **18/18** | after returning the model's reasoning: generated tokens 53.6k → 29.6k, time 825 → 522 s |
+| `tool-*` probes, 10 × 2 | **20/20** | it was 18/20 without reasoning |
+| Hard `hard-*`, 6 × 2 | 9/12 | `hard-iso-dates` 0/2 → 2/2 after window-sized reads; failures are `hard-duration-spec` (reasoning was cut by the limit) and `hard-mutation-tests` (the model does not check withdrawing the whole balance) |
+| `hard-duration-spec` and `hard-mutation-tests` with 12288 reasoning headroom, × 3 | **6/6** | cuts 8 → 0, a `hard-duration-spec` attempt takes ~150 s instead of 300–600; `hard-mutation-tests` had no cuts before either, so it is more likely noise |
 
-Что видно по модели: с рассуждениями она заметно надёжнее (`locate-code` проходит), но медленнее; иногда нарушает ограничение, которое видит в контексте; при многошаговой правке `edit_file` может вставить строки вместо замены. Это небольшие прогоны, а не статистическая оценка.
+What we saw from the model: with reasoning it is noticeably more reliable (`locate-code` passes) but slower; it sometimes breaks a constraint it can see in context; in a multi-step edit `edit_file` may insert lines instead of replacing them. These are small runs, not a statistical evaluation.
 
-## Оценка качества
+## Quality evaluation
 
 ```bash
-./gradlew check :evals:offlineSmoke                       # без удалённой модели; нужны зависимости и Python 3
-CHILLER_EVAL_PROFILE=compact ./gradlew :evals:liveEval     # платный прогон 19 задач; нужен настроенный ключ
+./gradlew check :evals:offlineSmoke                       # no remote model; needs dependencies and Python 3
+CHILLER_EVAL_PROFILE=compact ./gradlew :evals:liveEval     # a paid run of 19 tasks; needs a configured key
 CHILLER_EVAL_BASE_URL=http://localhost:8000/v1 CHILLER_EVAL_MODEL=gemma-4-26b-a4b-it ./gradlew :evals:liveEval
 ```
 
-Каждая задача проверяется независимо (настоящие тесты Python/файлы), а проверки сами валидируются: падают на нетронутом проекте и проходят на эталонном решении. Отчёт `report.md` содержит pass rate, раунды, токены и потери по каждой задаче.
+Each task is checked independently (real Python tests and files), and the checks are validated themselves: they fail on the untouched project and pass on the reference solution. The `report.md` report has the pass rate, rounds, tokens and waste for every task.
 
-## Устройство
+## Structure
 
-Десять модулей: `contracts` (замороженные контракты), `agent-core` (цикл агента, профили, контекст), `providers` (Chat Completions + SSE), `tools`, `workspace` (снимки, правки, откат), `runtime` (процессы), `sessions` (журнал), `evals`, `design-system`, `app-desktop`. Подробности — [архитектура](docs/ARCHITECTURE.md), [провайдеры](docs/PROVIDERS.md), [дизайн](docs/DESIGN.md), [разработка](CONTRIBUTING.md) и [использование](docs/USAGE.md).
+Ten modules: `contracts` (frozen contracts), `agent-core` (the agent loop, profiles, context), `providers` (Chat Completions + SSE), `tools`, `workspace` (snapshots, edits, undo), `runtime` (processes), `sessions` (journal), `evals`, `design-system`, `app-desktop`. More in [architecture](docs/ARCHITECTURE.md), [providers](docs/PROVIDERS.md), [design](docs/DESIGN.md), [development](CONTRIBUTING.md) and [usage](docs/USAGE.md).
 
-CI на каждый push собирает и тестирует Linux, macOS и Windows и выпускает DMG и MSI; тег `vX.Y.Z` публикует релиз.
+On every push, CI builds and tests on Linux, macOS and Windows and produces DMG and MSI installers; a `vX.Y.Z` tag publishes a release.
 
-## Честно об ограничениях
+## Known limitations
 
-- Проверки путей и cwd процессов — не OS-sandbox.
-- Gemma/vLLM проверена вживую на одном сервере (Gemma 4 26B A4B, vLLM 0.31 за шлюзом), результаты — в разделе «Gemma на vLLM»; поиск символов лексический, не LSP.
-- Установщики не подписаны: на macOS первый запуск — правый клик → «Открыть».
-- Денежный бюджет задачи (Настройки → Агент) считает по ценам, которые вводите вы, и резервирует худший случай заранее; это не счёт провайдера, и без бюджета лимиты запросов и токенов сумму не ограничивают.
-## Лицензия
+- Path and process working-directory checks are not an OS sandbox.
+- Gemma/vLLM was checked live on one server (Gemma 4 26B A4B, vLLM 0.31 behind a gateway), with results in "Gemma on vLLM"; symbol search is lexical, not LSP.
+- The installers are not signed: on macOS, open the app the first time with right-click → "Open".
+- The task money budget (Settings → Agent) uses prices you enter and reserves the worst case in advance; it is not the provider's bill, and without a budget the request and token limits do not cap the amount spent.
 
-Chiller распространяется под [Apache License 2.0](LICENSE). Лицензии сторонних компонентов сохраняются отдельно; см. [зависимости](docs/DEPENDENCIES.md).
+## License
+
+Chiller is distributed under the [Apache License 2.0](LICENSE). Third-party component licenses are kept separately; see [dependencies](docs/DEPENDENCIES.md).

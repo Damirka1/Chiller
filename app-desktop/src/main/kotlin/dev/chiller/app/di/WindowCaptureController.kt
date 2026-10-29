@@ -77,7 +77,16 @@ class WindowCaptureController private constructor(
         return listOf(presentationTarget(stillPresent))
     }
 
-    override suspend fun capture(): FilePresentation {
+    override suspend fun capture(): FilePresentation = captureInto(sessionIdProvider())
+
+    /** The same selected window, with captures stored under [sessionId]: a dialog running in the background keeps its own. */
+    fun forSession(sessionId: String): ScreenCaptureService = object : ScreenCaptureService {
+        override val supported: Boolean get() = this@WindowCaptureController.supported
+        override suspend fun targets(): List<CaptureTarget> = this@WindowCaptureController.targets()
+        override suspend fun capture(): FilePresentation = captureInto(sessionId)
+    }
+
+    private suspend fun captureInto(sessionId: String): FilePresentation {
         ensureSupported()
         ensurePermission()
         val chosen = selection ?: throw ToolException("CAPTURE_TARGET_REQUIRED", "Choose a window in the app before asking for a capture")
@@ -93,7 +102,7 @@ class WindowCaptureController private constructor(
             }
         }
         catch (_: Exception) { throw ToolException("CAPTURE_STORAGE_UNAVAILABLE", "Capture storage is unavailable") }
-        val session = sessionIdProvider().takeIf { SESSION_ID.matches(it) }
+        val session = sessionId.takeIf { SESSION_ID.matches(it) }
             ?: throw ToolException("CAPTURE_STORAGE_UNAVAILABLE", "The active session has an invalid storage identifier")
         val sessionRoot = root.resolve(session).normalize()
         if (!sessionRoot.startsWith(root)) throw ToolException("CAPTURE_STORAGE_UNAVAILABLE", "Capture storage is unavailable")

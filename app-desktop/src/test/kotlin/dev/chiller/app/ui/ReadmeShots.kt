@@ -28,15 +28,31 @@ import javax.swing.SwingUtilities
  * Run with `./gradlew :app-desktop:readmeShots`; images land in docs/images.
  */
 fun main() {
+    val output = Path.of(System.getProperty("chiller.readmeOut") ?: "docs/images"); Files.createDirectories(output)
+    // README.md shows the English interface, README.ru.md the Russian one (files with a -ru suffix).
+    for (language in dev.chiller.app.i18n.Language.entries) {
+        dev.chiller.contracts.CoreLanguage.russian = language == dev.chiller.app.i18n.Language.RU
+        dev.chiller.app.i18n.I18n.current = dev.chiller.app.i18n.stringsFor(language)
+        render(output, language.id, if (language == dev.chiller.app.i18n.Language.RU) "-ru" else "")
+    }
+    println("README screenshots rendered to $output (scripted demo, no live calls)")
+}
+
+private fun render(output: Path, language: String, suffix: String) {
+    val ru = language == "ru"
     val root = Files.createTempDirectory("chiller-readme")
     val project = root.resolve("demo-shop").also { DemoScenario.createProject(it) }.toRealPath()
     val (state, helpers) = runBlocking { runDemo(root, project) }
-    val output = Path.of(System.getProperty("chiller.readmeOut") ?: "docs/images"); Files.createDirectories(output)
+    val backend = Files.createDirectories(root.resolve("backend-api")).toString()
+    val landing = Files.createDirectories(root.resolve("landing-page")).toString()
     val sessions = listOf(
-        SessionInfo("demo", "Демо: все инструменты", "2026-10-17T10:00:00Z"),
-        SessionInfo("s2", "Починить расчёт скидки", "2026-10-17T09:12:00Z"),
-        SessionInfo("s3", "Ревью модуля оплаты", "2026-10-16T18:40:00Z"),
-        SessionInfo("s4", "Тесты для парсера CSV", "2026-10-16T15:05:00Z"),
+        SessionInfo("demo", if (ru) "Демо: все инструменты" else "Demo: all tools", "2026-10-17T10:00:00Z", project.toString()),
+        SessionInfo("s2", if (ru) "Починить расчёт скидки" else "Fix the discount calculation", "2026-10-17T09:12:00Z", project.toString()),
+        SessionInfo("s3", if (ru) "Ревью модуля оплаты" else "Review the payment module", "2026-10-16T18:40:00Z", project.toString()),
+        SessionInfo("s4", if (ru) "Тесты для парсера CSV" else "Tests for the CSV parser", "2026-10-16T15:05:00Z", backend),
+        SessionInfo("s5", if (ru) "Миграция на Ktor 3" else "Migrate to Ktor 3", "2026-10-15T11:20:00Z", backend),
+        SessionInfo("s6", if (ru) "Как работает structured concurrency" else "How structured concurrency works", "2026-10-16T21:10:00Z"),
+        SessionInfo("s7", if (ru) "Письмо клиентам о релизе" else "Release letter to customers", "2026-10-14T08:45:00Z"),
     )
     @Composable fun app(prefs: UiPreferences, settings: String? = null) = ChillerApp(
         state, sessions, "demo", project.toString(), isDemo = false,
@@ -45,17 +61,17 @@ fun main() {
         onConfigureProvider = { _, _, _, _ -> null }, onAnswerQuestion = {}, onUndo = {}, onAllowProcessesChange = {}, allowProcesses = true,
         preferences = prefs, models = listOf("gemma-4-26b-a4b", "deepseek-flash"), subagents = helpers,
         sessionWorkspaces = mapOf("demo" to project.toString()),
+        recentWorkspaces = listOf(project.toString(), landing), projects = ProjectsModel(pinned = listOf(backend)),
         settingsData = if (settings == null) null else SettingsData("http://localhost:8000/v1", "gemma-4-26b-a4b", false, true, allowProcesses = true,
             agent = AgentOptions(), preferences = prefs),
         openSettingsOnStart = settings,
     )
     try {
-        shot(output.resolve("focus-light.png")) { app(UiPreferences(theme = "light", reducedMotion = true)) }
-        shot(output.resolve("focus-dark.png")) { app(UiPreferences(theme = "dark", reducedMotion = true)) }
-        shot(output.resolve("studio-dark.png")) { app(UiPreferences(theme = "dark", layout = "studio", reducedMotion = true)) }
-        shot(output.resolve("settings-light.png")) { app(UiPreferences(theme = "light", reducedMotion = true), settings = "AGENT") }
+        shot(output.resolve("focus-light$suffix.png")) { app(UiPreferences(theme = "light", reducedMotion = true, language = language)) }
+        shot(output.resolve("focus-dark$suffix.png")) { app(UiPreferences(theme = "dark", reducedMotion = true, language = language)) }
+        shot(output.resolve("studio-dark$suffix.png")) { app(UiPreferences(theme = "dark", layout = "studio", reducedMotion = true, language = language)) }
+        shot(output.resolve("settings-light$suffix.png")) { app(UiPreferences(theme = "light", reducedMotion = true, language = language), settings = "AGENT") }
     } finally { root.toFile().deleteRecursively() }
-    println("README screenshots rendered to $output (scripted demo, no live calls)")
 }
 
 private suspend fun runDemo(root: Path, project: Path): Pair<RunState, List<SubagentSnapshot>> = kotlinx.coroutines.coroutineScope {

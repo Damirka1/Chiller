@@ -1,5 +1,6 @@
 package dev.chiller.app.ui
 
+import dev.chiller.app.i18n.*
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
@@ -24,12 +25,12 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.chiller.contracts.RunState
+import dev.chiller.design.ChillerFonts
 import dev.chiller.design.LocalChillerPalette
 import dev.chiller.design.LocalChillerReducedMotion
 
@@ -45,12 +46,12 @@ internal fun TurnResultCard(state: RunState, result: TurnResult, modifier: Modif
     val issues = result.issues.isNotEmpty()
     var open by remember(issues) { mutableStateOf(initiallyOpen ?: issues) }
     val (title, tint, icon) = when {
-        state.status == "failed" && state.error?.let(::isStepLimitError) == true -> Triple("Остановлено: лимит шагов", c.muted, Icons.Outlined.StopCircle)
-        state.status == "failed" -> Triple("Ошибка", c.negative, Icons.Outlined.ErrorOutline)
-        state.status == "cancelled" -> Triple("Остановлено", c.muted, Icons.Outlined.StopCircle)
-        state.status == "interrupted" -> Triple("Прервано", c.muted, Icons.Outlined.StopCircle)
-        issues -> Triple("Завершено с замечаниями", c.negative, Icons.Outlined.ReportProblem)
-        else -> Triple("Ход завершён", c.positive, Icons.Outlined.CheckCircle)
+        state.status == "failed" && state.error?.let(::isStepLimitError) == true -> Triple(strings.turn.stoppedStepLimit, c.muted, Icons.Outlined.StopCircle)
+        state.status == "failed" -> Triple(strings.turn.error, c.negative, Icons.Outlined.ErrorOutline)
+        state.status == "cancelled" -> Triple(strings.turn.stopped, c.muted, Icons.Outlined.StopCircle)
+        state.status == "interrupted" -> Triple(strings.turn.interrupted, c.muted, Icons.Outlined.StopCircle)
+        issues -> Triple(strings.turn.doneWithIssues, c.negative, Icons.Outlined.ReportProblem)
+        else -> Triple(strings.turn.turnDone, c.positive, Icons.Outlined.CheckCircle)
     }
     val shape = RoundedCornerShape(12.dp)
     Column(modifier.fillMaxWidth().clip(shape).background(c.surface).border(1.dp, if (issues) c.negative.copy(alpha = .35f) else c.border, shape)) {
@@ -64,69 +65,69 @@ internal fun TurnResultCard(state: RunState, result: TurnResult, modifier: Modif
                 Text(title, color = c.text, fontSize = 13.sp, fontWeight = FontWeight.Medium)
                 currentTurnPlan(state.messages)?.let { steps ->
                     val skipped = steps.count { it.status == "skipped" }
-                    Text("План модели: ${steps.count { it.status == "done" }}/${steps.size}" + (if (skipped > 0) " · пропущено $skipped" else ""), color = c.faint, fontSize = 11.sp)
+                    Text(strings.turn.planLine(steps.count { it.status == "done" }, steps.size, skipped), color = c.faint, fontSize = 11.sp)
                 }
                 Text(summaryLine(result, outside?.count ?: 0), color = c.muted, fontSize = 12.sp, lineHeight = 17.sp)
             }
             Spacer(Modifier.width(8.dp))
-            Icon(if (open) Icons.Outlined.KeyboardArrowUp else Icons.Outlined.KeyboardArrowDown, if (open) "Свернуть итог" else "Развернуть итог", Modifier.size(15.dp), tint = c.faint)
+            Icon(if (open) Icons.Outlined.KeyboardArrowUp else Icons.Outlined.KeyboardArrowDown, if (open) strings.turn.collapseResult else strings.turn.expandResult, Modifier.size(15.dp), tint = c.faint)
         }
         AnimatedVisibility(open, enter = if (reduced) fadeIn(tween(0)) else expandVertically(tween(180)) + fadeIn(tween(140)), exit = if (reduced) fadeOut(tween(0)) else shrinkVertically(tween(150)) + fadeOut(tween(100))) {
             Column(Modifier.padding(start = 14.dp, end = 14.dp, bottom = 12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 currentTurnPlan(state.messages)?.let { steps ->
-                    Section("План модели") { steps.forEach { Text("${when (it.status) { "done" -> "✓"; "skipped" -> "–"; else -> "○" }} ${it.title}", color = if (it.status in setOf("done", "skipped")) c.muted else c.negative, fontSize = 12.sp, lineHeight = 18.sp) } }
+                    Section(strings.turn.modelPlan) { steps.forEach { Text("${when (it.status) { "done" -> "✓"; "skipped" -> "–"; else -> "○" }} ${it.title}", color = if (it.status in setOf("done", "skipped")) c.muted else c.negative, fontSize = 12.sp, lineHeight = 18.sp) } }
                 }
-                if (result.issues.isNotEmpty()) Section("Требует внимания") {
+                if (result.issues.isNotEmpty()) Section(strings.turn.needsAttention) {
                     result.issues.forEach { issue -> Line(Icons.Outlined.ReportProblem, c.negative) { Text(issue, color = c.text, fontSize = 12.sp, lineHeight = 17.sp) } }
                 }
-                if (result.files.isNotEmpty()) Section("Изменено") {
+                if (result.files.isNotEmpty()) Section(strings.turn.changed) {
                     result.files.take(6).forEach { file ->
                         Line(fileIcon(file.kind), if (file.undone) c.faint else c.muted) {
-                            Text(file.path, color = if (file.undone) c.faint else c.text, fontSize = 12.sp, fontFamily = FontFamily.Monospace, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                            Text(file.path, color = if (file.undone) c.faint else c.text, fontSize = 12.sp, fontFamily = ChillerFonts.mono, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
                             Spacer(Modifier.width(8.dp))
                             when {
-                                file.undone -> Text("откачено", color = c.faint, fontSize = 11.sp)
-                                file.kind == "deleted" -> Text("удалён", color = c.negative, fontSize = 11.sp)
+                                file.undone -> Text(strings.turn.undone, color = c.faint, fontSize = 11.sp)
+                                file.kind == "deleted" -> Text(strings.turn.deleted, color = c.negative, fontSize = 11.sp)
                                 else -> {
-                                    if (file.kind == "created") { Text("новый", color = c.positive, fontSize = 11.sp); Spacer(Modifier.width(6.dp)) }
-                                    if (file.added > 0) Text("+${file.added}", color = c.positive, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
-                                    if (file.removed > 0) { Spacer(Modifier.width(4.dp)); Text("−${file.removed}", color = c.negative, fontSize = 11.sp, fontFamily = FontFamily.Monospace) }
+                                    if (file.kind == "created") { Text(strings.turn.created, color = c.positive, fontSize = 11.sp); Spacer(Modifier.width(6.dp)) }
+                                    if (file.added > 0) Text("+${file.added}", color = c.positive, fontSize = 11.sp, fontFamily = ChillerFonts.mono)
+                                    if (file.removed > 0) { Spacer(Modifier.width(4.dp)); Text("−${file.removed}", color = c.negative, fontSize = 11.sp, fontFamily = ChillerFonts.mono) }
                                 }
                             }
                         }
                     }
-                    if (result.files.size > 6) Text("и ещё ${result.files.size - 6}", color = c.faint, fontSize = 11.sp, modifier = Modifier.padding(start = 24.dp))
+                    if (result.files.size > 6) Text(strings.turn.andMore(result.files.size - 6), color = c.faint, fontSize = 11.sp, modifier = Modifier.padding(start = 24.dp))
                 }
-                if (outside != null && outside.count > 0) Section("Вне инструментов агента") {
-                    Text("Есть изменения вне журнала или их покрытие не подтверждено. Откат хода не гарантирует восстановление этих файлов.", color = c.muted, fontSize = 11.sp, lineHeight = 16.sp)
-                    val rows = outside.added.map { it to "новый" } + outside.modified.map { it to "изменён" } + outside.deleted.map { it to "удалён" }
+                if (outside != null && outside.count > 0) Section(strings.turn.outsideTools) {
+                    Text(strings.turn.outsideNote, color = c.muted, fontSize = 11.sp, lineHeight = 16.sp)
+                    val rows = outside.added.map { it to strings.turn.created } + outside.modified.map { it to strings.turn.modified } + outside.deleted.map { it to strings.turn.deleted }
                     rows.take(6).forEach { (path, label) ->
                         Line(Icons.Outlined.Terminal, c.muted) {
-                            Text(path, color = c.text, fontSize = 12.sp, fontFamily = FontFamily.Monospace, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                            Text(path, color = c.text, fontSize = 12.sp, fontFamily = ChillerFonts.mono, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
                             Spacer(Modifier.width(8.dp)); Text(label, color = c.faint, fontSize = 11.sp)
                         }
                     }
-                    if (rows.size > 6 || outside.truncated) Text("и ещё ${if (outside.truncated) "больше " else ""}${(outside.count - 6).coerceAtLeast(0)}", color = c.faint, fontSize = 11.sp, modifier = Modifier.padding(start = 24.dp))
+                    if (rows.size > 6 || outside.truncated) Text(strings.turn.andMoreTruncated((outside.count - 6).coerceAtLeast(0), outside.truncated), color = c.faint, fontSize = 11.sp, modifier = Modifier.padding(start = 24.dp))
                 }
-                if (result.commands.isNotEmpty()) Section("Команды") {
+                if (result.commands.isNotEmpty()) Section(strings.turn.commands) {
                     result.commands.forEach { run ->
                         val (label, color) = when {
-                            run.succeeded -> "код 0" to c.positive
-                            run.state == "timed_out" -> "таймаут" to (if (run.isCheck) c.negative else c.muted)
-                            run.failed -> "код ${run.exitCode}" to (if (run.isCheck) c.negative else c.muted)
-                            run.state == "running" -> "результат не прочитан" to c.faint
+                            run.succeeded -> strings.turn.exitZero to c.positive
+                            run.state == "timed_out" -> strings.turn.timedOut to (if (run.isCheck) c.negative else c.muted)
+                            run.failed -> strings.turn.exitCode(run.exitCode.toString()) to (if (run.isCheck) c.negative else c.muted)
+                            run.state == "running" -> strings.turn.resultUnread to c.faint
                             else -> run.state to c.faint
                         }
                         Line(Icons.Outlined.Terminal, c.muted) {
-                            Text(run.command, color = c.text, fontSize = 12.sp, fontFamily = FontFamily.Monospace, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                            Text(run.command, color = c.text, fontSize = 12.sp, fontFamily = ChillerFonts.mono, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
                             Spacer(Modifier.width(8.dp))
                             Box(Modifier.size(6.dp).clip(CircleShape).background(color)); Spacer(Modifier.width(5.dp))
                             Text(label, color = color, fontSize = 11.sp)
                         }
                     }
                 }
-                if (result.presented.isNotEmpty()) Section("Показано") {
-                    result.presented.forEach { path -> Line(Icons.Outlined.Image, c.muted) { Text(path, color = c.text, fontSize = 12.sp, fontFamily = FontFamily.Monospace, maxLines = 1, overflow = TextOverflow.Ellipsis) } }
+                if (result.presented.isNotEmpty()) Section(strings.turn.shown) {
+                    result.presented.forEach { path -> Line(Icons.Outlined.Image, c.muted) { Text(path, color = c.text, fontSize = 12.sp, fontFamily = ChillerFonts.mono, maxLines = 1, overflow = TextOverflow.Ellipsis) } }
                 }
                 val stats = runSummaryParts(state)
                 if (stats.isNotEmpty()) Text(stats.joinToString("  ·  "), color = c.faint, fontSize = 11.sp, lineHeight = 16.sp)
@@ -138,13 +139,13 @@ internal fun TurnResultCard(state: RunState, result: TurnResult, modifier: Modif
 /** One line for the collapsed card: counts only, e.g. "2 файла · проверки: 1 из 1 · показан 1 файл". */
 internal fun summaryLine(result: TurnResult, outside: Int = 0): String = buildList {
     // Issues first: the line is cut at the end on narrow windows.
-    if (result.issues.isNotEmpty()) add("замечаний ${result.issues.size}")
-    if (result.files.isNotEmpty()) add("${result.files.size} ${plural(result.files.size, "файл", "файла", "файлов")}")
+    if (result.issues.isNotEmpty()) add(I18n.current.turn.issuesCount(result.issues.size))
+    if (result.files.isNotEmpty()) add(I18n.current.common.files(result.files.size))
     val checks = result.commands.filter { it.isCheck }
-    if (checks.isNotEmpty()) add("проверки: ${checks.count { it.succeeded }} из ${checks.size} прошли")
-    else add(if (result.commands.isEmpty()) "проверки не запускались" else "проверки не подтверждены")
-    if (result.presented.isNotEmpty()) add("показано ${result.presented.size}")
-    if (outside > 0) add("вне журнала $outside")
+    if (checks.isNotEmpty()) add(I18n.current.turn.checksPassed(checks.count { it.succeeded }, checks.size))
+    else add(if (result.commands.isEmpty()) I18n.current.turn.checksNotRun else I18n.current.turn.checksUnconfirmed)
+    if (result.presented.isNotEmpty()) add(I18n.current.turn.shownCount(result.presented.size))
+    if (outside > 0) add(I18n.current.turn.outsideCount(outside))
 }.joinToString(" · ")
 
 @Composable

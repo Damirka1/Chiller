@@ -21,6 +21,10 @@ import kotlin.test.assertTrue
 import kotlin.test.fail
 
 class ConnectionCheckTest {
+    // Helpers read the global language; these checks are written against the Russian texts.
+    @kotlin.test.BeforeTest fun russian() { dev.chiller.app.i18n.I18n.current = dev.chiller.app.i18n.RuStrings; dev.chiller.contracts.CoreLanguage.russian = true }
+    @kotlin.test.AfterTest fun english() { dev.chiller.app.i18n.I18n.current = dev.chiller.app.i18n.EnStrings; dev.chiller.contracts.CoreLanguage.russian = false }
+
     @Test
     fun sendsOneMinimalDeepSeekProbeAndReturnsSuccess() = runBlocking {
         val calls = AtomicInteger()
@@ -103,7 +107,7 @@ class ConnectionCheckTest {
             runCatching { respond(exchange, 200, "done") }
         }
         KtorConnectionChecker().use { checker ->
-            listOf("http://example.com", "http://user:pass@localhost", "http://localhost?x=1", "ftp://localhost").forEach { url ->
+            listOf("http://user:pass@localhost", "http://localhost?x=1", "ftp://localhost").forEach { url ->
                 assertFalse(checker.check(url, "model", "synthetic-key", false).success)
             }
             val request = async { checker.check(fixture.url, "model", "synthetic-key", false) }

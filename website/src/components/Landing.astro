@@ -1,0 +1,147 @@
+---
+import { Image, getImage } from 'astro:assets';
+import Mark from './Mark.astro';
+import Crystal from './Crystal.astro';
+import { copy, repo, type Locale } from '../content';
+// The README screenshots, rendered by `./gradlew :app-desktop:readmeShots`: each page shows the interface in its language.
+import focusDarkEn from '../../../docs/images/focus-dark.png';
+import focusLightEn from '../../../docs/images/focus-light.png';
+import studioEn from '../../../docs/images/studio-dark.png';
+import focusDarkRu from '../../../docs/images/focus-dark-ru.png';
+import focusLightRu from '../../../docs/images/focus-light-ru.png';
+import studioRu from '../../../docs/images/studio-dark-ru.png';
+import '../styles/global.css';
+const { lang } = Astro.props as { lang: Locale };
+const t = copy[lang];
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+const url = (path = '') => `${base}/${path}`;
+const canonical = new URL(url(lang === 'ru' ? 'ru/' : ''), Astro.site);
+const docSuffix = lang === 'ru' ? '.ru' : '';
+const readme = `${repo}/blob/master/README${docSuffix}.md`;
+const downloads = `${repo}/releases`;
+const screenshots = lang === 'ru' ? [focusDarkRu, focusLightRu, studioRu] : [focusDarkEn, focusLightEn, studioEn];
+const social = await getImage({ src: screenshots[0], width: 1440, format: 'png' });
+---
+<!doctype html>
+<html lang={lang}>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#101816" />
+    <title>{t.title}</title>
+    <meta name="description" content={t.description} />
+    <link rel="canonical" href={canonical} />
+    <link rel="alternate" hreflang="en" href={new URL(url(), Astro.site)} />
+    <link rel="alternate" hreflang="ru" href={new URL(url('ru/'), Astro.site)} />
+    <link rel="alternate" hreflang="x-default" href={new URL(url(), Astro.site)} />
+    <link rel="icon" type="image/svg+xml" href={url('favicon.svg')} />
+    <link rel="preload" as="font" type="font/ttf" href={url('fonts/MedeoSans-Regular.ttf')} crossorigin />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content={t.title} />
+    <meta property="og:description" content={t.description} />
+    <meta property="og:url" content={canonical} />
+    <meta property="og:image" content={new URL(social.src, Astro.site)} />
+    <meta property="og:locale" content={lang === 'en' ? 'en_US' : 'ru_RU'} />
+    <meta name="twitter:card" content="summary_large_image" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">{t.skip}</a>
+    <header class="site-header">
+      <div class="shell header-inner">
+        <a class="brand" href={url(lang === 'ru' ? 'ru/' : '')} aria-label="Chiller"><Mark /><span>chiller<span class="brand-period">.</span></span></a>
+        <nav class="desktop-nav" aria-label={lang === 'en' ? 'Main navigation' : 'Основная навигация'}>
+          {t.nav.map((label, i) => <a href={`#${['workspace','craft','start'][i]}`}>{label}</a>)}
+        </nav>
+        <div class="header-actions flex items-center gap-5">
+          <div class="language-switch" aria-label={lang === 'en' ? 'Language' : 'Язык'}>
+            <a href={url()} lang="en" hreflang="en" aria-current={lang === 'en' ? 'page' : undefined} data-language>EN</a><span>/</span><a href={url('ru/')} lang="ru" hreflang="ru" aria-current={lang === 'ru' ? 'page' : undefined} data-language>RU</a>
+          </div>
+          <a class="header-github" href={repo}>GitHub <span aria-hidden="true">↗</span></a>
+          <button class="menu-button" aria-expanded="false" aria-controls="mobile-nav" aria-label={t.menu}><span></span><span></span></button>
+        </div>
+      </div>
+      <nav id="mobile-nav" class="mobile-nav" hidden aria-label={t.menu}>
+        {t.nav.map((label, i) => <a href={`#${['workspace','craft','start'][i]}`}>{label}</a>)}
+        <a href={repo}>GitHub ↗</a>
+      </nav>
+    </header>
+    <main id="main">
+      <section class="hero shell">
+        <div class="hero-copy">
+          <p class="eyebrow"><span class="status-dot"></span>{t.eyebrow}</p>
+          <h1 aria-label={t.headline.join(' ')} data-typewriter>{t.headline.map((line, i) => <span aria-hidden="true" class:list={{ 'mint-text': i === 2 }}><span class="typed-line">{line}</span></span>)}</h1>
+          <p class="hero-intro">{t.intro}</p>
+          <div class="hero-buttons flex flex-wrap items-center gap-3">
+            <a class="button button-mint" href={downloads}>{t.download}<span aria-hidden="true">↓</span></a>
+            <a class="button button-ghost" href={repo}>{t.source}<span aria-hidden="true">↗</span></a>
+          </div>
+          <p class="availability">{t.availability}</p>
+        </div>
+        <div class="hero-art" aria-hidden="true">
+          <div class="orbit orbit-one"></div><div class="orbit orbit-two"></div><div class="orbit-axis"></div>
+          <span class="art-coordinate coordinate-top">{t.orbit[0]}</span>
+          <span class="orbit-point point-one"></span><span class="orbit-point point-two"></span>
+          <div class="crystal-wrap crystal-vector"><Crystal /></div>
+          <span class="art-coordinate coordinate-bottom">{t.orbit[1]} <span>↗</span></span>
+          <span class="art-caption">{t.orbit[2]}</span>
+        </div>
+        <div class="hero-bottom"><span>CHILLER / DESKTOP AGENT</span><a href="#workspace">{t.nav[0]} <span aria-hidden="true">↓</span></a></div>
+      </section>
+      <section class="provider-strip" aria-label={t.modelHeading}>
+        <div class="shell">
+          <p>{t.modelHeading}</p>
+          <div class="provider-names"><span>vLLM</span><span>Ollama</span><span>LM Studio</span><span>DeepSeek</span><span>OpenAI</span><span>OpenRouter</span><span class="provider-more">+ {lang === 'en' ? 'your gateway' : 'ваш шлюз'}</span></div>
+          <p class="provider-note">{t.modelNote}</p>
+        </div>
+      </section>
+      <section id="workspace" class="workspace shell section-space">
+        <div class="section-heading"><div><p class="eyebrow">{t.workspaceLabel}</p><h2>{t.workspaceTitle}</h2></div><p class="section-intro">{t.workspaceIntro}</p></div>
+        <div class="demo-controls">
+          <div class="view-switch" role="group" aria-label={lang === 'en' ? 'Workspace preview' : 'Просмотр интерфейса'}>
+            {t.views.map((label, i) => <button data-view={i} aria-pressed={i === 0} aria-controls="demo-screen">{label}</button>)}
+          </div>
+          <button class="expand-button" data-expand aria-label={t.enlarge}><span aria-hidden="true">↗</span><span>{t.enlarge}</span></button>
+        </div>
+        <div class="demo-frame" id="demo-screen">
+          <div class="window-bar"><div class="window-dots"><i></i><i></i><i></i></div><span>Chiller</span><Mark /></div>
+          {screenshots.map((src, i) => <div data-screen={i} hidden={i !== 0}><Image src={src} width={1600} format="webp" quality={90} alt={`Chiller — ${t.views[i]}`} loading="lazy" /></div>)}
+        </div>
+        <div class="demo-caption"><p id="view-caption" aria-live="polite" data-captions={JSON.stringify(t.viewDescriptions)}>{t.viewDescriptions[0]}</p><span>01 — 03</span></div>
+        <p class="screenshot-note">{t.screenshotNote}</p>
+      </section>
+      <section id="craft" class="craft section-space">
+        <div class="shell">
+          <p class="eyebrow">{t.philosophyLabel}</p><h2>{t.philosophyTitle}</h2>
+          <div class="craft-grid">
+            <div class="feature-list">{t.features.map(([number, title, description]) => <article class="feature"><span class="feature-number">{number}</span><div><h3>{title}</h3><p>{description}</p></div></article>)}</div>
+            <div class="workflow-panel">
+              <div class="workflow-header"><Mark /><span>CHILLER / WORKFLOW</span><span class="status-dot"></span></div>
+              <h3>{t.codeTitle}</h3>
+              <ol class="workflow-steps">{t.steps.map((step, i) => <li><span class="workflow-node">{String(i+1).padStart(2,'0')}</span><div><span>{step}</span><code>{['search_text → read_file','snapshot_id → edit_file','run_process → exit_code','diff → run.summary'][i]}</code></div><span class="step-arrow" aria-hidden="true">↗</span></li>)}</ol>
+              <p>{t.codeNote}</p>
+            </div>
+          </div>
+        </div>
+      </section>
+      <section class="flexibility shell section-space">
+        <div><p class="eyebrow">{t.flexibilityLabel}</p><h2>{t.flexibilityTitle}</h2><p class="section-intro">{t.flexibilityBody}</p><a class="text-link" href={`${repo}/blob/master/docs/PROVIDERS${docSuffix}.md`}>{t.docs}<span aria-hidden="true">↗</span></a></div>
+        <div class="connection-map">
+          <div class="connection-row"><span class="connection-icon" aria-hidden="true">⌘</span><div><h3>{t.local}</h3><p>{t.localBody}</p></div></div>
+          <div class="connection-line"><span></span><Mark /><span></span></div>
+          <div class="connection-row"><span class="connection-icon" aria-hidden="true">↗</span><div><h3>{t.cloud}</h3><p>{t.cloudBody}</p></div></div>
+          <div class="connection-footnote">OpenAI-compatible API <span aria-hidden="true">↔</span> Chiller</div>
+        </div>
+      </section>
+      <section id="start" class="start section-space">
+        <div class="shell"><div class="section-heading"><div><p class="eyebrow">{t.startLabel}</p><h2>{t.startTitle}</h2></div><a href={downloads} class="button button-dark">{t.download}<span aria-hidden="true">↓</span></a></div>
+          <ol class="start-steps">{t.startSteps.map(([title, description], i) => <li><span class="start-number">0{i+1}<span aria-hidden="true">↗</span></span><h3>{title}</h3><p>{description}</p></li>)}</ol>
+          <div class="faq"><h3>{t.faqTitle}</h3><div>{t.faq.map(([q,a]) => <details><summary>{q}<span aria-hidden="true">+</span></summary><p>{a}</p></details>)}</div></div>
+        </div>
+      </section>
+      <section class="closing shell"><Mark /><p class="eyebrow">CHILLER</p><h2>{t.finalTitle}</h2><p>{t.finalBody}</p><a href={downloads} class="button button-mint">{t.download}<span aria-hidden="true">↓</span></a></section>
+    </main>
+    <footer class="shell site-footer"><div><a class="brand" href="#"><Mark /><span>chiller.</span></a><p>{t.footer}</p></div><nav aria-label={lang === 'en' ? 'Resources' : 'Ресурсы'}><a href={readme}>{t.documentation}</a><a href={downloads}>{t.releases}</a><a href={`${repo}/blob/master/LICENSE`}>{t.license}</a><a href={repo}>GitHub ↗</a></nav><span class="footer-year">© 2026 Chiller</span></footer>
+    <dialog class="image-dialog" aria-label={t.enlarge}><button class="dialog-close" aria-label={t.close}>{t.close} <span aria-hidden="true">×</span></button><img alt="" /></dialog>
+    <script src="../scripts/site.ts"></script>
+  </body>
+</html>

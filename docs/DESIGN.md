@@ -1,16 +1,19 @@
-# Дизайн интерфейса
+**English** · [Русский](DESIGN.ru.md)
 
-Focus и Studio — два представления одного диалога. Focus оставляет основное место переписке; Studio добавляет инспектор изменений, помощников и прогона. Переключение вида не должно отменять работу или терять черновик.
+# Interface design
 
-Визуальные токены и компоненты находятся в `design-system`; UI приложения — в `app-desktop`. При изменении интерфейса используйте существующие компоненты вместо копирования стилей.
+Focus and Studio are two views of one dialog. Focus gives most of the space to the conversation; Studio adds the inspector of changes, helpers and the run. Switching the view must not cancel work or lose a draft.
 
-- Нейтральные поверхности, графитовые основные действия, сдержанный зелёный акцент.
-- Светлая и тёмная темы; одинаковая иерархия в обеих.
-- Компактный composer с растущим по содержимому полем и доступными настройками режима/модели.
-- Ошибки, отмена, загрузка и устаревшие данные различимы. Наличие ключа не означает проверенное подключение.
-- Итоги строятся по журналу; завершение хода не означает подтверждённую правильность задачи.
-- Анимации короткие и не блокируют ввод; подготовка вложений выполняется в фоне.
+Visual tokens and components live in `design-system`; the app UI lives in `app-desktop`. When changing the interface, use the existing components instead of copying styles.
 
-Проверяйте узкое и широкое окно, длинные имена, таблицы, код, картинки, клавиатурную навигацию и сохранение фокуса. Offscreen-рендер помогает проверить компоновку, но не заменяет нативные проверки clipboard, IME и доступности.
+- Neutral surfaces, graphite primary actions, a restrained green accent.
+- The Medeo font: Sans for the interface, Mono for code, paths and commands (`ChillerFonts`); the zero is slashed in both. System fonts are not used in the UI.
+- Light and dark themes with the same hierarchy in both.
+- A compact composer with a field that grows with its content and reachable mode/model settings.
+- Errors, cancellation, loading and stale data are distinguishable. Having a key does not mean the connection was checked.
+- Results are built from the journal; the end of a turn does not mean the task was confirmed correct.
+- Animations are short and do not block input; attachments are prepared in the background.
 
-README-скриншоты: `./gradlew :app-desktop:readmeShots`. Это scripted demo, а не доказательство работы внешнего провайдера.
+Check a narrow and a wide window, long names, tables, code, images, keyboard navigation and focus retention. Offscreen rendering helps check layout but does not replace native checks of the clipboard, IME and accessibility.
+
+README screenshots: `./gradlew :app-desktop:readmeShots`. It is a scripted demo, not proof that an external provider works.

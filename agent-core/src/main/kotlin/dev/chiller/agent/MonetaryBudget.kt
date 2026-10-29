@@ -6,9 +6,9 @@ import java.math.RoundingMode
 
 /** Conservative USD ledger. Prices and input ceiling must bound the endpoint's actual billing. */
 class MonetaryBudget(private val settings: CostBudgetSettings) : RequestBudget {
-    private val limit = decimal(settings.limitUsd, "лимит USD", positive = true)
-    private val inputRate = decimal(settings.inputUsdPerMillion, "тариф входных токенов")
-    private val outputRate = decimal(settings.outputUsdPerMillion, "тариф выходных токенов")
+    private val limit = decimal(settings.limitUsd, tr("the USD limit", "лимит USD"), positive = true)
+    private val inputRate = decimal(settings.inputUsdPerMillion, tr("the input token rate", "тариф входных токенов"))
+    private val outputRate = decimal(settings.outputUsdPerMillion, tr("the output token rate", "тариф выходных токенов"))
     private val lock = Any()
     private var accounted = BigDecimal.ZERO
     private var reserved = BigDecimal.ZERO
@@ -19,11 +19,11 @@ class MonetaryBudget(private val settings: CostBudgetSettings) : RequestBudget {
 
     init {
         if (settings.inputTokenCeiling !in 1024..1_048_576)
-            throw ToolException("INVALID_COST_BUDGET", "Предел входных токенов должен быть от 1024 до 1048576")
+            throw ToolException("INVALID_COST_BUDGET", tr("The input token ceiling must be between 1024 and 1048576", "Предел входных токенов должен быть от 1024 до 1048576"))
     }
 
     override fun beginTask() = synchronized(lock) {
-        check(active == 0) { "Предыдущие платные запросы ещё завершаются" }
+        check(active == 0) { tr("Earlier paid requests are still finishing", "Предыдущие платные запросы ещё завершаются") }
         accounted = BigDecimal.ZERO
         reserved = BigDecimal.ZERO
         attempts = 0
@@ -36,11 +36,11 @@ class MonetaryBudget(private val settings: CostBudgetSettings) : RequestBudget {
         return reserve(price(settings.inputTokenCeiling.toLong(), maxOutputTokens.toLong()), chat = true)
     }
 
-    override fun reserveImage(): RequestReservation = reserve(decimal(settings.imageUsdPerRequest, "верхняя цена одного изображения"), chat = false)
+    override fun reserveImage(): RequestReservation = reserve(decimal(settings.imageUsdPerRequest, tr("the top price of one image", "верхняя цена одного изображения")), chat = false)
 
     private fun reserve(amount: BigDecimal, chat: Boolean): RequestReservation = synchronized(lock) {
         if (exceeded || accounted + amount > limit)
-            throw ToolException("COST_BUDGET_EXHAUSTED", "Денежный бюджет задачи исчерпан: учтено ${usd(accounted)} из ${usd(limit)} USD; следующий запрос требует ${usd(amount)} USD резерва")
+            throw ToolException("COST_BUDGET_EXHAUSTED", tr("The task money budget ran out: ${usd(accounted)} of ${usd(limit)} USD counted; the next request needs a ${usd(amount)} USD reserve", "Денежный бюджет задачи исчерпан: учтено ${usd(accounted)} из ${usd(limit)} USD; следующий запрос требует ${usd(amount)} USD резерва"))
         accounted += amount
         reserved += amount
         attempts++
@@ -79,7 +79,7 @@ class MonetaryBudget(private val settings: CostBudgetSettings) : RequestBudget {
         private fun decimal(value: String, label: String, positive: Boolean = false): BigDecimal {
             val parsed = value.takeIf { it.length <= 30 && Regex("\\d+(\\.\\d{1,9})?").matches(it) }?.toBigDecimalOrNull()
             if (parsed == null || parsed < BigDecimal.ZERO || (positive && parsed == BigDecimal.ZERO) || parsed > BigDecimal("1000000000"))
-                throw ToolException("INVALID_COST_BUDGET", "Укажите $label: неотрицательное число с точкой${if (positive) ", больше нуля" else ""}")
+                throw ToolException("INVALID_COST_BUDGET", tr("Enter $label: a non-negative number with a dot${if (positive) ", above zero" else ""}", "Укажите $label: неотрицательное число с точкой${if (positive) ", больше нуля" else ""}"))
             return parsed
         }
     }

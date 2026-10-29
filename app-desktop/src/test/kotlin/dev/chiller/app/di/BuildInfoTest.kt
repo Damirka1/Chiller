@@ -9,6 +9,10 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class BuildInfoTest {
+    // Helpers read the global language; these checks are written against the Russian texts.
+    @kotlin.test.BeforeTest fun russian() { dev.chiller.app.i18n.I18n.current = dev.chiller.app.i18n.RuStrings; dev.chiller.contracts.CoreLanguage.russian = true }
+    @kotlin.test.AfterTest fun english() { dev.chiller.app.i18n.I18n.current = dev.chiller.app.i18n.EnStrings; dev.chiller.contracts.CoreLanguage.russian = false }
+
     @Test fun `build label names the CI run or a local build`() {
         assertEquals("#57 · 2026-10-18", buildLabel("57", "2026-10-18", "18.10 16:20"))
         assertEquals("#57", buildLabel("57", "", "x"))
@@ -22,8 +26,9 @@ class BuildInfoTest {
 
     @Test fun `copied details leave out the data folder`() {
         val data = SettingsData("u", "m", false, false, version = "1.2.0-rc.2", build = "#57", commit = "f37143b0a1b2", dataDir = "/Users/someone/.chiller")
+        dev.chiller.app.i18n.I18n.current = dev.chiller.app.i18n.EnStrings
         val text = aboutText(aboutRows(data))
-        assertTrue(text.startsWith("Chiller\nВерсия: 1.2.0-rc.2\nСборка: #57\nКоммит: f37143b0a1b2"))
+        assertTrue(text.startsWith("Chiller\nVersion: 1.2.0-rc.2\nBuild: #57\nCommit: f37143b0a1b2"), text)
         assertFalse("someone" in text)
     }
 }

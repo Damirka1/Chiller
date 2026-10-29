@@ -1,5 +1,8 @@
+@file:OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+
 package dev.chiller.app.ui
 
+import dev.chiller.app.i18n.*
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
@@ -15,6 +18,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.VerticalScrollbar
+import androidx.compose.foundation.rememberScrollbarAdapter
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.OpenInNew
@@ -22,6 +27,10 @@ import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
+import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -34,7 +43,6 @@ import androidx.compose.ui.input.key.*
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -53,13 +61,18 @@ data class SettingsData(
     val connection: ConnectionState = ConnectionState(), val catalog: ModelCatalogState = ModelCatalogState(),
     val preferences: UiPreferences = UiPreferences(), val allowProcesses: Boolean = false, val agent: AgentOptions = AgentOptions(),
     val customProviders: List<CustomProvider> = emptyList(),
+    val proxy: ProxySettings = ProxySettings(),
     /** The task's money budget and the image model in use, which its prices must cover. */
     val costBudget: CostBudgetSettings = CostBudgetSettings(), val imageModel: String? = null,
+    /** Models generate_image picks from, and other endpoints that can draw, as (url, name). */
+    val imageCatalog: ModelCatalogState = ModelCatalogState(), val imageProviders: List<Pair<String, String>> = emptyList(),
     val recent: List<String> = emptyList(), val dataDir: String = "", val demoCount: Int = 0,
     val version: String = "dev", val build: String = "", val commit: String = "", val runtime: String = "", val os: String = "",
     val captureTargets: List<CaptureTarget> = emptyList(), val selectedCaptureTarget: String? = null, val screenshotSupported: Boolean = false,
     /** The open project, its saved check command and a suggestion from its build files. */
     val workspace: String? = null, val verifyCommand: String = "", val suggestedVerifyCommand: String? = null,
+    /** Connected MCP servers and their states by server id. */
+    val mcpServers: List<dev.chiller.tools.McpServerConfig> = emptyList(), val mcpStates: Map<String, dev.chiller.tools.McpServerState> = emptyMap(),
 )
 
 class SettingsActions(
@@ -72,16 +85,29 @@ class SettingsActions(
     val setVerifyCommand: (root: String, command: String) -> Unit = { _, _ -> },
     val saveCredential: () -> Unit = {}, val deleteCredential: () -> Unit = {},
     /** Saves a custom provider with an optional typed key; the callback gets why it was refused, or null. Unwired, it refuses instead of pretending. */
-    val saveCustomProvider: (CustomProvider, String?, (String?) -> Unit) -> Unit = { _, _, done -> done("Сохранение недоступно") },
+    val saveCustomProvider: (CustomProvider, String?, (String?) -> Unit) -> Unit = { _, _, done -> done(I18n.current.settings.saveUnavailable) },
     val deleteCustomProvider: (String) -> Unit = {},
     /** Saves the cost budget; the callback gets why it was refused, or null. Unwired, it refuses. */
-    val costBudget: (CostBudgetSettings, (String?) -> Unit) -> Unit = { _, done -> done("Сохранение недоступно") },
+    val costBudget: (CostBudgetSettings, (String?) -> Unit) -> Unit = { _, done -> done(I18n.current.settings.saveUnavailable) },
     val refreshCaptureTargets: () -> Unit = {}, val selectCaptureTarget: (String) -> Unit = {},
+    /** Saves the MCP servers; the callback gets why they were refused, or null. Unwired, it refuses. */
+    val saveMcpServers: (List<dev.chiller.tools.McpServerConfig>, (String?) -> Unit) -> Unit = { _, done -> done(I18n.current.settings.saveUnavailable) },
+    /** Saves the proxy settings; the callback gets why they were refused, or null. Unwired, it refuses. */
+    val saveProxy: (ProxySettings, (String?) -> Unit) -> Unit = { _, done -> done(I18n.current.settings.saveUnavailable) },
 )
 
-internal enum class SettingsSection(val title: String, val icon: ImageVector) {
-    CONNECTION("Подключение", Icons.Outlined.Cable), AGENT("Агент", Icons.Outlined.SmartToy), APPEARANCE("Внешний вид", Icons.Outlined.Palette),
-    DATA("Проекты и данные", Icons.Outlined.FolderOpen), KEYS("Клавиши", Icons.Outlined.Keyboard), ABOUT("О программе", Icons.Outlined.Info),
+internal enum class SettingsSection(val icon: ImageVector) {
+    CONNECTION(Icons.Outlined.Cable), AGENT(Icons.Outlined.SmartToy), MCP(Icons.Outlined.Extension), APPEARANCE(Icons.Outlined.Palette),
+    DATA(Icons.Outlined.FolderOpen), KEYS(Icons.Outlined.Keyboard), ABOUT(Icons.Outlined.Info);
+
+    fun title(s: SettingsStrings): String = when (this) {
+        CONNECTION -> s.connection; AGENT -> s.agent; MCP -> s.mcp; APPEARANCE -> s.appearance; DATA -> s.data; KEYS -> s.keys; ABOUT -> s.about
+    }
+
+    fun description(s: SettingsStrings): String = when (this) {
+        CONNECTION -> s.connectionDescription; AGENT -> s.agentDescription; MCP -> s.mcpDescription; APPEARANCE -> s.appearanceDescription
+        DATA -> s.dataDescription; KEYS -> s.keysDescription; ABOUT -> s.aboutDescription
+    }
 }
 
 /** The settings section list. Lives in the app sidebar while it is shown, otherwise at the page's left edge. */
@@ -93,12 +119,12 @@ internal fun SettingsNav(
 ) {
     val c = LocalChillerPalette.current
     Column(modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        ChillerControl("Назад к диалогу", onClose, Modifier.fillMaxWidth(), icon = Icons.AutoMirrored.Outlined.ArrowBack, trailing = "esc", inlineTrailing = true)
+        ChillerControl(LocalStrings.current.settings.backToDialog, onClose, Modifier.fillMaxWidth(), icon = Icons.AutoMirrored.Outlined.ArrowBack, trailing = "esc", inlineTrailing = true)
         Spacer(Modifier.height(14.dp))
-        Text("Настройки", color = c.text, fontSize = 20.sp, fontWeight = FontWeight.Medium, letterSpacing = (-.4).sp, modifier = Modifier.padding(start = 10.dp, bottom = 10.dp))
+        Text(LocalStrings.current.settings.title, color = c.text, fontSize = 20.sp, fontWeight = FontWeight.Medium, letterSpacing = (-.4).sp, modifier = Modifier.padding(start = 10.dp, bottom = 10.dp))
         SettingsSection.entries.forEach { s ->
             Box(contentAlignment = Alignment.CenterEnd) {
-                ChillerControl(s.title, { onSection(s) }, Modifier.fillMaxWidth(), icon = s.icon, style = if (s == section) ControlStyle.SELECTED else ControlStyle.QUIET)
+                ChillerControl(s.title(LocalStrings.current.settings), { onSection(s) }, Modifier.fillMaxWidth(), icon = s.icon, style = if (s == section) ControlStyle.SELECTED else ControlStyle.QUIET)
                 if (s == SettingsSection.CONNECTION && connectionDot != null) Box(Modifier.padding(end = 12.dp).size(7.dp).clip(CircleShape).background(connectionDot))
             }
         }
@@ -128,18 +154,23 @@ internal fun SettingsPage(
             Box(Modifier.width(1.dp).fillMaxHeight().background(c.border.copy(alpha = .6f)))
         }
         Crossfade(section, Modifier.weight(1f).fillMaxHeight(), animationSpec = tween(if (LocalChillerReducedMotion.current) 0 else 150), label = "settings") { current ->
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
-                Column(Modifier.widthIn(max = 760.dp).fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 32.dp, vertical = 24.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
-                    Text(current.title, color = c.text, fontSize = 22.sp, fontWeight = FontWeight.Medium, letterSpacing = (-.5).sp)
+            BoxWithConstraints(Modifier.fillMaxSize()) {
+                val scroll = rememberScrollState()
+                Column(Modifier.fillMaxWidth().verticalScroll(scroll).padding(horizontal = if (maxWidth < 700.dp) 20.dp else 36.dp, vertical = 28.dp), verticalArrangement = Arrangement.spacedBy(24.dp)) {
+                    Text(current.title(LocalStrings.current.settings), color = c.text, fontSize = 28.sp, fontWeight = FontWeight.Medium, letterSpacing = (-.7).sp)
+                    Text(current.description(LocalStrings.current.settings), color = c.muted, fontSize = 13.sp, lineHeight = 19.sp)
+                    Box(Modifier.fillMaxWidth().height(1.dp).background(c.border.copy(alpha = .65f)))
                     when (current) {
                         SettingsSection.CONNECTION -> ConnectionSection(data, actions)
-                        SettingsSection.AGENT -> AgentSection(data, actions)
-                        SettingsSection.APPEARANCE -> AppearanceSection(data, actions)
-                        SettingsSection.DATA -> DataSection(data, actions)
+                        SettingsSection.AGENT -> SettingsGrid { AgentSection(data, actions) }
+                        SettingsSection.MCP -> McpSection(data.mcpServers, data.mcpStates, actions.saveMcpServers)
+                        SettingsSection.APPEARANCE -> SettingsGrid { AppearanceSection(data, actions) }
+                        SettingsSection.DATA -> SettingsGrid { DataSection(data, actions) }
                         SettingsSection.KEYS -> KeysSection()
-                        SettingsSection.ABOUT -> AboutSection(data, actions)
+                        SettingsSection.ABOUT -> SettingsGrid { AboutSection(data, actions) }
                     }
                 }
+                VerticalScrollbar(rememberScrollbarAdapter(scroll), Modifier.align(Alignment.CenterEnd).fillMaxHeight().padding(vertical = 12.dp, horizontal = 4.dp))
             }
         }
     }
@@ -176,89 +207,113 @@ private fun ConnectionSection(data: SettingsData, actions: SettingsActions) {
             if (refused == null) { key = ""; creating = false; actions.applyConnection(provider.baseUrl, provider.defaultModel.orEmpty(), thinking, null) }
         }
     }
-    Card {
-        SectionTitle("Провайдер", "Все провайдеры совместимы с OpenAI Chat Completions. Ключ уходит только на адрес, для которого он задан.")
-        (ProviderPresets.all.map { it as ProviderPreset? } + data.customProviders.map { it.preset() } + listOf(null)).chunked(3).forEach { row ->
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                row.forEach { p ->
-                    if (p == null) {
-                        AddProviderTile(selected = creating, Modifier.weight(1f)) { creating = true; url = ""; model = ""; key = "" }
-                        return@forEach
-                    }
-                    val origin = originOf(p.baseUrl)
-                    val status = when {
-                        p.keyless -> "без ключа" to c.muted
-                        data.keySources[origin] == "env" -> "ключ из .env" to c.positive
-                        data.keySources[origin] == "keychain" -> "ключ сохранён" to c.positive
-                        data.keySources[origin] == "ui" -> "ключ задан" to c.positive
-                        else -> "нужен ключ" to c.faint
-                    }
-                    PresetCard(p, status, selected = !creating && origin == formOrigin, Modifier.weight(1f)) {
-                        creating = false; url = p.baseUrl; key = ""
-                        model = if (originOf(data.baseUrl) == origin) data.model else p.defaultModel.orEmpty()
-                        data.customProviders.firstOrNull { "custom:${it.id}" == p.id }?.thinking?.takeIf { originOf(data.baseUrl) != origin }?.let { thinking = it }
+    var search by remember { mutableStateOf("") }
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+    val catalogHeight = if (maxWidth < 860.dp) 240.dp else 480.dp
+    SettingsGrid(providerDetail = true) {
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        ChillerField(search, { search = it }, strings.settings.providers, strings.settings.searchByName)
+        ChillerControl(strings.settings.addProvider, { creating = true; url = ""; model = ""; key = "" },
+            Modifier.fillMaxWidth(), icon = Icons.Outlined.Add, style = if (creating) ControlStyle.SELECTED else ControlStyle.OUTLINE)
+        val groups = listOf(
+            strings.settings.cloud to ProviderPresets.all.filter { !it.keyless },
+            strings.settings.local to ProviderPresets.all.filter { it.keyless },
+            strings.settings.myConnections to data.customProviders.map { it.preset() },
+        )
+        val catalogScroll = rememberScrollState()
+        Box {
+        Column(Modifier.heightIn(max = catalogHeight).verticalScroll(catalogScroll).padding(end = 10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        var matches = 0
+        groups.forEach { (title, providers) ->
+            val visible = providers.filter { it.name.contains(search.trim(), ignoreCase = true) || it.baseUrl.contains(search.trim(), ignoreCase = true) }
+            matches += visible.size
+            if (visible.isNotEmpty()) {
+                Text(title, color = c.faint, fontSize = 11.sp, fontWeight = FontWeight.Medium, modifier = Modifier.padding(top = 8.dp, start = 10.dp))
+                Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                    visible.forEach { p ->
+                        val origin = originOf(p.baseUrl)
+                        val status = when {
+                            p.keyless -> strings.settings.noKeyNeeded to c.muted
+                            data.keySources[origin] == "env" -> strings.settings.keyFromEnv to c.positive
+                            data.keySources[origin] == "keychain" -> strings.settings.keySaved to c.positive
+                            data.keySources[origin] == "ui" -> strings.settings.keySet to c.positive
+                            else -> strings.settings.keyNeeded to c.faint
+                        }
+                        PresetCard(p, status, selected = !creating && origin == formOrigin, Modifier.fillMaxWidth()) {
+                            creating = false; url = p.baseUrl; key = ""
+                            model = if (originOf(data.baseUrl) == origin) data.model else p.defaultModel.orEmpty()
+                            data.customProviders.firstOrNull { "custom:${it.id}" == p.id }?.thinking?.takeIf { originOf(data.baseUrl) != origin }?.let { thinking = it }
+                        }
                     }
                 }
-                repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
             }
         }
-    }
-    Card {
-        SectionTitle(when { creating -> "Свой провайдер"; custom != null -> custom.name; else -> preset?.name ?: "Свой адрес" },
-            when {
-                isCustom -> "Шлюз компании или свой сервер. Хранится только в настройках этого компьютера и не попадает в репозиторий."
-                else -> preset?.note?.ifBlank { null } ?: "Любой сервер с /chat/completions; HTTP разрешён только для localhost."
-            })
-        if (isCustom) ChillerField(name, { name = it }, "Название", "Qarmet")
-        ChillerField(url, { url = it }, "Адрес API", "https://api.example.com/v1")
-        val keyHint = when {
-            preset?.keyless == true || isLoopback(url) -> "Локальный сервер: ключ не нужен"
-            data.keySources[formOrigin] == "env" -> "Ключ загружен из .env или переменной окружения. Новый заменит его"
-            data.keySources[formOrigin] == "keychain" -> "Ключ сохранён: ${data.secureStorageName}. Пустое поле оставляет его"
-            data.keySources[formOrigin] == "ui" -> "Ключ задан. Пустое поле оставляет его"
-            else -> "Вставьте ключ"
+        if (matches == 0) Text(strings.settings.noProvidersFound, color = c.muted, fontSize = 12.sp)
         }
-        ChillerField(key, { key = it }, "API-ключ", keyHint, secret = true)
-        Text(if (data.secureStorageSupported) "При «Применить» ключ сохраняется в «${data.secureStorageName}» и уходит только на этот адрес."
-            else "Ключ действует до выхода и уходит только на этот адрес; для постоянного ключа используйте переменную окружения или .env.", color = c.faint, fontSize = 11.sp)
+        VerticalScrollbar(rememberScrollbarAdapter(catalogScroll), Modifier.align(Alignment.CenterEnd).height(catalogHeight))
+        }
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(20.dp)) {
+    Card {
+        SectionTitle(when { creating -> strings.settings.ownProvider; custom != null -> custom.name; else -> preset?.name ?: strings.settings.ownAddress },
+            when {
+                isCustom -> strings.settings.ownProviderNote
+                else -> preset?.note?.ifBlank { null } ?: strings.settings.anyServerNote
+            })
+        if (isCustom) ChillerField(name, { name = it }, strings.settings.name, "Qarmet")
+        ChillerField(url, { url = it }, strings.settings.apiAddress, "https://api.example.com/v1")
+        val keyHint = when {
+            preset?.keyless == true || isLoopback(url) -> strings.settings.localNoKey
+            data.keySources[formOrigin] == "env" -> strings.settings.keyFromEnvHint
+            data.keySources[formOrigin] == "keychain" -> strings.settings.keySavedHint(data.secureStorageName)
+            data.keySources[formOrigin] == "ui" -> strings.settings.keySetHint
+            else -> strings.settings.pasteKey
+        }
+        ChillerField(key, { key = it }, strings.settings.apiKey, keyHint, secret = true)
+        Text(if (data.secureStorageSupported) strings.settings.keyStoredNote(data.secureStorageName)
+            else strings.settings.keySessionNote, color = c.faint, fontSize = 11.sp)
         // Models come from the provider's list once connected; typing an id is only a fallback for servers without one.
         val connected = !creating && originOf(data.baseUrl) == formOrigin
         val listed = if (connected) data.catalog.chatModels else emptyList()
         val otherChanges = url.trimEnd('/') != data.baseUrl || thinking != data.thinking || key.isNotEmpty() || customChanged
         if (connected) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Модель · " + catalogLine(data.catalog, data.keyConfigured), color = c.text, fontSize = 13.sp, modifier = Modifier.weight(1f))
-                ChillerControl("Обновить список", actions.refreshModels, icon = Icons.Outlined.Refresh, enabled = data.catalog.status != "loading")
+                Text(strings.settings.modelLine(catalogLine(data.catalog, data.keyConfigured, strings.composer)), color = c.text, fontSize = 13.sp, modifier = Modifier.weight(1f))
+                ChillerControl(strings.settings.refreshList, actions.refreshModels, icon = Icons.Outlined.Refresh, enabled = data.catalog.status != "loading")
             }
             if (listed.isNotEmpty()) ChipFlow(listed.map { it.id }.take(24), model, listed.associate { it.id to (it.displayName?.let { name -> "$name · ${it.id}" } ?: it.id) }) { picked ->
                 model = picked
                 // With nothing else pending, a picked model takes effect at once.
                 if (!otherChanges) actions.applyConnection(data.baseUrl, picked, data.thinking, null)
             }
-            else if (data.catalog.status in setOf("ready", "failed")) ChillerField(model, { model = it }, "Модель (провайдер не отдал список)", "ID модели у провайдера")
-        } else Text("Модель выбирается из списка провайдера после «Применить».", color = c.faint, fontSize = 11.sp)
-        preset?.keysUrl?.let { link -> ChillerControl("Где взять ключ: ${link.removePrefix("https://")}", { actions.openUrl(link) }, icon = Icons.AutoMirrored.Outlined.OpenInNew) }
-        SettingToggle("Рассуждения модели", "Если провайдер поддерживает режим thinking", thinking) { thinking = it }
-        if (isCustom) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text("Профиль с этим провайдером", color = c.text, fontSize = 13.sp, modifier = Modifier.weight(1f))
-            listOf(null to "Не менять", "auto" to "Авто", "full" to "Полный", "compact" to "Компактный").forEach { (value, label) ->
+            else if (data.catalog.status in setOf("ready", "failed")) ChillerField(model, { model = it }, strings.settings.modelNoList, strings.settings.modelIdHint)
+        } else Text(strings.settings.modelAfterApply, color = c.faint, fontSize = 11.sp)
+        preset?.keysUrl?.let { link -> ChillerControl(strings.settings.whereKey(link.removePrefix("https://")), { actions.openUrl(link) }, icon = Icons.AutoMirrored.Outlined.OpenInNew) }
+        SettingToggle(strings.settings.modelReasoning, strings.settings.modelReasoningHint, thinking) { thinking = it }
+        if (isCustom) Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(strings.settings.providerProfile, color = c.text, fontSize = 13.sp)
+            listOf(null to strings.settings.keepProfile, "auto" to strings.settings.auto, "full" to strings.settings.full, "compact" to strings.settings.compact).forEach { (value, label) ->
                 ChillerControl(label, { profile = value }, style = if (profile == value) ControlStyle.SELECTED else ControlStyle.QUIET)
             }
         }
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            ChillerControl("Применить", ::apply, style = ControlStyle.PRIMARY, enabled = changed && url.isNotBlank() && (!isCustom || name.isNotBlank()))
-            if (data.connection.status == "checking") ChillerControl("Отменить проверку", actions.cancelCheck, style = ControlStyle.OUTLINE)
-            else ChillerControl("Проверить подключение", actions.checkConnection, style = ControlStyle.OUTLINE, enabled = !changed && data.keyConfigured && model.isNotBlank())
-            if (originOf(data.baseUrl) == formOrigin && data.keyConfigured && !isLoopback(url) && !creating) ChillerControl("Удалить ключ", actions.deleteCredential, enabled = !changed)
-            if (custom != null) ChillerControl("Удалить провайдер", { actions.deleteCustomProvider(custom.id) })
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            ChillerControl(strings.settings.apply, ::apply, style = ControlStyle.PRIMARY, enabled = changed && url.isNotBlank() && (!isCustom || name.isNotBlank()))
+            if (data.connection.status == "checking") ChillerControl(strings.settings.cancelCheck, actions.cancelCheck, style = ControlStyle.OUTLINE)
+            else ChillerControl(strings.settings.checkConnection, actions.checkConnection, style = ControlStyle.OUTLINE, enabled = !changed && data.keyConfigured && model.isNotBlank())
+            if (originOf(data.baseUrl) == formOrigin && data.keyConfigured && !isLoopback(url) && !creating) ChillerControl(strings.settings.deleteKey, actions.deleteCredential, enabled = !changed)
+            if (custom != null) ChillerControl(strings.settings.deleteProvider, { actions.deleteCustomProvider(custom.id) })
         }
         problem?.let { Text(it, color = c.negative, fontSize = 12.sp) }
         val (line, color) = connectionSummary(data.connection, data.keyConfigured)
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(7.dp).clip(CircleShape).background(color)); Spacer(Modifier.width(8.dp))
-            Text(if (changed) "Изменения не применены" else data.connection.message.ifBlank { line }, color = if (data.connection.status == "failed" && !changed) c.negative else c.muted, fontSize = 12.sp)
+            Text(if (changed) strings.settings.notApplied else data.connection.message.ifBlank { line }, color = if (data.connection.status == "failed" && !changed) c.negative else c.muted, fontSize = 12.sp)
         }
-        Text("Применение начинает новый диалог. Проверка отправляет один короткий запрос без файлов и инструментов.", color = c.faint, fontSize = 11.sp, lineHeight = 17.sp)
+        Text(strings.settings.applyNote, color = c.faint, fontSize = 11.sp, lineHeight = 17.sp)
+    }
+    ProxyCard(data, actions)
+    }
+    }
     }
 }
 
@@ -281,43 +336,60 @@ private fun CostBudgetCard(data: SettingsData, actions: SettingsActions) {
         baseUrl = data.baseUrl, model = data.model, imageModel = data.imageModel.orEmpty())
     val bound = saved.enabled && (saved.baseUrl.trimEnd('/') != data.baseUrl.trimEnd('/') || saved.model != data.model)
     Card {
-        SectionTitle("Денежный бюджет", "Лимит в USD на одну задачу по вашим ценам. Каждый запрос, включая повторы, помощников и картинки, заранее резервирует худший случай; после ответа резерв заменяется фактическим расходом.")
-        SettingToggle("Ограничивать расходы", if (saved.enabled) "Включено для ${saved.model} · ${saved.baseUrl.removePrefix("https://")}" else "Выключено", saved.enabled) { on ->
+        val text = strings // read before lambdas that are not composable
+        SectionTitle(strings.settings.budget, strings.settings.budgetNote)
+        SettingToggle(strings.settings.limitSpending, if (saved.enabled) strings.settings.budgetOnFor(saved.model, saved.baseUrl.removePrefix("https://")) else strings.settings.off, saved.enabled) { on ->
             actions.costBudget(draft(on)) { refused -> message = refused }
         }
-        ChillerField(limit, { limit = it }, "Лимит на задачу, USD", "1.00")
-        ChillerField(input, { input = it }, "Цена 1M входных токенов, USD", "0.27")
-        ChillerField(output, { output = it }, "Цена 1M выходных токенов, USD", "1.10")
-        if (data.imageModel != null) ChillerField(image, { image = it }, "Цена одной картинки (${data.imageModel}), USD", "0.04")
-        ChillerField(ceiling, { ceiling = it }, "Потолок входных токенов на запрос", "32768")
-        Text("Потолок ограничивает контекст запроса: так резерв на вход не может оказаться меньше фактического. Пустая цена — бюджет отказывает, а не считает её нулём.",
+        ChillerField(limit, { limit = it }, strings.settings.budgetLimit, "1.00")
+        ChillerField(input, { input = it }, strings.settings.priceInput, "0.27")
+        ChillerField(output, { output = it }, strings.settings.priceOutput, "1.10")
+        if (data.imageModel != null) ChillerField(image, { image = it }, strings.settings.priceImage(data.imageModel), "0.04")
+        ChillerField(ceiling, { ceiling = it }, strings.settings.inputCeiling, "32768")
+        Text(strings.settings.ceilingNote,
             color = c.faint, fontSize = 11.sp, lineHeight = 16.sp)
-        if (bound) Text("Цены сохранены для ${saved.model}; с текущей моделью ${data.model} бюджет откажет в запросах. Сохраните, чтобы указать цены для неё.",
+        if (bound) Text(strings.settings.budgetBound(saved.model, data.model),
             color = c.negative, fontSize = 12.sp, lineHeight = 17.sp)
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            ChillerControl("Сохранить для ${data.model.ifBlank { "текущей модели" }}", { actions.costBudget(draft(true)) { refused -> message = refused ?: "Сохранено" } }, style = ControlStyle.PRIMARY)
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            ChillerControl(text.settings.saveFor(data.model.ifBlank { text.settings.currentModel }), { actions.costBudget(draft(true)) { refused -> message = refused ?: text.settings.saved } }, style = ControlStyle.PRIMARY)
         }
-        message?.let { Text(it, color = if (it == "Сохранено") c.positive else c.negative, fontSize = 12.sp) }
+        message?.let { Text(it, color = if (it == strings.settings.saved) c.positive else c.negative, fontSize = 12.sp) }
     }
 }
 
-/** The "+" tile that opens the form for a new custom provider. */
+/** The proxy for a corporate network: the system's, none, or one typed in, with hosts that always go direct. */
 @Composable
-private fun AddProviderTile(selected: Boolean, modifier: Modifier, onClick: () -> Unit) {
+private fun ProxyCard(data: SettingsData, actions: SettingsActions) {
     val c = LocalChillerPalette.current
-    val interaction = remember { MutableInteractionSource() }
-    val hovered by interaction.collectIsHoveredAsState()
-    val shape = RoundedCornerShape(10.dp)
-    Column(
-        modifier.clip(shape).background(if (selected) c.selected.copy(alpha = .6f) else if (hovered) c.hover else c.surface)
-            .border(if (selected) 1.5.dp else 1.dp, if (selected) c.accent.copy(alpha = .7f) else c.border, shape)
-            .hoverable(interaction).pointerHoverIcon(PointerIcon.Hand).clickable(interactionSource = interaction, indication = null, role = Role.Button, onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 10.dp),
-    ) {
-        Text("+ Свой провайдер", color = c.text, fontSize = 13.sp, fontWeight = FontWeight.Medium)
-        Text("шлюз компании, свой сервер", color = c.faint, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        Spacer(Modifier.height(4.dp))
-        Text("хранится только здесь", color = c.muted, fontSize = 11.sp)
+    val text = strings // read before lambdas that are not composable
+    val saved = data.proxy
+    var mode by remember(saved) { mutableStateOf(saved.mode) }
+    var url by remember(saved) { mutableStateOf(saved.url) }
+    var bypass by remember(saved) { mutableStateOf(saved.bypass) }
+    var message by remember(saved) { mutableStateOf<String?>(null) }
+    val draft = ProxySettings(mode, url, bypass).normalized()
+    val changed = draft != saved.normalized()
+    val problem = draft.problem()
+    Card {
+        SectionTitle(strings.settings.proxy, strings.settings.proxyNote)
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            listOf("system" to strings.settings.proxySystem, "manual" to strings.settings.proxyManual, "off" to strings.settings.proxyOff).forEach { (id, label) ->
+                ChillerControl(label, { mode = id; message = null }, style = if (mode == id) ControlStyle.SELECTED else ControlStyle.QUIET)
+            }
+        }
+        Text(when (mode) {
+            "system" -> strings.settings.proxySystemHint
+            "manual" -> strings.settings.proxyManualHint
+            else -> strings.settings.proxyOffHint
+        }, color = c.faint, fontSize = 11.sp, lineHeight = 16.sp)
+        if (mode == "manual") ChillerField(url, { url = it; message = null }, strings.settings.proxyAddress, "http://proxy.company.local:3128")
+        if (mode != "off") ChillerField(bypass, { bypass = it; message = null }, strings.settings.proxyBypass, "*.company.local, 10.0.0.5")
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            ChillerControl(text.settings.save, { actions.saveProxy(draft) { refused -> message = refused ?: text.settings.proxySaved } },
+                style = ControlStyle.PRIMARY, enabled = changed && problem == null)
+        }
+        val note = if (changed && problem != null) problem else message
+        note?.let { Text(it, color = if (it == strings.settings.proxySaved) c.positive else c.negative, fontSize = 12.sp, lineHeight = 17.sp) }
     }
 }
 
@@ -328,16 +400,15 @@ private fun PresetCard(preset: ProviderPreset, status: Pair<String, Color>, sele
     val hovered by interaction.collectIsHoveredAsState()
     val shape = RoundedCornerShape(10.dp)
     Column(
-        modifier.clip(shape).background(if (selected) c.selected.copy(alpha = .6f) else if (hovered) c.hover else c.surface)
-            .border(if (selected) 1.5.dp else 1.dp, if (selected) c.accent.copy(alpha = .7f) else c.border, shape)
+        modifier.clip(shape).background(if (selected) c.accent.copy(alpha = .10f) else if (hovered) c.hover else c.surface)
+            .semantics { this.selected = selected }
             .hoverable(interaction).pointerHoverIcon(PointerIcon.Hand).clickable(interactionSource = interaction, indication = null, role = Role.RadioButton, onClick = onClick)
             .padding(horizontal = 12.dp, vertical = 10.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(preset.name, color = c.text, fontSize = 13.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-            if (preset.verified) Icon(Icons.Outlined.Verified, "Проверено в Chiller", Modifier.size(14.dp), tint = c.accent)
+            if (preset.verified) Icon(Icons.Outlined.Verified, strings.settings.verifiedInChiller, Modifier.size(14.dp), tint = c.accent)
         }
-        Text(preset.baseUrl.removePrefix("https://").removePrefix("http://"), color = c.faint, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, fontFamily = FontFamily.Monospace)
         Spacer(Modifier.height(4.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(6.dp).clip(CircleShape).background(status.second)); Spacer(Modifier.width(5.dp))
@@ -354,7 +425,7 @@ private fun ChipFlow(items: List<String>, selected: String, labels: Map<String, 
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 row.forEach { id ->
                     val active = id == selected
-                    Text(labels[id] ?: id, color = if (active) c.text else c.muted, fontSize = 11.sp, fontFamily = FontFamily.Monospace, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    Text(labels[id] ?: id, color = if (active) c.text else c.muted, fontSize = 11.sp, fontFamily = ChillerFonts.mono, maxLines = 1, overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f).clip(RoundedCornerShape(6.dp)).background(if (active) c.selected else c.sidebar)
                             .pointerHoverIcon(PointerIcon.Hand).clickable { onPick(id) }.padding(horizontal = 8.dp, vertical = 5.dp))
                 }
@@ -372,65 +443,98 @@ private fun AgentSection(data: SettingsData, actions: SettingsActions) {
     CostBudgetCard(data, actions)
     VerifyCard(data, actions)
     Card {
-        SectionTitle("Лимиты прогона", "Ограничивают одну задачу. Применяются со следующего сообщения, история сохраняется.")
-        Text("Шагов модели за задачу", color = c.text, fontSize = 13.sp)
-        Text("Каждый шаг — один запрос к модели; большой файл или длинная задача может занять десятки шагов", color = c.faint, fontSize = 11.sp, lineHeight = 16.sp)
-        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        SectionTitle(strings.settings.runLimits, strings.settings.runLimitsNote)
+        Text(strings.settings.taskTime, color = c.text, fontSize = 13.sp)
+        Text(strings.settings.taskTimeNote,
+            color = c.faint, fontSize = 11.sp, lineHeight = 16.sp)
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            val minutes = listOf(10, 30, 60, 120).let { if (a.maxRunMinutes != AgentOptions.UNLIMITED && a.maxRunMinutes !in it) (it + a.maxRunMinutes).sorted() else it }
+            (minutes.map { it to strings.settings.minutes(it) } + (AgentOptions.UNLIMITED to strings.settings.noLimit)).forEach { (v, label) ->
+                ChillerControl(label, { actions.agent(a.copy(maxRunMinutes = v)) }, style = if (a.maxRunMinutes == v) ControlStyle.SELECTED else ControlStyle.QUIET)
+            }
+        }
+        Text(strings.settings.modelSteps, color = c.text, fontSize = 13.sp)
+        Text(strings.settings.modelStepsNote, color = c.faint, fontSize = 11.sp, lineHeight = 16.sp)
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             // Same chips as the other limits; a value saved by the old stepper still shows as its own selected chip.
             val steps = listOf(24, 48, 96, 200).let { if (a.maxRounds != AgentOptions.UNLIMITED && a.maxRounds !in it) (it + a.maxRounds).sorted() else it }
-            (steps.map { it to "$it" } + (AgentOptions.UNLIMITED to "Без лимита")).forEach { (v, label) ->
+            (steps.map { it to "$it" } + (AgentOptions.UNLIMITED to strings.settings.noLimit)).forEach { (v, label) ->
                 ChillerControl(label, { actions.agent(a.copy(maxRounds = v)) }, style = if (a.maxRounds == v) ControlStyle.SELECTED else ControlStyle.QUIET)
             }
         }
-        Text("Общий бюджет: основной агент и все помощники", color = c.text, fontSize = 13.sp)
-        Text("Логические запросы к модели на всю задачу; транспортные повторы не считаются", color = c.faint, fontSize = 11.sp, lineHeight = 16.sp)
-        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            listOf(24 to "24", 48 to "48", 96 to "96", 192 to "192", AgentOptions.UNLIMITED to "Без лимита").forEach { (v, label) ->
+        Text(strings.settings.sharedBudget, color = c.text, fontSize = 13.sp)
+        Text(strings.settings.sharedBudgetNote, color = c.faint, fontSize = 11.sp, lineHeight = 16.sp)
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            listOf(24 to "24", 48 to "48", 96 to "96", 192 to "192", AgentOptions.UNLIMITED to strings.settings.noLimit).forEach { (v, label) ->
                 ChillerControl(label, { actions.agent(a.copy(maxRequests = v)) }, style = if (a.maxRequests == v) ControlStyle.SELECTED else ControlStyle.QUIET)
             }
         }
-        Text("Сумма сгенерированных выходных токенов на всю задачу, включая помощников. Это не лимит стоимости; входные токены не учитываются.", color = c.faint, fontSize = 11.sp, lineHeight = 16.sp)
-        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            listOf(32768 to "32k", 65536 to "64k", 262144 to "256k", 1_048_576 to "1M", AgentOptions.UNLIMITED to "Без лимита").forEach { (v, label) ->
+        Text(strings.settings.outputTokensNote, color = c.faint, fontSize = 11.sp, lineHeight = 16.sp)
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            listOf(32768 to "32k", 65536 to "64k", 262144 to "256k", 1_048_576 to "1M", AgentOptions.UNLIMITED to strings.settings.noLimit).forEach { (v, label) ->
                 ChillerControl(label, { actions.agent(a.copy(totalOutputTokens = v)) }, style = if (a.totalOutputTokens == v) ControlStyle.SELECTED else ControlStyle.QUIET)
             }
         }
-        Text("Длина ответа за шаг, токенов", color = c.text, fontSize = 13.sp)
-        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            listOf(4096 to "4k", 8192 to "8k", 16384 to "16k", 32768 to "32k", 65536 to "64k", AgentOptions.UNLIMITED to "Максимум модели").forEach { (v, label) ->
+        Text(strings.settings.replyLength, color = c.text, fontSize = 13.sp)
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            listOf(4096 to "4k", 8192 to "8k", 16384 to "16k", 32768 to "32k", 65536 to "64k", AgentOptions.UNLIMITED to strings.settings.modelMaximum).forEach { (v, label) ->
                 ChillerControl(label, { actions.agent(a.copy(maxOutputTokens = v)) }, style = if (a.maxOutputTokens == v) ControlStyle.SELECTED else ControlStyle.QUIET)
             }
         }
-        Text("«Максимум модели» просит столько, сколько разрешает сама модель (например, у DeepSeek Flash до 384k): предел узнаётся из ответа провайдера и запоминается. " +
-            "Рассуждения модели расходуют этот же лимит. Если ответ всё же упрётся в предел, обрезанный вызов не выполняется, а агент продолжит, записывая файл частями.",
+        Text(strings.settings.modelMaximumNote,
             color = c.faint, fontSize = 11.sp, lineHeight = 16.sp)
-        if (a.maxRounds == AgentOptions.UNLIMITED || a.maxRequests == AgentOptions.UNLIMITED || a.totalOutputTokens == AgentOptions.UNLIMITED)
-            Text("Без лимита задача идёт, пока не закончит, пока вы её не остановите или до страховочных ${AgentOptions.UNLIMITED_ROUNDS_BACKSTOP} шагов. Следите за расходом токенов в Studio → Прогон.",
+        if (a.maxRounds == AgentOptions.UNLIMITED || a.maxRequests == AgentOptions.UNLIMITED || a.totalOutputTokens == AgentOptions.UNLIMITED || a.maxRunMinutes == AgentOptions.UNLIMITED)
+            Text(strings.settings.noLimitWarning(AgentOptions.UNLIMITED_ROUNDS_BACKSTOP),
                 color = c.negative, fontSize = 11.sp, lineHeight = 16.sp)
     }
     Card {
-        SectionTitle("Возможности", null)
-        SettingToggle("Помощники (субагенты)", "До 3 параллельных помощников только на чтение: ищут и читают код, присылают отчёт", a.subagents) { actions.agent(a.copy(subagents = it)) }
-        SettingToggle("Инструкции проекта", "Читать AGENTS.md, CLAUDE.md и .chiller/instructions.md как указания (не как разрешения)", a.projectInstructions) { actions.agent(a.copy(projectInstructions = it)) }
-        SettingToggle("Команды процессов", "Разрешить запуск тестов и сборки в режиме «Изменения». Это не песочница ОС", data.allowProcesses) { actions.allowProcesses(it) }
-        SettingToggle("Веб-поиск", "Поисковые запросы отправляются внешнему сервису и покидают этот компьютер", a.allowNetwork) { actions.agent(a.copy(allowNetwork = it)) }
-        SettingToggle("Снимки окна", "Захват доступен по явному запросу; ОС может спросить разрешение. Просмотр изображения зависит от модели", a.allowScreenshots) { actions.agent(a.copy(allowScreenshots = it)) }
+        SectionTitle(strings.settings.capabilities, null)
+        SettingToggle(strings.settings.helpers, strings.settings.helpersHint, a.subagents) { actions.agent(a.copy(subagents = it)) }
+        SettingToggle(strings.settings.projectInstructions, strings.settings.projectInstructionsHint, a.projectInstructions) { actions.agent(a.copy(projectInstructions = it)) }
+        SettingToggle(strings.settings.processCommands, strings.settings.processCommandsHint, data.allowProcesses) { actions.allowProcesses(it) }
+        SettingToggle(strings.settings.webSearch, strings.settings.webSearchHint, a.allowNetwork) { actions.agent(a.copy(allowNetwork = it)) }
+        SettingToggle(strings.settings.windowSnapshots, strings.settings.windowSnapshotsHint, a.allowScreenshots) { actions.agent(a.copy(allowScreenshots = it)) }
         when {
-            !data.screenshotSupported -> Text("Захват окна недоступен на этой платформе.", color = c.faint, fontSize = 11.sp)
-            !a.allowScreenshots -> Text("Сначала включите «Снимки окна», затем выберите конкретное окно для захвата.", color = c.faint, fontSize = 11.sp)
+            !data.screenshotSupported -> Text(strings.settings.captureUnsupported, color = c.faint, fontSize = 11.sp)
+            !a.allowScreenshots -> Text(strings.settings.captureEnableFirst, color = c.faint, fontSize = 11.sp)
             else -> {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Окно для снимка", color = c.text, fontSize = 13.sp, modifier = Modifier.weight(1f))
-                    ChillerControl("Обновить список", actions.refreshCaptureTargets, icon = Icons.Outlined.Refresh)
+                    Text(strings.settings.captureWindow, color = c.text, fontSize = 13.sp, modifier = Modifier.weight(1f))
+                    ChillerControl(strings.settings.refreshList, actions.refreshCaptureTargets, icon = Icons.Outlined.Refresh)
                 }
                 val selected = data.captureTargets.firstOrNull { it.id == data.selectedCaptureTarget }
-                if (selected != null) Text("Выбрано: ${selected.application} · ${selected.title}", color = c.muted, fontSize = 11.sp, lineHeight = 16.sp)
-                else Text("Окно не выбрано. Снимок не будет сделан, пока вы явно не выберете цель.", color = c.faint, fontSize = 11.sp, lineHeight = 16.sp)
+                if (selected != null) Text(strings.settings.captureSelected(selected.application, selected.title), color = c.muted, fontSize = 11.sp, lineHeight = 16.sp)
+                else Text(strings.settings.captureNone, color = c.faint, fontSize = 11.sp, lineHeight = 16.sp)
                 data.captureTargets.forEach { target ->
                     ChillerControl("${target.application} · ${target.title}", { actions.selectCaptureTarget(target.id) }, icon = Icons.Outlined.CropFree,
                         style = if (target.id == data.selectedCaptureTarget) ControlStyle.SELECTED else ControlStyle.QUIET)
                 }
-                if (data.captureTargets.isEmpty()) Text("Список окон пуст. Обновите его и выберите окно явно.", color = c.faint, fontSize = 11.sp)
+                if (data.captureTargets.isEmpty()) Text(strings.settings.captureEmpty, color = c.faint, fontSize = 11.sp)
+            }
+        }
+    }
+}
+
+/** Reflow the same composition: resizing must not discard drafts or field focus. */
+@Composable
+private fun SettingsGrid(providerDetail: Boolean = false, content: @Composable () -> Unit) {
+    Layout(content = content, modifier = Modifier.fillMaxWidth()) { measurables, constraints ->
+        val gap = 24.dp.roundToPx()
+        val wide = constraints.maxWidth >= (if (providerDetail) 860.dp else 1040.dp).roundToPx()
+        val columns = if (wide) 2 else 1
+        val firstWidth = if (!wide) constraints.maxWidth else if (providerDetail) 248.dp.roundToPx() else (constraints.maxWidth - gap) / 2
+        val heights = IntArray(columns)
+        val positions = mutableListOf<Pair<Int, Int>>()
+        val placeables = measurables.mapIndexed { index, measurable ->
+            val column = index % columns
+            val width = if (column == 0) firstWidth else constraints.maxWidth - firstWidth - gap
+            positions += (if (column == 0) 0 else firstWidth + gap) to heights[column]
+            measurable.measure(Constraints.fixedWidth(width)).also { heights[column] += it.height + gap }
+        }
+        layout(constraints.maxWidth, (heights.maxOrNull()?.minus(gap) ?: 0).coerceAtLeast(0)) {
+            placeables.forEachIndexed { index, placeable ->
+                val (x, y) = positions[index]
+                placeable.placeRelative(x, y)
             }
         }
     }
@@ -444,22 +548,22 @@ private fun VerifyCard(data: SettingsData, actions: SettingsActions) {
     val c = LocalChillerPalette.current
     val a = data.agent
     Card {
-        SectionTitle("Автопроверка", "После задачи в режиме «Изменения», если агент менял файлы, запускается команда проверки проекта. Если она падает, агент получает вывод и исправляет — не больше заданного числа попыток.")
-        SettingToggle("Проверять после правок", "Нужны включённые «Команды процессов». Команда запускается без shell, в корне проекта", a.autoVerify) { actions.agent(a.copy(autoVerify = it)) }
+        SectionTitle(strings.settings.autoVerify, strings.settings.autoVerifyNote)
+        SettingToggle(strings.settings.verifyAfterEdits, strings.settings.verifyAfterEditsHint, a.autoVerify) { actions.agent(a.copy(autoVerify = it)) }
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("Попыток исправления", color = c.text, fontSize = 13.sp, modifier = Modifier.weight(1f))
+            Text(strings.settings.fixAttempts, color = c.text, fontSize = 13.sp, modifier = Modifier.weight(1f))
             listOf(1, 2, 3).forEach { n -> ChillerControl("$n", { actions.agent(a.copy(autoVerifyAttempts = n)) }, style = if (a.autoVerifyAttempts == n) ControlStyle.SELECTED else ControlStyle.QUIET) }
         }
         val root = data.workspace
-        if (root == null) Text("Откройте проект, чтобы задать его команду проверки.", color = c.faint, fontSize = 11.sp)
+        if (root == null) Text(strings.settings.openProjectForCheck, color = c.faint, fontSize = 11.sp)
         else {
             var command by remember(root, data.verifyCommand) { mutableStateOf(data.verifyCommand) }
-            ChillerField(command, { command = it }, "Команда проверки для ${root.substringAfterLast('/')}", data.suggestedVerifyCommand ?: "например, ./gradlew test")
+            ChillerField(command, { command = it }, strings.settings.checkCommandFor(folderName(root)), data.suggestedVerifyCommand ?: strings.settings.checkCommandExample)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                ChillerControl("Сохранить", { actions.setVerifyCommand(root, command) }, style = ControlStyle.OUTLINE, enabled = command.trim() != data.verifyCommand)
-                data.suggestedVerifyCommand?.takeIf { it != command.trim() }?.let { s -> ChillerControl("Подставить «$s»", { command = s }) }
+                ChillerControl(strings.settings.save, { actions.setVerifyCommand(root, command) }, style = ControlStyle.OUTLINE, enabled = command.trim() != data.verifyCommand)
+                data.suggestedVerifyCommand?.takeIf { it != command.trim() }?.let { s -> ChillerControl(strings.settings.useSuggestion(s), { command = s }) }
             }
-            if (a.autoVerify && !data.allowProcesses) Text("Сейчас «Команды процессов» выключены — проверка не запустится.", color = c.negative, fontSize = 11.sp)
+            if (a.autoVerify && !data.allowProcesses) Text(strings.settings.processesOffWarning, color = c.negative, fontSize = 11.sp)
         }
     }
 }
@@ -472,70 +576,84 @@ private fun ProfileCard(data: SettingsData, actions: SettingsActions) {
     val listed = data.catalog.entry(data.model)
     val resolved = effectiveProfile(a, data.model, listed)
     Card {
-        SectionTitle("Профиль модели", "Маленьким моделям проще с коротким списком инструментов и пошаговым промптом. Применяется со следующего сообщения.")
+        SectionTitle(strings.settings.modelProfile, strings.settings.modelProfileNote)
         Row(Modifier.clip(RoundedCornerShape(8.dp)).background(c.sidebar).padding(2.dp), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-            listOf("auto" to "Авто", "full" to "Полный", "compact" to "Компактный").forEach { (id, label) ->
+            listOf("auto" to strings.settings.auto, "full" to strings.settings.full, "compact" to strings.settings.compact).forEach { (id, label) ->
                 ChillerControl(label, { actions.agent(a.copy(profile = id)) }, style = if (a.profile == id) ControlStyle.SELECTED else ControlStyle.QUIET)
             }
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(7.dp).clip(CircleShape).background(c.accent)); Spacer(Modifier.width(8.dp))
             Text(buildString {
-                append("Для ${data.model.ifBlank { "модели" }}: ${resolved.name.lowercase()}")
-                if (a.profile == "auto") append(if (listed?.displayName != null) " (выбран автоматически по ID и названию «${listed.displayName}»)" else " (выбран автоматически по ID)")
+                append(strings.settings.profileFor(data.model.ifBlank { strings.settings.theModel }, strings.settings.profileName(resolved.id)))
+                if (a.profile == "auto") append(if (listed?.displayName != null) strings.settings.autoByIdAndName(listed.displayName!!) else strings.settings.autoById)
             }, color = c.text, fontSize = 12.sp)
         }
-        Text(resolved.description, color = c.faint, fontSize = 11.sp, lineHeight = 16.sp)
+        Text(strings.settings.profileDescription(resolved.id, dev.chiller.agent.ModelProfiles.CORE_TOOLS.size), color = c.faint, fontSize = 11.sp, lineHeight = 16.sp)
         resolved.tools?.let { tools ->
-            Text("Инструменты: " + tools.sorted().joinToString(", "), color = c.muted, fontSize = 11.sp, lineHeight = 16.sp, fontFamily = FontFamily.Monospace)
+            Text(strings.settings.tools(tools.sorted().joinToString(", ")), color = c.muted, fontSize = 11.sp, lineHeight = 16.sp, fontFamily = ChillerFonts.mono)
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                Text("Изображения", color = c.text, fontSize = 13.sp)
-                Text(if (visionEnabled(a, data.model, listed)) "Вложенные картинки отправляются модели как изображения" else "Модель получает только имя и размер картинки",
+                Text(strings.settings.images, color = c.text, fontSize = 13.sp)
+                Text(if (visionEnabled(a, data.model, listed)) strings.settings.imagesOn else strings.settings.imagesOff,
                     color = c.faint, fontSize = 11.sp, lineHeight = 15.sp)
             }
-            listOf("auto" to "Авто", "on" to "Вкл", "off" to "Выкл").forEach { (id, label) ->
+            listOf("auto" to strings.settings.auto, "on" to strings.settings.on, "off" to strings.settings.offShort).forEach { (id, label) ->
                 ChillerControl(label, { actions.agent(a.copy(vision = id)) }, style = if (a.vision == id) ControlStyle.SELECTED else ControlStyle.QUIET)
             }
         }
-        val imageModel = imageModelFor(a, data.catalog)
-        val listedImageModels = data.catalog.models.filter { it.imageGeneration == true }
+        if (data.imageProviders.isNotEmpty()) {
+            Column {
+                Text(strings.settings.imageProvider, color = c.text, fontSize = 13.sp)
+                Text(strings.settings.imageProviderNote, color = c.faint, fontSize = 11.sp, lineHeight = 15.sp)
+            }
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                (listOf("" to strings.settings.sameAsChat) + data.imageProviders).forEach { (url, label) ->
+                    val selected = normalizeEndpoint(a.imageBaseUrl.ifBlank { data.baseUrl }) == normalizeEndpoint(url.ifBlank { data.baseUrl })
+                    // A model id belongs to its endpoint: switching providers starts from that provider's own choice.
+                    ChillerControl(label, { if (!selected) actions.agent(a.copy(imageBaseUrl = url, imageModel = "auto")) },
+                        style = if (selected) ControlStyle.SELECTED else ControlStyle.QUIET)
+                }
+            }
+        }
+        val imageModel = imageModelFor(a, data.imageCatalog)
+        val listedImageModels = data.imageCatalog.models.filter { it.imageGeneration == true }
         Column {
-            Text("Модель для картинок", color = c.text, fontSize = 13.sp)
+            Text(strings.settings.imageModel, color = c.text, fontSize = 13.sp)
             Text(when {
-                imageModel == null -> "Инструмент generate_image выключен" + if (a.imageModel == "auto") ": провайдер не указал модель для картинок" else ""
-                else -> "generate_image рисует через ${imageModel.displayName ?: imageModel.id}" + if (imageModel.imageEditing == true) " и умеет редактировать картинки" else ""
+                imageModel == null -> strings.settings.imageToolOff + if (a.imageModel == "auto") strings.settings.imageNoModel else ""
+                else -> strings.settings.imageDrawsWith(imageModel.displayName ?: imageModel.id, imageModel.imageEditing == true)
             }, color = c.faint, fontSize = 11.sp, lineHeight = 15.sp)
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            (listOf("auto" to "Авто", "off" to "Выкл") + listedImageModels.map { it.id to (it.displayName ?: it.id) }).forEach { (id, label) ->
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            (listOf("auto" to strings.settings.auto, "off" to strings.settings.offShort) + listedImageModels.map { it.id to (it.displayName ?: it.id) }).forEach { (id, label) ->
                 ChillerControl(label, { actions.agent(a.copy(imageModel = id)) }, style = if (a.imageModel == id) ControlStyle.SELECTED else ControlStyle.QUIET)
             }
         }
-        Text("Температура", color = c.text, fontSize = 13.sp)
-        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(strings.settings.temperature, color = c.text, fontSize = 13.sp)
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             val options = listOf<Double?>(null, 0.0, 0.2, 0.5, 0.8, 1.0)
             val recommended = ModelProfiles.recommendedSampling(data.model, listed?.displayName) != null
             options.forEach { t ->
-                val label = t?.toString() ?: (defaultTemperature(resolved, data.model, listed)?.let { if (recommended) "рекомендуемая ($it)" else "профиль ($it)" } ?: "по умолчанию")
+                val label = t?.toString() ?: (defaultTemperature(resolved, data.model, listed)?.let { if (recommended) strings.settings.recommended(it.toString()) else strings.settings.profileValue(it.toString()) } ?: strings.settings.byDefault)
                 ChillerControl(label, { actions.agent(a.copy(temperature = t)) }, style = if (a.temperature == t) ControlStyle.SELECTED else ControlStyle.QUIET)
             }
         }
         var extras by remember(a.requestExtras) { mutableStateOf(a.requestExtras) }
         val problem = validateRequestExtras(extras)
-        ChillerField(extras, { extras = it }, "Дополнительные поля запроса (JSON)", "{\"top_p\": 0.9}")
-        Text(problem ?: "Добавляются в каждый запрос к модели, например параметры structured output вашего vLLM. Поля model, messages, tools, stream и max_tokens изменить нельзя.",
+        ChillerField(extras, { extras = it }, strings.settings.requestExtras, "{\"top_p\": 0.9}")
+        Text(problem ?: strings.settings.requestExtrasNote,
             color = if (problem != null) c.negative else c.faint, fontSize = 11.sp, lineHeight = 16.sp)
-        ChillerControl("Сохранить поля", { actions.agent(a.copy(requestExtras = extras.trim())) }, style = ControlStyle.OUTLINE, enabled = extras.trim() != a.requestExtras && (problem == null || problem.startsWith("Служебные")))
+        ChillerControl(strings.settings.saveFields, { actions.agent(a.copy(requestExtras = extras.trim())) }, style = ControlStyle.OUTLINE, enabled = extras.trim() != a.requestExtras && (problem == null || problem.startsWith(I18n.current.di.extrasReservedPrefix)))
         actions.openComparison?.let { open ->
             Box(Modifier.fillMaxWidth().height(1.dp).background(c.border))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
-                    Text("Какой профиль лучше для вашей модели?", color = c.text, fontSize = 13.sp)
-                    Text("Сравните профили и модели на eval-задачах с настоящей проверкой результата", color = c.faint, fontSize = 11.sp)
+                    Text(strings.settings.whichProfile, color = c.text, fontSize = 13.sp)
+                    Text(strings.settings.whichProfileNote, color = c.faint, fontSize = 11.sp)
                 }
-                ChillerControl("Сравнение моделей", open, icon = Icons.Outlined.Insights, style = ControlStyle.OUTLINE)
+                ChillerControl(strings.settings.modelComparison, open, icon = Icons.Outlined.Insights, style = ControlStyle.OUTLINE)
             }
         }
     }
@@ -544,17 +662,24 @@ private fun ProfileCard(data: SettingsData, actions: SettingsActions) {
 @Composable
 private fun AppearanceSection(data: SettingsData, actions: SettingsActions) {
     val p = data.preferences
+    val s = LocalStrings.current.settings
     Card {
-        SectionTitle("Тема", null)
+        SectionTitle(s.theme, null)
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            listOf("system" to "Системная", "light" to "Светлая", "dark" to "Тёмная").forEach { (id, label) -> ThemeSwatch(id, label, p.theme == id, Modifier.weight(1f)) { actions.preferences(p.copy(theme = id)) } }
+            listOf("system" to s.themeSystem, "light" to s.themeLight, "dark" to s.themeDark).forEach { (id, label) -> ThemeSwatch(id, label, p.theme == id, Modifier.weight(1f)) { actions.preferences(p.copy(theme = id)) } }
         }
     }
     Card {
-        SectionTitle("Интерфейс", null)
-        Choice("Плотность", listOf("normal" to "Обычная", "compact" to "Компактная"), p.density) { actions.preferences(p.copy(density = it)) }
-        Choice("Раскладка по умолчанию", listOf("focus" to "Focus", "studio" to "Studio"), p.layout) { actions.preferences(p.copy(layout = it)) }
-        SettingToggle("Уменьшить движение", "Без анимаций появления, переливов и мигающего курсора", p.reducedMotion) { actions.preferences(p.copy(reducedMotion = it)) }
+        SectionTitle(s.interfaceTitle, null)
+        // Each language is named in itself, so the way back is readable whichever one is on.
+        Choice(s.language, Language.entries.map { it.id to it.nativeName }, Language.fromId(p.language).id) { actions.preferences(p.copy(language = it)) }
+        Choice(s.density, listOf("normal" to s.densityNormal, "compact" to s.densityCompact), p.density) { actions.preferences(p.copy(density = it)) }
+        Choice(s.defaultLayout, listOf("focus" to "Focus", "studio" to "Studio"), p.layout) { actions.preferences(p.copy(layout = it)) }
+        SettingToggle(s.reducedMotion, s.reducedMotionHint, p.reducedMotion) { actions.preferences(p.copy(reducedMotion = it)) }
+    }
+    Card {
+        SectionTitle(s.notifications, s.notificationsHint)
+        SettingToggle(s.systemNotifications, s.systemNotificationsHint, p.systemNotifications) { actions.preferences(p.copy(systemNotifications = it)) }
     }
 }
 
@@ -564,11 +689,19 @@ private fun ThemeSwatch(id: String, label: String, selected: Boolean, modifier: 
     val (bg, fg) = when (id) { "dark" -> Color(0xFF1C1E20) to Color(0xFF2D3238); "light" -> Color(0xFFFFFFFF) to Color(0xFFE4E7EA); else -> Color(0xFFF4F5F6) to Color(0xFF2D3238) }
     val shape = RoundedCornerShape(10.dp)
     Column(modifier.clip(shape).border(if (selected) 1.5.dp else 1.dp, if (selected) c.accent else c.border, shape).pointerHoverIcon(PointerIcon.Hand).clickable(role = Role.RadioButton, onClick = onClick).padding(8.dp)) {
-        Box(Modifier.fillMaxWidth().height(54.dp).clip(RoundedCornerShape(7.dp)).background(bg).border(1.dp, c.border, RoundedCornerShape(7.dp)).padding(8.dp)) {
-            Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                Box(Modifier.width(46.dp).height(6.dp).clip(CircleShape).background(fg))
-                Box(Modifier.width(70.dp).height(6.dp).clip(CircleShape).background(fg.copy(alpha = .6f)))
-                Box(Modifier.width(30.dp).height(6.dp).clip(CircleShape).background(Color(0xFF376D59)))
+        Row(Modifier.fillMaxWidth().height(140.dp).clip(RoundedCornerShape(7.dp)).background(bg).border(1.dp, c.border, RoundedCornerShape(7.dp))) {
+            Column(Modifier.fillMaxHeight().fillMaxWidth(.25f).background(fg.copy(alpha = .16f)).padding(8.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                ChillerMark(Modifier.size(16.dp), Color(0xFF609D82))
+                repeat(4) { Box(Modifier.fillMaxWidth().height(4.dp).clip(CircleShape).background(fg.copy(alpha = .65f))) }
+            }
+            Column(Modifier.weight(1f).fillMaxHeight().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Box(Modifier.fillMaxWidth(.5f).height(5.dp).clip(CircleShape).background(fg))
+                Spacer(Modifier.height(5.dp))
+                Box(Modifier.fillMaxWidth(.9f).height(4.dp).clip(CircleShape).background(fg.copy(alpha = .6f)))
+                Box(Modifier.fillMaxWidth(.7f).height(4.dp).clip(CircleShape).background(fg.copy(alpha = .6f)))
+                Box(Modifier.fillMaxWidth(.4f).height(16.dp).clip(RoundedCornerShape(4.dp)).background(Color(0xFF609D82).copy(alpha = .35f)))
+                Spacer(Modifier.weight(1f))
+                Box(Modifier.fillMaxWidth().height(22.dp).clip(RoundedCornerShape(5.dp)).border(1.dp, fg.copy(alpha = .7f), RoundedCornerShape(5.dp)))
             }
         }
         Spacer(Modifier.height(6.dp))
@@ -580,31 +713,31 @@ private fun ThemeSwatch(id: String, label: String, selected: Boolean, modifier: 
 private fun DataSection(data: SettingsData, actions: SettingsActions) {
     val c = LocalChillerPalette.current
     Card {
-        SectionTitle("Недавние проекты", "Список на стартовом экране. Убрать проект из списка — не удалить папку.")
-        if (data.recent.isEmpty()) Text("Пока пусто", color = c.faint, fontSize = 12.sp)
+        SectionTitle(strings.settings.recentProjects, strings.settings.recentProjectsNote)
+        if (data.recent.isEmpty()) Text(strings.settings.emptyYet, color = c.faint, fontSize = 12.sp)
         data.recent.forEach { path ->
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.Outlined.Folder, null, Modifier.size(15.dp), tint = c.muted); Spacer(Modifier.width(10.dp))
                 Column(Modifier.weight(1f)) {
-                    Text(path.substringAfterLast('/'), color = c.text, fontSize = 13.sp)
+                    Text(folderName(path), color = c.text, fontSize = 13.sp)
                     Text(homeRelative(path), color = c.faint, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
-                ChillerControl("Открыть в Finder", { actions.openPath(path) })
-                ChillerControl("Убрать", { actions.removeRecent(path) })
+                ChillerControl(strings.common.showInFileManager(), { actions.openPath(path) })
+                ChillerControl(strings.settings.removeShort, { actions.removeRecent(path) })
             }
         }
     }
     Card {
-        SectionTitle("Данные приложения", "Диалоги, журналы, трассировки запросов и настройки. Ключи сюда не записываются.")
-        PathRow("Папка данных", data.dataDir) { actions.openPath(data.dataDir) }
-        PathRow("Трассировки запросов", "${data.dataDir}/traces") { actions.openPath("${data.dataDir}/traces") }
+        SectionTitle(strings.settings.appData, strings.settings.appDataNote)
+        PathRow(strings.settings.dataFolder, data.dataDir) { actions.openPath(data.dataDir) }
+        PathRow(strings.settings.requestTraces, "${data.dataDir}/traces") { actions.openPath("${data.dataDir}/traces") }
         var confirm by remember { mutableStateOf(false) }
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                Text("Демо-проекты", color = c.text, fontSize = 13.sp)
-                Text(if (data.demoCount == 0) "Нет" else "${data.demoCount} ${plural(data.demoCount, "папка", "папки", "папок")} в ${homeRelative(data.dataDir)}/demo", color = c.faint, fontSize = 11.sp)
+                Text(strings.settings.demoProjects, color = c.text, fontSize = 13.sp)
+                Text(if (data.demoCount == 0) strings.settings.none else strings.settings.demoFolders(data.demoCount, "${homeRelative(data.dataDir)}/demo"), color = c.faint, fontSize = 11.sp)
             }
-            if (data.demoCount > 0) ChillerControl(if (confirm) "Точно удалить?" else "Удалить", { if (confirm) { actions.deleteDemos(); confirm = false } else confirm = true }, icon = Icons.Outlined.DeleteOutline, style = if (confirm) ControlStyle.OUTLINE else ControlStyle.QUIET)
+            if (data.demoCount > 0) ChillerControl(if (confirm) strings.settings.reallyDelete else strings.settings.delete, { if (confirm) { actions.deleteDemos(); confirm = false } else confirm = true }, icon = Icons.Outlined.DeleteOutline, style = if (confirm) ControlStyle.OUTLINE else ControlStyle.QUIET)
         }
     }
 }
@@ -615,9 +748,9 @@ private fun PathRow(title: String, path: String, onOpen: () -> Unit) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
             Text(title, color = c.text, fontSize = 13.sp)
-            Text(homeRelative(path), color = c.faint, fontSize = 11.sp, fontFamily = FontFamily.Monospace, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(homeRelative(path), color = c.faint, fontSize = 11.sp, fontFamily = ChillerFonts.mono, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
-        ChillerControl("Открыть", onOpen, icon = Icons.Outlined.FolderOpen)
+        ChillerControl(strings.settings.open, onOpen, icon = Icons.Outlined.FolderOpen)
     }
 }
 
@@ -625,24 +758,25 @@ private fun PathRow(title: String, path: String, onOpen: () -> Unit) {
 private fun KeysSection() {
     val c = LocalChillerPalette.current
     Card {
-        listOf(shortcut("N") to "Новый диалог", shortcut("O") to "Открыть проект", shortcut("K") to "Поиск по диалогам", shortcut("↵") to "Отправить", shortcut(".") to "Остановить задачу",
-            shortcut(",") to "Настройки", "Esc" to "Закрыть меню, настройки или поиск", "↑ ↓ ↵" to "Выбор в меню модели", "↑ ↓" to "Разделы настроек", "Tab" to "Навигация с клавиатуры (видимый фокус)").forEach { (keys, label) ->
-            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 2.dp)) {
+        listOf(shortcut("N") to strings.settings.keyNewDialog, shortcut("O") to strings.settings.keyOpenProject, shortcut("K") to strings.settings.keySearch, shortcut("P") to strings.settings.keyJump,
+            (if (isMacOs) "⌘ ⇧ P" else "Ctrl+Shift+P") to strings.settings.keyAllCommands, shortcut("1…9") to strings.settings.keyNewInProject, shortcut("↵") to strings.settings.keySend, shortcut(".") to strings.settings.keyStop,
+            shortcut(",") to strings.settings.keySettings, "Esc" to strings.settings.keyEsc, "↑ ↓ ↵" to strings.settings.keyModelMenu, "↑ ↓ → ←" to strings.settings.keySidebar, "Shift+F10" to strings.settings.keyRowMenu, "↑ ↓" to strings.settings.keySections, "Tab" to strings.settings.keyTab).forEach { (keys, label) ->
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
                 Text(label, color = c.text, fontSize = 13.sp, modifier = Modifier.weight(1f))
-                Text(keys, color = c.muted, fontSize = 12.sp, fontFamily = FontFamily.Monospace, modifier = Modifier.clip(RoundedCornerShape(6.dp)).border(1.dp, c.border, RoundedCornerShape(6.dp)).padding(horizontal = 8.dp, vertical = 3.dp))
+                Text(keys, color = c.muted, fontSize = 12.sp, fontFamily = ChillerFonts.mono, modifier = Modifier.clip(RoundedCornerShape(6.dp)).border(1.dp, c.border, RoundedCornerShape(6.dp)).padding(horizontal = 8.dp, vertical = 3.dp))
             }
         }
     }
 }
 
 internal fun aboutRows(data: SettingsData): List<Pair<String, String>> = listOf(
-    "Версия" to data.version, "Сборка" to data.build, "Коммит" to data.commit,
-    "Среда выполнения" to data.runtime, "Система" to data.os, "Данные" to homeRelative(data.dataDir),
+    I18n.current.settings.aboutVersion to data.version, I18n.current.settings.aboutBuild to data.build, I18n.current.settings.aboutCommit to data.commit,
+    I18n.current.settings.aboutRuntime to data.runtime, I18n.current.settings.aboutSystem to data.os, I18n.current.settings.aboutData to homeRelative(data.dataDir),
 )
 
 /** Plain text for bug reports; the data folder is left out because it contains the user's home path. */
 internal fun aboutText(rows: List<Pair<String, String>>): String =
-    "Chiller\n" + rows.filter { it.first != "Данные" }.joinToString("\n") { (k, v) -> "$k: ${v.ifBlank { "—" }}" }
+    "Chiller\n" + rows.filter { it.first != I18n.current.settings.aboutData }.joinToString("\n") { (k, v) -> "$k: ${v.ifBlank { "—" }}" }
 
 @Composable
 private fun AboutSection(data: SettingsData, actions: SettingsActions) {
@@ -654,9 +788,9 @@ private fun AboutSection(data: SettingsData, actions: SettingsActions) {
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("Chiller ${data.version}", color = c.text, fontSize = 18.sp, fontWeight = FontWeight.Medium)
-                    if ('-' in data.version) Text("предварительная версия", color = c.muted, fontSize = 11.sp, modifier = Modifier.padding(start = 10.dp).clip(RoundedCornerShape(5.dp)).background(c.selected).padding(horizontal = 7.dp, vertical = 2.dp))
+                    if ('-' in data.version) Text(strings.settings.preRelease, color = c.muted, fontSize = 11.sp, modifier = Modifier.padding(start = 10.dp).clip(RoundedCornerShape(5.dp)).background(c.selected).padding(horizontal = 7.dp, vertical = 2.dp))
                 }
-                Text("Harness для локальных и облачных моделей", color = c.muted, fontSize = 12.sp)
+                Text(strings.settings.tagline, color = c.muted, fontSize = 12.sp)
                 Text("© 2026 Damirka1 · Apache License 2.0", color = c.faint, fontSize = 11.sp)
             }
         }
@@ -664,37 +798,37 @@ private fun AboutSection(data: SettingsData, actions: SettingsActions) {
         rows.forEach { (k, v) ->
             Row {
                 Text(k, color = c.faint, fontSize = 12.sp, modifier = Modifier.width(150.dp))
-                val commitUrl = if (k == "Коммит" && Regex("[0-9a-f]{7,40}").matches(v)) "https://github.com/Damirka1/Chiller/commit/$v" else null
-                if (commitUrl != null) Text(v, color = c.accent, fontSize = 12.sp, fontFamily = FontFamily.Monospace, modifier = Modifier.pointerHoverIcon(PointerIcon.Hand).clickable { actions.openUrl(commitUrl) })
-                else Text(v.ifBlank { "—" }, color = c.text, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+                val commitUrl = if (k == strings.settings.aboutCommit && Regex("[0-9a-f]{7,40}").matches(v)) "https://github.com/Damirka1/Chiller/commit/$v" else null
+                if (commitUrl != null) Text(v, color = c.accent, fontSize = 12.sp, fontFamily = ChillerFonts.mono, modifier = Modifier.pointerHoverIcon(PointerIcon.Hand).clickable { actions.openUrl(commitUrl) })
+                else Text(v.ifBlank { "—" }, color = c.text, fontSize = 12.sp, fontFamily = ChillerFonts.mono)
             }
         }
         val clipboard = LocalClipboardManager.current
         var copied by remember { mutableStateOf(false) }
         LaunchedEffect(copied) { if (copied) { delay(1500); copied = false } }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            ChillerControl(if (copied) "Скопировано" else "Скопировать сведения", {
+            ChillerControl(if (copied) strings.settings.copied else strings.settings.copyDetails, {
                 clipboard.setText(AnnotatedString(aboutText(rows))); copied = true
             }, icon = if (copied) Icons.Outlined.Check else Icons.Outlined.ContentCopy, style = ControlStyle.OUTLINE)
-            ChillerControl("Репозиторий на GitHub", { actions.openUrl("https://github.com/Damirka1/Chiller") }, icon = Icons.AutoMirrored.Outlined.OpenInNew)
+            ChillerControl(strings.settings.githubRepo, { actions.openUrl("https://github.com/Damirka1/Chiller") }, icon = Icons.AutoMirrored.Outlined.OpenInNew)
         }
     }
     Card {
-        SectionTitle("Диагностика окружения", "Локальные проверки версий, без запросов к модели")
+        SectionTitle(strings.settings.diagnostics, strings.settings.diagnosticsNote)
         val scope = rememberCoroutineScope()
         var running by remember { mutableStateOf(false) }
         var results by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
-        ChillerControl(if (running) "Проверяю…" else "Проверить окружение", {
+        ChillerControl(if (running) strings.settings.checking else strings.settings.checkEnvironment, {
             running = true
             scope.launch { try { results = EnvironmentDiagnostics.inspect() } finally { running = false } }
         }, enabled = !running, style = ControlStyle.OUTLINE)
         results.forEach { (name, value) -> Text("$name: $value", color = c.muted, fontSize = 12.sp, lineHeight = 18.sp) }
-        Text("Разрешения Chiller: команды ${if (data.allowProcesses) "включены" else "выключены"}; интернет ${if (data.agent.allowNetwork) "включён" else "выключен"}.", color = c.muted, fontSize = 12.sp)
-        Text("Снимки экрана: ${if (data.screenshotSupported) "поддерживаются; системный доступ проверяется при выборе окна" else "не поддерживаются на этой платформе"}.", color = c.muted, fontSize = 12.sp)
+        Text(strings.settings.permissionsLine(data.allowProcesses, data.agent.allowNetwork), color = c.muted, fontSize = 12.sp)
+        Text(strings.settings.screenshotsLine(data.screenshotSupported), color = c.muted, fontSize = 12.sp)
     }
     Card {
-        SectionTitle("Что проверено", null)
-        Text("Вживую: DeepSeek V4.1 Flash (eval-задачи и помощники). Офлайн: весь цикл инструментов, отмена правок, журналы. Не проверено: Gemma/vLLM, другие провайдеры из списка, Windows и Linux вживую.", color = c.muted, fontSize = 12.sp, lineHeight = 18.sp)
+        SectionTitle(strings.settings.whatWasChecked, null)
+        Text(strings.settings.whatWasCheckedNote, color = c.muted, fontSize = 12.sp, lineHeight = 18.sp)
     }
 }
 

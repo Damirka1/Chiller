@@ -1,5 +1,6 @@
 package dev.chiller.app.ui
 
+import dev.chiller.app.i18n.*
 import androidx.compose.ui.graphics.luminance
 
 import androidx.compose.ui.input.pointer.pointerHoverIcon
@@ -73,9 +74,9 @@ internal fun FilePresentationCard(file: FilePresentation, onPreviewFile: suspend
             // overflowed its slot, cut its top and laid its hover highlight over the caption.
             BoxWithConstraints(Modifier.fillMaxWidth()) {
                 val slot = minOf(maxWidth * (image.height.toFloat() / image.width), 380.dp)
-                Image(image, "Открыть изображение ${file.name}", contentScale = ContentScale.Fit,
+                Image(image, strings.studio.openImageNamed(file.name), contentScale = ContentScale.Fit,
                     modifier = Modifier.fillMaxWidth().height(slot).clipToBounds().pointerHoverIcon(PointerIcon.Hand)
-                        .clickable(role = Role.Button, onClickLabel = "Открыть изображение") { viewing = true })
+                        .clickable(role = Role.Button, onClickLabel = strings.studio.openImage) { viewing = true })
             }
             // The hover highlight stops at the image: a divider and some air before the caption.
             Box(Modifier.fillMaxWidth().height(1.dp).background(c.border))
@@ -85,10 +86,10 @@ internal fun FilePresentationCard(file: FilePresentation, onPreviewFile: suspend
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                 Text(file.name, color = c.text, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 Text("${file.mimeType} · ${formatPresentedSize(file.sizeBytes)}" + (bitmap?.let { " · ${it.width} × ${it.height}" } ?: ""), color = c.faint, fontSize = 10.sp)
-                if (imageMime && bitmap == null) Text(if (attempted) "Предварительный просмотр недоступен" else "Загружаю изображение…", color = c.faint, fontSize = 10.sp)
+                if (imageMime && bitmap == null) Text(if (attempted) strings.studio.previewUnavailable else strings.studio.loadingImage, color = c.faint, fontSize = 10.sp)
             }
-            if (bitmap != null) ChillerIconButton(Icons.Outlined.OpenInFull, "Открыть изображение", { viewing = true })
-            if (showReveal) ChillerIconButton(Icons.Outlined.FolderOpen, "Показать в папке", { onRevealFile(file.path) })
+            if (bitmap != null) ChillerIconButton(Icons.Outlined.OpenInFull, strings.studio.openImage, { viewing = true })
+            if (showReveal) ChillerIconButton(Icons.Outlined.FolderOpen, strings.studio.showInFolder, { onRevealFile(file.path) })
         }
     }
     if (viewing) bitmap?.let { ImageViewer(file, it, { viewing = false }, if (showReveal) ({ onRevealFile(file.path) }) else null) }
@@ -151,13 +152,13 @@ internal fun ImageViewer(file: FilePresentation, bitmap: ImageBitmap, onClose: (
                     Text(file.name, color = c.text, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     Text("${image.width} × ${image.height} · ${formatPresentedSize(file.sizeBytes)}", color = c.faint, fontSize = 11.sp)
                 }
-                ChillerIconButton(Icons.Outlined.Remove, "Уменьшить", { setScale(actualScale / 1.25f) })
+                ChillerIconButton(Icons.Outlined.Remove, strings.studio.zoomOut, { setScale(actualScale / 1.25f) })
                 Text("${(actualScale * 100).roundToInt()}%", color = c.muted, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 6.dp))
-                ChillerIconButton(Icons.Outlined.Add, "Увеличить", { setScale(actualScale * 1.25f) })
-                ChillerControl("Вписать", { reset() }, style = ControlStyle.QUIET)
+                ChillerIconButton(Icons.Outlined.Add, strings.studio.zoomIn, { setScale(actualScale * 1.25f) })
+                ChillerControl(strings.studio.fit, { reset() }, style = ControlStyle.QUIET)
                 ChillerControl("100%", { setScale(1f) }, style = ControlStyle.QUIET)
-                onReveal?.let { ChillerIconButton(Icons.Outlined.FolderOpen, "Показать в папке", it) }
-                if (bar == null) ChillerIconButton(Icons.Outlined.Close, "Закрыть просмотр", onClose)
+                onReveal?.let { ChillerIconButton(Icons.Outlined.FolderOpen, strings.studio.showInFolder, it) }
+                if (bar == null) ChillerIconButton(Icons.Outlined.Close, strings.studio.closeViewer, onClose)
             }
             Box(Modifier.weight(1f).fillMaxWidth().clipToBounds().background(c.sidebar)
                 .onSizeChanged { viewport = it }
@@ -177,7 +178,7 @@ internal fun ImageViewer(file: FilePresentation, bitmap: ImageBitmap, onClose: (
                         dstSize = IntSize(width, height), filterQuality = FilterQuality.High)
                 }
             }
-            Text("Колесо / жест — масштаб · Перетаскивание — перемещение · 0 — вписать · Esc — закрыть", color = c.faint, fontSize = 11.sp, modifier = Modifier.padding(10.dp))
+            Text(strings.studio.viewerHint, color = c.faint, fontSize = 11.sp, modifier = Modifier.padding(10.dp))
         }
     }
 }

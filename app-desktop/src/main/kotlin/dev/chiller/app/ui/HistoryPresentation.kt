@@ -1,5 +1,6 @@
 package dev.chiller.app.ui
 
+import dev.chiller.app.i18n.*
 import dev.chiller.contracts.SessionInfo
 import java.time.Clock
 import java.time.Instant
@@ -18,13 +19,14 @@ fun historySections(
     val dated = sessions.map { session ->
         session to runCatching { Instant.parse(session.updatedAt) }.getOrNull()
     }
-    val buckets = linkedMapOf("Сегодня" to mutableListOf<Pair<SessionInfo, Instant?>>(),
-        "Вчера" to mutableListOf(), "Ранее" to mutableListOf())
+    val s = I18n.current.settings
+    val buckets = linkedMapOf(s.today to mutableListOf<Pair<SessionInfo, Instant?>>(),
+        s.yesterday to mutableListOf(), s.earlier to mutableListOf())
     for ((session, instant) in dated) {
         val section = when (instant?.atZone(zoneId)?.toLocalDate()) {
-            today -> "Сегодня"
-            today.minusDays(1) -> "Вчера"
-            else -> "Ранее"
+            today -> s.today
+            today.minusDays(1) -> s.yesterday
+            else -> s.earlier
         }
         buckets.getValue(section).add(session to instant)
     }
@@ -41,20 +43,20 @@ fun historySections(
     }
 }
 
-/** Short age for a history row: «сейчас», «12 мин», «3 ч», «вчера», «5 дн», or a date. Empty when unparseable. */
-fun relativeAge(updatedAt: String, clock: Clock = Clock.systemUTC(), zoneId: ZoneId = ZoneId.systemDefault()): String {
+/** Short age for a history row in [s]'s language: "now", "12 min", "3 h", "yesterday", "5 d", or a date. Empty when unparseable. */
+fun relativeAge(updatedAt: String, s: CommonStrings, clock: Clock = Clock.systemUTC(), zoneId: ZoneId = ZoneId.systemDefault()): String {
     val instant = runCatching { Instant.parse(updatedAt) }.getOrNull() ?: return ""
     val now = Instant.now(clock)
     val minutes = java.time.Duration.between(instant, now).toMinutes().coerceAtLeast(0)
     val day = instant.atZone(zoneId).toLocalDate()
     val today = LocalDate.now(clock.withZone(zoneId))
     return when {
-        minutes < 1 -> "сейчас"
-        minutes < 60 -> "$minutes мин"
-        day == today -> "${minutes / 60} ч"
-        day == today.minusDays(1) -> "вчера"
-        day.isAfter(today.minusDays(7)) -> "${java.time.temporal.ChronoUnit.DAYS.between(day, today)} дн"
-        else -> "%02d.%02d".format(day.dayOfMonth, day.monthValue)
+        minutes < 1 -> s.ageNow
+        minutes < 60 -> s.ageMinutes(minutes)
+        day == today -> s.ageHours(minutes / 60)
+        day == today.minusDays(1) -> s.ageYesterday
+        day.isAfter(today.minusDays(7)) -> s.ageDays(java.time.temporal.ChronoUnit.DAYS.between(day, today))
+        else -> s.ageDate(day)
     }
 }
 
@@ -76,4 +78,37 @@ fun recentProjects(settingsRecent: List<String>, sessions: List<SessionInfo>, se
         .sortedByDescending { it.lastActive.orEmpty() }
     val idle = settingsRecent.filter { it !in byRoot }.map { RecentProject(it, 0, null) }
     return (active + idle).distinctBy { it.path }.take(limit)
+}
+
+data class ProjectGroup(val path: String, val sessions: List<SessionInfo>, val pinned: Boolean, val lastActive: String?)
+
+/** The sidebar tree: projects with their dialogs, and dialogs without a folder. */
+data class ProjectTree(val projects: List<ProjectGroup>, val loose: List<SessionInfo>)
+
+/**
+ * Pinned projects in the user's order, then the others in the order they were opened, then folders known only from
+ * dialogs by their latest activity. The order changes when the user opens or pins a project, not when a dialog moves.
+ * Hidden and [excluded] folders (the demo) drop out with their dialogs unless [current] is one of them.
+ */
+fun projectTree(
+    sessions: List<SessionInfo>, roots: Map<String, String>, recent: List<String>, pinned: List<String>, hidden: List<String>,
+    current: String?, excluded: (String) -> Boolean = { false },
+): ProjectTree {
+    val byRoot = sessions.groupBy { roots[it.id] ?: it.workspace }
+    fun shown(path: String) = path == current || (path !in hidden && !excluded(path))
+    fun group(path: String) = byRoot[path].orEmpty().sortedByDescending { it.updatedAt }.let { list -> ProjectGroup(path, list, path in pinned, list.firstOrNull()?.updatedAt) }
+    val pinnedGroups = pinned.filter(::shown).map(::group)
+    val opened = (listOfNotNull(current?.takeIf { it !in recent }) + recent).filter { it !in pinned && shown(it) }.distinct().map(::group)
+    val known = byRoot.keys.filterNotNull().filter { it !in pinned && it !in recent && it != current && shown(it) }.map(::group).sortedByDescending { it.lastActive.orEmpty() }
+    return ProjectTree(pinnedGroups + opened + known, byRoot[null].orEmpty())
+}
+
+/** One or two letters for a project's tile: «chiller» → «C», «spring-boot» → «SB», «myApp» → «MA». */
+fun projectInitials(name: String): String {
+    val words = name.split(Regex("""[^\p{L}\p{N}]+|(?<=\p{Ll})(?=\p{Lu})""")).filter { it.isNotEmpty() }
+    return when {
+        words.isEmpty() -> name.take(1).uppercase()
+        words.size == 1 -> words[0].take(1).uppercase()
+        else -> (words[0].take(1) + words[1].take(1)).uppercase()
+    }
 }

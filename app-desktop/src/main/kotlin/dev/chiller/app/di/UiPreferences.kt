@@ -20,6 +20,14 @@ data class UiPreferences(
     val windowWidth: Float = 1280f,
     val windowHeight: Float = 860f,
     val windowMaximized: Boolean = false,
+    /** Background news also as system notifications while the window is not in focus; needs an icon in the tray. */
+    val systemNotifications: Boolean = true,
+    /** The composer mode last used in each project: "plan" or "edit". */
+    val projectModes: Map<String, String> = emptyMap(),
+    /** Projects the user expanded (true) or collapsed (false) in the sidebar, by folder. */
+    val projectExpansion: Map<String, Boolean> = emptyMap(),
+    /** Interface language: "en" (the default) or "ru"; see [dev.chiller.app.i18n.Language]. */
+    val language: String = "en",
 )
 
 /** Stores non-secret appearance preferences separately from provider/session data. */
@@ -60,11 +68,14 @@ class UiPreferencesStore(private val directory: Path) {
         inspectorWidth = if (value.inspectorWidth.isFinite()) value.inspectorWidth.coerceIn(280f, 480f) else 348f,
         windowWidth = value.windowWidth.takeIf { it.isFinite() && it > 0f }?.coerceIn(320f, 16384f) ?: 1280f,
         windowHeight = value.windowHeight.takeIf { it.isFinite() && it > 0f }?.coerceIn(240f, 16384f) ?: 860f,
+        projectModes = value.projectModes.filter { (path, mode) -> path.length in 1..1024 && mode in setOf("plan", "edit") }.entries.toList().takeLast(MAX_PROJECTS).associate { it.toPair() },
+        projectExpansion = value.projectExpansion.filterKeys { it.length in 1..1024 }.entries.toList().takeLast(MAX_PROJECTS).associate { it.toPair() },
     )
 
     private companion object {
         val THEMES = setOf("system", "light", "dark")
         val DENSITIES = setOf("normal", "compact")
         val LAYOUTS = setOf("focus", "studio")
+        const val MAX_PROJECTS = 200
     }
 }
