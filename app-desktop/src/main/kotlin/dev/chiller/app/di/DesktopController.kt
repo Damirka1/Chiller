@@ -152,6 +152,7 @@ class DesktopController(
         if (settings.workspace?.let(::isAppFolder) == true) settings = settings.copy(workspace = null)
         savedWorkspace = settings.workspace
         refreshSessions()
+        NetworkProxy.apply(settings.proxy.takeIf { it.problem() == null } ?: ProxySettings())
         _state.update { it.copy(settings = settings, allowProcesses = settings.allowProcesses, uiPreferences = preferencesStore.load()) }
         // A server that became ready or went away changes the tools: dialogs pick them up from their next message.
         scope.launch {
@@ -1426,6 +1427,20 @@ class DesktopController(
         engines.values.forEach { it.stale = true }
         _state.update { it.copy(settings = settings) }
         saveSettings(settings)
+        null
+    }
+
+    /** Saves the proxy settings and routes the next connections by them. Returns why they were refused, or null. */
+    suspend fun updateProxy(value: ProxySettings): String? = commands.withLock {
+        val clean = value.normalized()
+        clean.problem()?.let { return@withLock it }
+        val settings = _state.value.settings.copy(proxy = clean)
+        NetworkProxy.apply(clean)
+        // The route to the provider changed: the last check and model list may no longer hold.
+        invalidateConnectionCheck()
+        _state.update { it.copy(settings = settings, connection = connectionForUnverified()) }
+        saveSettings(settings)
+        refreshModelsIfConfigured()
         null
     }
 

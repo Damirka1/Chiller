@@ -52,6 +52,7 @@ data class SettingsData(
     val connection: ConnectionState = ConnectionState(), val catalog: ModelCatalogState = ModelCatalogState(),
     val preferences: UiPreferences = UiPreferences(), val allowProcesses: Boolean = false, val agent: AgentOptions = AgentOptions(),
     val customProviders: List<CustomProvider> = emptyList(),
+    val proxy: ProxySettings = ProxySettings(),
     /** The task's money budget and the image model in use, which its prices must cover. */
     val costBudget: CostBudgetSettings = CostBudgetSettings(), val imageModel: String? = null,
     /** Models generate_image picks from, and other endpoints that can draw, as (url, name). */
@@ -82,6 +83,8 @@ class SettingsActions(
     val refreshCaptureTargets: () -> Unit = {}, val selectCaptureTarget: (String) -> Unit = {},
     /** Saves the MCP servers; the callback gets why they were refused, or null. Unwired, it refuses. */
     val saveMcpServers: (List<dev.chiller.tools.McpServerConfig>, (String?) -> Unit) -> Unit = { _, done -> done("Сохранение недоступно") },
+    /** Saves the proxy settings; the callback gets why they were refused, or null. Unwired, it refuses. */
+    val saveProxy: (ProxySettings, (String?) -> Unit) -> Unit = { _, done -> done("Сохранение недоступно") },
 )
 
 internal enum class SettingsSection(val title: String, val icon: ImageVector) {
@@ -137,7 +140,7 @@ internal fun SettingsPage(
                 Column(Modifier.widthIn(max = 760.dp).fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 32.dp, vertical = 24.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
                     Text(current.title, color = c.text, fontSize = 22.sp, fontWeight = FontWeight.Medium, letterSpacing = (-.5).sp)
                     when (current) {
-                        SettingsSection.CONNECTION -> ConnectionSection(data, actions)
+                        SettingsSection.CONNECTION -> { ConnectionSection(data, actions); ProxyCard(data, actions) }
                         SettingsSection.AGENT -> AgentSection(data, actions)
                         SettingsSection.MCP -> McpSection(data.mcpServers, data.mcpStates, actions.saveMcpServers)
                         SettingsSection.APPEARANCE -> AppearanceSection(data, actions)
@@ -304,6 +307,41 @@ private fun CostBudgetCard(data: SettingsData, actions: SettingsActions) {
             ChillerControl("Сохранить для ${data.model.ifBlank { "текущей модели" }}", { actions.costBudget(draft(true)) { refused -> message = refused ?: "Сохранено" } }, style = ControlStyle.PRIMARY)
         }
         message?.let { Text(it, color = if (it == "Сохранено") c.positive else c.negative, fontSize = 12.sp) }
+    }
+}
+
+/** The proxy for a corporate network: the system's, none, or one typed in, with hosts that always go direct. */
+@Composable
+private fun ProxyCard(data: SettingsData, actions: SettingsActions) {
+    val c = LocalChillerPalette.current
+    val saved = data.proxy
+    var mode by remember(saved) { mutableStateOf(saved.mode) }
+    var url by remember(saved) { mutableStateOf(saved.url) }
+    var bypass by remember(saved) { mutableStateOf(saved.bypass) }
+    var message by remember(saved) { mutableStateOf<String?>(null) }
+    val draft = ProxySettings(mode, url, bypass).normalized()
+    val changed = draft != saved.normalized()
+    val problem = draft.problem()
+    Card {
+        SectionTitle("Прокси", "Для корпоративной сети. Через прокси идут запросы к провайдерам, список моделей, картинки и веб-поиск; localhost и исключения — напрямую.")
+        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            listOf("system" to "Системный", "manual" to "Вручную", "off" to "Без прокси").forEach { (id, label) ->
+                ChillerControl(label, { mode = id; message = null }, style = if (mode == id) ControlStyle.SELECTED else ControlStyle.QUIET)
+            }
+        }
+        Text(when (mode) {
+            "system" -> "Как в настройках системы. Если там только скрипт автонастройки (PAC), укажите прокси вручную."
+            "manual" -> "HTTP-прокси; HTTPS идёт через него туннелем. Прокси с логином и паролем пока не поддерживаются."
+            else -> "Все запросы идут напрямую."
+        }, color = c.faint, fontSize = 11.sp, lineHeight = 16.sp)
+        if (mode == "manual") ChillerField(url, { url = it; message = null }, "Адрес прокси", "http://proxy.company.local:3128")
+        if (mode != "off") ChillerField(bypass, { bypass = it; message = null }, "Без прокси, через запятую", "*.company.local, 10.0.0.5")
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            ChillerControl("Сохранить", { actions.saveProxy(draft) { refused -> message = refused ?: "Сохранено. Проверьте подключение выше." } },
+                style = ControlStyle.PRIMARY, enabled = changed && problem == null)
+        }
+        val note = if (changed && problem != null) problem else message
+        note?.let { Text(it, color = if (it.startsWith("Сохранено")) c.positive else c.negative, fontSize = 12.sp, lineHeight = 17.sp) }
     }
 }
 

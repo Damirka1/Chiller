@@ -51,7 +51,9 @@ data class DesktopSettings(val baseUrl: String = "https://api.deepseek.com", val
     /** File changes in a project wait for the user's yes or no before they are written. */
     val confirmEdits: Boolean = false,
     /** MCP servers the user connected; their tools join every dialog's tools while the server runs. */
-    val mcpServers: List<dev.chiller.tools.McpServerConfig> = emptyList())
+    val mcpServers: List<dev.chiller.tools.McpServerConfig> = emptyList(),
+    /** How requests reach the network, e.g. through a corporate proxy; see [ProxySettings]. */
+    val proxy: ProxySettings = ProxySettings())
 
 /**
  * What a project remembers of how it was last worked in: the model on its endpoint (offered to new dialogs only on

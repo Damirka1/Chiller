@@ -25,6 +25,8 @@ import java.awt.Frame
 import javax.swing.JFileChooser
 
 fun main() {
+    // Before any client asks for the default proxy selector: every request follows the proxy settings.
+    dev.chiller.app.di.NetworkProxy.install()
     // The JDK's java.net.http clients (web tools) trust the system certificate store as the provider clients do.
     javax.net.ssl.SSLContext.setDefault(dev.chiller.providers.SystemTrust.sslContext)
     chillerApplication()
@@ -245,7 +247,7 @@ private fun chillerApplication() = application {
                 captureTargets = state.captureTargets, selectedCaptureTarget = state.selectedCaptureTarget, screenshotSupported = controller.screenshotSupported,
                 workspace = state.settings.workspace, verifyCommand = state.settings.workspace?.let { state.settings.verifyCommands[it] }.orEmpty(),
                 suggestedVerifyCommand = state.settings.workspace?.let { root -> runCatching { dev.chiller.app.di.suggestVerifyCommand(java.nio.file.Path.of(root)) }.getOrNull() },
-                agent = state.settings.agent, customProviders = state.settings.customProviders,
+                agent = state.settings.agent, customProviders = state.settings.customProviders, proxy = state.settings.proxy,
                 mcpServers = state.settings.mcpServers, mcpStates = state.mcp,
                 costBudget = state.settings.costBudget, imageModel = dev.chiller.app.di.imageModelFor(state.settings.agent, dev.chiller.app.di.imageCatalog(state.settings, state.catalog))?.id,
                 imageCatalog = dev.chiller.app.di.imageCatalog(state.settings, state.catalog), imageProviders = dev.chiller.app.di.imageProviderChoices(state.settings), recent = state.settings.recentWorkspaces, dataDir = controller.dataDirectory().toString(), demoCount = demoCount,
@@ -269,6 +271,7 @@ private fun chillerApplication() = application {
                 deleteCustomProvider = { id -> scope.launch { controller.deleteCustomProvider(id) } },
                 saveMcpServers = { servers, done -> scope.launch { done(controller.saveMcpServers(servers)) } },
                 costBudget = { budget, done -> scope.launch { done(controller.updateCostBudget(budget)) } },
+                saveProxy = { proxy, done -> scope.launch { done(controller.updateProxy(proxy)) } },
                 deleteCredential = { scope.launch { controller.deleteCredential() } },
                 agent = { options -> scope.launch { controller.updateAgentOptions(options) } },
                 setVerifyCommand = { root, command -> controller.setVerifyCommand(root, command) },
