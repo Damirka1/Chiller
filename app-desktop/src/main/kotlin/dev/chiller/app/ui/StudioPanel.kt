@@ -118,6 +118,7 @@ private fun ChangesTab(files: List<FileChanges>, onUndo: (String) -> Unit, canUn
     if (files.isEmpty()) { EmptyState(Icons.Outlined.Difference, "Пока без изменений", "Здесь появятся файлы, которые агент создал, изменил или удалил, с диффом и отменой.", modifier); return }
     var selected by remember { mutableStateOf<String?>(null) }
     var expandedDiff by remember { mutableStateOf<Pair<String, String>?>(null) }
+    var viewedImage by remember { mutableStateOf<Pair<FilePresentation, androidx.compose.ui.graphics.ImageBitmap>?>(null) }
     val current = files.firstOrNull { it.path == selected } ?: files.last()
     val (added, removed) = files.map { it.stats }.fold(0 to 0) { a, b -> a.first + b.first to a.second + b.second }
     Column(modifier) {
@@ -137,23 +138,26 @@ private fun ChangesTab(files: List<FileChanges>, onUndo: (String) -> Unit, canUn
             }
             current.changes.forEachIndexed { index, change ->
                 val shape = RoundedCornerShape(9.dp)
+                // A new or changed picture shows itself rather than "Binary files differ", and expands into the image viewer.
+                val picture = change.diff?.takeIf { "Binary files differ" in it && current.kind != "deleted" && current.path.substringAfterLast('.').lowercase() in setOf("png", "jpg", "jpeg") }
+                val image = picture?.let { rememberChangedImage(current.path) }
                 Column(Modifier.fillMaxWidth().clip(shape).border(1.dp, c.border, shape)) {
                     Row(Modifier.fillMaxWidth().background(c.sidebar.copy(alpha = .6f)).padding(start = 10.dp, end = 4.dp, top = 2.dp, bottom = 2.dp), verticalAlignment = Alignment.CenterVertically) {
                         Text("${index + 1}. ${toolLabel(change.name)}", color = c.muted, fontSize = 11.sp, modifier = Modifier.weight(1f))
                         change.diff?.let { val (a, r) = diffStats(it); DiffStat(a, r); Spacer(Modifier.width(6.dp)) }
-                        change.diff?.let { ChillerIconButton(Icons.Outlined.OpenInFull, "Развернуть дифф", { expandedDiff = current.path to it }, Modifier.size(26.dp)) }
+                        if (image != null) ChillerIconButton(Icons.Outlined.OpenInFull, "Открыть изображение", { viewedImage = image }, Modifier.size(26.dp))
+                        else change.diff?.let { ChillerIconButton(Icons.Outlined.OpenInFull, "Развернуть дифф", { expandedDiff = current.path to it }, Modifier.size(26.dp)) }
                         val id = if (canUndo) changeId(change.output) else null
                         if (id != null) ChillerControl("Отменить", { onUndo(id) }, icon = Icons.AutoMirrored.Outlined.Undo)
                         else Spacer(Modifier.height(28.dp))
                     }
-                    // A new or changed picture shows itself rather than "Binary files differ".
-                    val picture = change.diff?.takeIf { "Binary files differ" in it && current.path.substringAfterLast('.').lowercase() in setOf("png", "jpg", "jpeg") }
-                    if (picture != null && current.kind != "deleted") ChangedImage(current.path) { Diff(picture) }
+                    if (image != null) ChangedImage(current.path, image.second) { viewedImage = image }
                     else change.diff?.let { Diff(it) } ?: Text("Без диффа", color = c.faint, fontSize = 11.sp, modifier = Modifier.padding(10.dp))
                 }
             }
         }
     }
+    viewedImage?.let { (file, image) -> ImageViewer(file, image, { viewedImage = null }) }
     expandedDiff?.let { (path, diff) ->
         Dialog(onDismissRequest = { expandedDiff = null }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
             Column(Modifier.fillMaxWidth(.88f).fillMaxHeight(.86f).clip(RoundedCornerShape(14.dp)).background(c.surface).border(1.dp, c.border, RoundedCornerShape(14.dp))) {
@@ -281,18 +285,28 @@ private fun EmptyState(icon: ImageVector, title: String, text: String, modifier:
     }
 }
 
-/** The picture a change produced, read like any presented file; [fallback] when it cannot be shown. */
+/** The picture a change produced, read like any presented file, as a presentation and its pixels; null while loading or unreadable. */
 @Composable
-private fun ChangedImage(path: String, fallback: @Composable () -> Unit) {
-    val c = LocalChillerPalette.current
+private fun rememberChangedImage(path: String): Pair<FilePresentation, androidx.compose.ui.graphics.ImageBitmap>? {
     val preview = LocalFilePreview.current
-    val bitmap by produceState<androidx.compose.ui.graphics.ImageBitmap?>(null, path, preview) {
-        value = preview?.let { read -> kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { runCatching { read(path)?.let(::decodePreviewImage) }.getOrNull() } }
+    val loaded by produceState<Pair<FilePresentation, androidx.compose.ui.graphics.ImageBitmap>?>(null, path, preview) {
+        value = preview?.let { read -> kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { runCatching {
+            read(path)?.let { bytes -> decodePreviewImage(bytes)?.let { image ->
+                val mime = if (path.substringAfterLast('.').lowercase() == "png") "image/png" else "image/jpeg"
+                FilePresentation(path, path.substringAfterLast('/'), mime, bytes.size.toLong()) to image
+            } }
+        }.getOrNull() } }
     }
-    val image = bitmap ?: return fallback()
+    return loaded
+}
+
+@Composable
+private fun ChangedImage(path: String, image: androidx.compose.ui.graphics.ImageBitmap, onOpen: () -> Unit) {
+    val c = LocalChillerPalette.current
     Box(Modifier.fillMaxWidth().background(c.sidebar.copy(alpha = .4f)).padding(10.dp), contentAlignment = Alignment.Center) {
-        androidx.compose.foundation.Image(image, path.substringAfterLast('/'), contentScale = androidx.compose.ui.layout.ContentScale.Fit,
-            modifier = Modifier.heightIn(max = 220.dp).clip(RoundedCornerShape(6.dp)))
+        androidx.compose.foundation.Image(image, "Открыть изображение ${path.substringAfterLast('/')}", contentScale = androidx.compose.ui.layout.ContentScale.Fit,
+            modifier = Modifier.heightIn(max = 220.dp).clip(RoundedCornerShape(6.dp)).pointerHoverIcon(PointerIcon.Hand)
+                .clickable(role = Role.Button, onClickLabel = "Открыть изображение", onClick = onOpen))
     }
     Text("${image.width} × ${image.height}", color = c.faint, fontSize = 10.sp, modifier = Modifier.padding(start = 10.dp, bottom = 8.dp))
 }
