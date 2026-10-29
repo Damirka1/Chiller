@@ -20,6 +20,9 @@ import kotlin.test.assertEquals
  */
 @OptIn(ExperimentalTestApi::class)
 class ProjectWorkflowUiTest {
+    // The app sets the global language while composing; leave the default for the next test class.
+    @kotlin.test.AfterTest fun english() { dev.chiller.app.i18n.I18n.current = dev.chiller.app.i18n.EnStrings }
+
     private val root = Files.createTempDirectory("ui-projects")
     private val shop = Files.createDirectories(root.resolve("demo-shop")).toString()
     private val api = Files.createDirectories(root.resolve("backend-api")).toString()

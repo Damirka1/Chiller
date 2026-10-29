@@ -6,6 +6,10 @@ import dev.chiller.app.ui.withUnshownOutputs
 import kotlin.test.assertEquals
 
 class ModelCatalogStateTest {
+    // Helpers read the global language; these checks are written against the Russian texts.
+    @kotlin.test.BeforeTest fun russian() { dev.chiller.app.i18n.I18n.current = dev.chiller.app.i18n.RuStrings }
+    @kotlin.test.AfterTest fun english() { dev.chiller.app.i18n.I18n.current = dev.chiller.app.i18n.EnStrings }
+
     @Test fun imageOnlyModelsAreNotOfferedForChat() {
         val catalog = ModelCatalogState("ready", listOf(
             ProviderModel("flux-2-klein", chat = false, imageGeneration = true),

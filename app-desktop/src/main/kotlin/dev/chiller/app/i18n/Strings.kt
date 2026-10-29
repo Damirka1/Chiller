@@ -29,6 +29,8 @@ interface Strings {
     val projects: ProjectStrings
     val composer: ComposerStrings
     val conversation: ConversationStrings
+    val run: RunStrings
+    val turn: TurnStrings
     // groups
 }
 
@@ -250,6 +252,132 @@ interface ConversationStrings {
     val yourAnswer: String
     val questionAfterInterrupt: String
     // end conversation
+}
+
+interface RunStrings {
+    fun toolLabel(name: String): String
+    val waitingYou: String
+    val preparingRequest: String
+    val waitingModel: String
+    val modelWriting: String
+    val runningAction: String
+    val replyReady: String
+    val taskStopped: String
+    val runInterrupted: String
+    fun errorsCount(n: Int): String
+    val collapse: String
+    val expand: String
+    val tagError: String
+    val tagRunning: String
+    val tagInterrupted: String
+    val noOutput: String
+    val undoEdit: String
+    val collapseReasoning: String
+    val showReasoning: String
+    val thinking: String
+    val reasoning: String
+    fun sizeBytes(n: Long): String
+    fun sizeKb(kb: Double): String
+    fun sizeMb(mb: Double): String
+    fun rounds(n: Int): String
+    fun actions(n: Int, failed: Int): String
+    fun tokensFlow(input: String, output: String): String
+    val usagePartial: String
+    fun cacheShare(percent: Long): String
+    fun durationMs(ms: Long): String
+    fun durationSeconds(seconds: Double): String
+    fun durationMinutes(minutes: Long, seconds: Long): String
+    val metricsLater: String
+    val usageIncompleteNote: String
+    val statRounds: String
+    val statActions: String
+    val statToolErrors: String
+    val statFailedCommands: String
+    val statTime: String
+    val statInput: String
+    val statOutput: String
+    val statCache: String
+    val statContext: String
+    val statHelpers: String
+    val statHelperTokens: String
+    val statsNote: String
+    val requestTrace: String
+    fun modelPlanProgress(done: Int, total: Int): String
+    fun droppedMessages(n: Int): String
+    val lastRoundReasoning: String
+    fun statusLabel(status: String): String
+    val errorIncompleteToolCall: String
+    val errorIncompleteStream: String
+    val errorContextOverflow: String
+    val errorBudget: String
+    val planUnfinished: String
+    val planDone: String
+    val planClosed: String
+    val plan: String
+    val collapsePlan: String
+    val expandPlan: String
+    fun verifyRunning(command: String, attempt: Int, max: Int): String
+    fun verifyPassed(command: String, duration: String): String
+    fun verifyFailed(code: String, message: String, attempt: Int, max: Int): String
+    fun verifyGaveUp(attempts: Int, code: String): String
+    val verifyNotStarted: String
+    val hideOutput: String
+    val output: String
+    val hide: String
+    fun contextShortened(messages: Int, results: Int): String
+    val hideMemory: String
+    val showMemory: String
+    val memDetailedRequests: String
+    val memLatestPlan: String
+    val memRecentRequests: String
+    val memFiles: String
+    val memNotes: String
+    val memIntro: String
+    val memUnavailable: String
+    // end run
+}
+
+interface TurnStrings {
+    val stoppedStepLimit: String
+    val error: String
+    val stopped: String
+    val interrupted: String
+    val doneWithIssues: String
+    val turnDone: String
+    fun planLine(done: Int, total: Int, skipped: Int): String
+    val collapseResult: String
+    val expandResult: String
+    val modelPlan: String
+    val needsAttention: String
+    val changed: String
+    val undone: String
+    val deleted: String
+    val created: String
+    val modified: String
+    fun andMore(n: Int): String
+    fun andMoreTruncated(n: Int, truncated: Boolean): String
+    val outsideTools: String
+    val outsideNote: String
+    val commands: String
+    val exitZero: String
+    val timedOut: String
+    fun exitCode(code: String): String
+    val resultUnread: String
+    val shown: String
+    fun issuesCount(n: Int): String
+    fun checksPassed(passed: Int, total: Int): String
+    val checksNotRun: String
+    val checksUnconfirmed: String
+    fun shownCount(n: Int): String
+    fun outsideCount(n: Int): String
+    fun checkTimedOut(command: String): String
+    fun checkFailed(command: String, code: String): String
+    fun checkUnread(command: String): String
+    fun editFailed(path: String): String
+    fun planOpen(steps: String): String
+    fun quote(text: String): String
+    fun createdNotShown(path: String): String
+    // end turn
 }
 
 // interfaces

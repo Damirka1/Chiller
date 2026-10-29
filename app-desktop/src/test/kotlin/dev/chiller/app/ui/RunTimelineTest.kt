@@ -10,6 +10,10 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 class RunTimelineTest {
+    // Helpers read the global language; these checks are written against the Russian texts.
+    @kotlin.test.BeforeTest fun russian() { dev.chiller.app.i18n.I18n.current = dev.chiller.app.i18n.RuStrings }
+    @kotlin.test.AfterTest fun english() { dev.chiller.app.i18n.I18n.current = dev.chiller.app.i18n.EnStrings }
+
     @Test fun incompleteUsageAndRecoveryAreVisible() {
         assertTrue(runSummaryParts(RunState(modelRounds = 2, usageIncomplete = true)).contains("расход известен частично"))
         assertEquals("retrying", runProgressLabel(RunState(status = "streaming", recoveryNotice = "retrying")))

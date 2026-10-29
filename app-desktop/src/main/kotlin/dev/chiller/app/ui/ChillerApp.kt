@@ -354,6 +354,8 @@ fun ChillerApp(
     // Provider-given model names (an optional extension of /models), for the composer's model button.
     val modelNames = remember(catalog.models) { catalog.models.mapNotNull { m -> m.displayName?.takeIf { it.isNotBlank() }?.let { m.id to it } }.toMap() }
     val strings = stringsFor(Language.fromId(preferences.language))
+    // Labels built outside composition (run status, sizes, tool names) read the same language; set before the children compose.
+    I18n.current = strings
     ChillerTheme(darkTheme = dark, reducedMotion = reducedMotion, compact = compactDensity) { CompositionLocalProvider(LocalModelNames provides modelNames, LocalFilePreview provides onPreviewFile, LocalEditApproval provides editApproval, LocalStrings provides strings) {
         val c = LocalChillerPalette.current
         val menu = titleBar?.menu
@@ -722,13 +724,8 @@ internal fun prettyOutput(output: String): String = runCatching {
     val data = root["data"]
     (data as? JsonObject)?.get("output")?.jsonPrimitive?.content ?: Json { prettyPrint = true }.encodeToString(JsonElement.serializer(), data ?: JsonPrimitive(output))
 }.getOrDefault(output)
-internal fun toolLabel(name: String) = when (name) {
-    "web_search" -> "Поиск в интернете"; "web_fetch" -> "Веб-страница"; "create_directory" -> "Папка"; "show_file" -> "Файл"; "capture_window" -> "Снимок окна"; "list_capture_targets" -> "Окно для снимка"
-    "git_status" -> "Состояние Git"; "git_diff" -> "Изменения Git"; "git_log" -> "История Git"; "git_show" -> "Файл из Git"; "find_symbols" -> "Объявления"; "read_symbol" -> "Функция"; "read_diagnostics" -> "Диагностика"
-    "read_file" -> "Чтение"; "list_files" -> "Файлы"; "search_text" -> "Поиск"; "edit_file" -> "Правка"; "replace_text" -> "Замена"; "append_file" -> "Дозапись"; "update_plan" -> "План"; "spawn_agent" -> "Помощник"; "list_agents" -> "Помощники"; "wait_agents" -> "Ожидание"; "agent_result" -> "Отчёт"; "message_agent" -> "Сообщение"; "cancel_agent" -> "Стоп"; "create_file" -> "Создание"; "generate_image" -> "Картинка"
-    "move_file" -> "Перемещение"; "delete_file" -> "Удаление"; "run_process" -> "Команда"; "read_process" -> "Вывод"; "stop_process" -> "Остановка"
-    "read_artifact" -> "Результат"; "ask_user" -> "Вопрос"; "undo" -> "Откат"; else -> name
-}
+
+internal fun toolLabel(name: String) = I18n.current.run.toolLabel(name)
 
 /** Plan and Edit alternate; Shift+Tab in the composer calls this. */
 internal fun toggledMode(mode: ExecutionMode): ExecutionMode = if (mode == ExecutionMode.PLAN) ExecutionMode.WORKSPACE_EDIT else ExecutionMode.PLAN

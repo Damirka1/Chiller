@@ -1,5 +1,6 @@
 package dev.chiller.app.ui
 
+import dev.chiller.app.i18n.*
 import dev.chiller.contracts.RunState
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -115,20 +116,20 @@ fun turnResult(state: RunState, undone: Set<String> = emptySet()): TurnResult {
         // A failed check counts unless the same command later succeeded.
         commands.withIndex().filter { (index, run) -> run.isCheck && run.failed && commands.drop(index + 1).none { it.command == run.command && it.succeeded } }
             .map { it.value }.distinctBy { it.command }.forEach { run ->
-                add(if (run.state == "timed_out") "«${run.command}» не уложилась во время и не перезапускалась успешно"
-                    else "«${run.command}» завершилась с кодом ${run.exitCode} и после этого не прошла")
+                add(if (run.state == "timed_out") I18n.current.turn.checkTimedOut(run.command)
+                    else I18n.current.turn.checkFailed(run.command, run.exitCode.toString()))
             }
         commands.filter { it.isCheck && !it.succeeded && !it.failed && commands.none { other -> other.command == it.command && (other.succeeded || other.failed) } }
-            .distinctBy { it.command }.forEach { add("Результат «${it.command}» не прочитан: неизвестно, прошла ли проверка") }
+            .distinctBy { it.command }.forEach { add(I18n.current.turn.checkUnread(it.command)) }
         // A failed change counts unless the same path was changed successfully later.
         activities.withIndex().filter { (index, a) ->
             a.name in FILE_CHANGE_TOOLS && a.status == "failed" &&
                 activities.drop(index + 1).none { it.name in FILE_CHANGE_TOOLS && it.status == "completed" && it.target == a.target }
-        }.map { it.value.target }.distinct().forEach { add("Правка «$it» не применилась") }
+        }.map { it.value.target }.distinct().forEach { add(I18n.current.turn.editFailed(it)) }
         // A plan left with open steps after the turn: the answer may present unfinished work as done.
         if (state.status in setOf("completed", "failed", "cancelled", "interrupted"))
             currentTurnPlan(state.messages)?.filter { it.status !in setOf("done", "skipped") }?.takeIf { it.isNotEmpty() }?.let { open ->
-                add("План не закрыт: " + open.joinToString("; ") { "«${it.title}»" })
+                add(I18n.current.turn.planOpen(open.joinToString("; ") { I18n.current.turn.quote(it.title) }))
             }
 
     }
@@ -145,5 +146,5 @@ private val DELIVERABLES = setOf("png", "jpg", "jpeg", "gif", "webp", "svg", "pd
  */
 fun TurnResult.withUnshownOutputs(outside: dev.chiller.app.di.OutsideChanges?): TurnResult {
     val unshown = outside?.added.orEmpty().filter { it.substringAfterLast('.', "").lowercase() in DELIVERABLES && it !in presented }
-    return if (unshown.isEmpty()) this else copy(issues = issues + unshown.map { "«$it» создан, но не показан" })
+    return if (unshown.isEmpty()) this else copy(issues = issues + unshown.map { I18n.current.turn.createdNotShown(it) })
 }

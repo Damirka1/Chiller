@@ -1,5 +1,6 @@
 package dev.chiller.app.ui
 
+import dev.chiller.app.i18n.*
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
@@ -73,7 +74,7 @@ internal fun PlanChecklist(steps: List<PlanStep>, running: Boolean, modifier: Mo
             Modifier.fillMaxWidth().pointerHoverIcon(PointerIcon.Hand).clickable(role = Role.Button) { open = !open }.padding(horizontal = 14.dp, vertical = 9.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(when { unfinished -> "План не завершён"; finished && done == steps.size -> "План выполнен"; finished -> "План закрыт"; else -> "План" },
+            Text(when { unfinished -> strings.run.planUnfinished; finished && done == steps.size -> strings.run.planDone; finished -> strings.run.planClosed; else -> strings.run.plan },
                 color = if (unfinished) c.negative else c.text, fontSize = 12.sp, fontWeight = FontWeight.Medium)
             Spacer(Modifier.width(8.dp))
             Text("$done/${steps.size}", color = c.faint, fontSize = 12.sp)
@@ -83,7 +84,7 @@ internal fun PlanChecklist(steps: List<PlanStep>, running: Boolean, modifier: Mo
                 Box(Modifier.fillMaxHeight().fillMaxWidth(if (steps.isEmpty()) 0f else done.toFloat() / steps.size).clip(CircleShape).background(c.accent))
             }
             Spacer(Modifier.width(10.dp))
-            Icon(if (open) Icons.Outlined.KeyboardArrowUp else Icons.Outlined.KeyboardArrowDown, if (open) "Свернуть план" else "Развернуть план", Modifier.size(15.dp), tint = c.faint)
+            Icon(if (open) Icons.Outlined.KeyboardArrowUp else Icons.Outlined.KeyboardArrowDown, if (open) strings.run.collapsePlan else strings.run.expandPlan, Modifier.size(15.dp), tint = c.faint)
         }
         AnimatedVisibility(open, enter = if (reduced) fadeIn(tween(0)) else expandVertically(tween(180)) + fadeIn(tween(140)), exit = if (reduced) fadeOut(tween(0)) else shrinkVertically(tween(150)) + fadeOut(tween(100))) {
             Column(Modifier.padding(start = 14.dp, end = 14.dp, bottom = 10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
