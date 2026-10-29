@@ -480,9 +480,6 @@ class DesktopController(
         if (uri == null || uri.host == null || uri.userInfo != null || uri.query != null || uri.fragment != null || uri.scheme !in setOf("https", "http")) {
             showError("Укажите корректный HTTP(S) URL."); return
         }
-        if (uri.scheme == "http" && uri.host !in setOf("localhost", "127.0.0.1", "::1")) {
-            showError("Для удалённого провайдера требуется HTTPS. HTTP доступен только localhost."); return
-        }
         val oldSettings = _state.value.settings
         val oldCredential = credential
         val nextUrl = url.trimEnd('/')

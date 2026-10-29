@@ -17,7 +17,7 @@ class CustomProviderTest {
         assertNull(good.normalized().problem())
         assertEquals("https://gateway.example.com/ai/api/v1", good.normalized().baseUrl)
         assertNotNull(good.copy(name = " ").problem())
-        assertNotNull(good.copy(baseUrl = "http://gateway.example.com/v1").problem(), "remote HTTP is refused")
+        assertNull(good.copy(baseUrl = "http://gateway.example.com/v1").problem(), "remote HTTP is allowed")
         assertNull(good.copy(baseUrl = "http://localhost:8000/v1").problem(), "loopback HTTP is fine")
         assertNotNull(good.copy(baseUrl = "https://user:pw@gateway.example.com/v1").problem())
         assertNotNull(good.copy(keyVariable = "QARMET-KEY").problem())

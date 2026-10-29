@@ -129,9 +129,8 @@ class KtorConnectionChecker(
     private fun safeEndpoint(baseUrl: String): String? = runCatching {
         val uri = URI(baseUrl.trim())
         val host = uri.host?.lowercase() ?: return null
-        val loopback = host == "localhost" || host == "127.0.0.1" || host == "[::1]" || host == "::1"
-        if (uri.userInfo != null || uri.query != null || uri.fragment != null ||
-            !(uri.scheme.equals("https", true) || (uri.scheme.equals("http", true) && loopback))
+        if (host.isEmpty() || uri.userInfo != null || uri.query != null || uri.fragment != null ||
+            !(uri.scheme.equals("https", true) || uri.scheme.equals("http", true))
         ) return null
         uri.toASCIIString().trimEnd('/') + "/chat/completions"
     }.getOrNull()

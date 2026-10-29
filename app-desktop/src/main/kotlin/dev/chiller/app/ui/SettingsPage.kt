@@ -211,7 +211,7 @@ private fun ConnectionSection(data: SettingsData, actions: SettingsActions) {
         SectionTitle(when { creating -> "Свой провайдер"; custom != null -> custom.name; else -> preset?.name ?: "Свой адрес" },
             when {
                 isCustom -> "Шлюз компании или свой сервер. Хранится только в настройках этого компьютера и не попадает в репозиторий."
-                else -> preset?.note?.ifBlank { null } ?: "Любой сервер с /chat/completions; HTTP разрешён только для localhost."
+                else -> preset?.note?.ifBlank { null } ?: "Любой сервер с /chat/completions по HTTP или HTTPS."
             })
         if (isCustom) ChillerField(name, { name = it }, "Название", "Qarmet")
         ChillerField(url, { url = it }, "Адрес API", "https://api.example.com/v1")

@@ -103,7 +103,7 @@ class ConnectionCheckTest {
             runCatching { respond(exchange, 200, "done") }
         }
         KtorConnectionChecker().use { checker ->
-            listOf("http://example.com", "http://user:pass@localhost", "http://localhost?x=1", "ftp://localhost").forEach { url ->
+            listOf("http://user:pass@localhost", "http://localhost?x=1", "ftp://localhost").forEach { url ->
                 assertFalse(checker.check(url, "model", "synthetic-key", false).success)
             }
             val request = async { checker.check(fixture.url, "model", "synthetic-key", false) }

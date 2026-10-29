@@ -157,15 +157,13 @@ private fun positiveInt(node: JsonElement?): Int? {
  *
  * Trims one trailing slash and appends `/models`: `https://api.deepseek.com` -> `/models`,
  * `https://api.deepseek.com/v1` -> `/v1/models`, `https://gateway/v1/` -> `/v1/models`.
- * Rejects credentials, query, fragment and plain HTTP on non-loopback hosts before any request.
+ * Rejects credentials, query, fragment and schemes other than HTTP(S) before any request.
  */
 private fun modelsEndpoint(baseUrl: String): String? {
     val uri = runCatching { URI(baseUrl.trim()) }.getOrNull() ?: return null
     val scheme = uri.scheme?.lowercase() ?: return null
-    val host = uri.host?.lowercase() ?: return null
-    if (uri.userInfo != null || uri.query != null || uri.fragment != null) return null
-    val loopback = host in setOf("localhost", "127.0.0.1", "::1", "[::1]")
-    if (scheme != "https" && !(scheme == "http" && loopback)) return null
+    if (uri.host == null || uri.userInfo != null || uri.query != null || uri.fragment != null) return null
+    if (scheme != "https" && scheme != "http") return null
     val base = uri.toASCIIString().trimEnd('/')
     return if (base.isBlank()) null else "$base/models"
 }

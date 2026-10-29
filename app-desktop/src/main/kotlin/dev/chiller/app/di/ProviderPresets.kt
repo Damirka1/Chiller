@@ -46,7 +46,7 @@ data class CustomProvider(
     /** Why this provider cannot be saved, in words for the settings page; null when it is valid. */
     fun problem(): String? = when {
         name.isBlank() || name.length > 60 -> "Название: от 1 до 60 символов"
-        !endpointAllowed(baseUrl) -> "Адрес: HTTPS, или HTTP только для localhost; без логина, query и #"
+        !endpointAllowed(baseUrl) -> "Адрес: HTTP или HTTPS; без логина, query и #"
         keyVariable != null && !isVariableName(keyVariable) -> "Переменная ключа: заглавные латинские буквы, цифры и _, например QARMET_API_KEY"
         defaultModel != null && defaultModel.length > 200 -> "Модель: не длиннее 200 символов"
         profile != null && profile !in setOf("auto", "full", "compact") -> "Профиль: авто, полный или компактный"
@@ -60,12 +60,12 @@ data class CustomProvider(
 /** An environment variable name as people write them (QARMET_API_KEY); a pasted key with lowercase letters is not one. */
 fun isVariableName(value: String): Boolean = Regex("[A-Z_][A-Z0-9_]{0,63}").matches(value)
 
-/** The same rule the connection settings apply: HTTPS, or plain HTTP to a loopback host; no credentials, query or fragment. */
+/** The same rule the connection settings apply: HTTP or HTTPS; no credentials, query or fragment. */
 fun endpointAllowed(url: String): Boolean = runCatching {
     val uri = URI(url.trim())
     val host = uri.host ?: return false
     uri.userInfo == null && uri.query == null && uri.fragment == null &&
-        (uri.scheme == "https" || (uri.scheme == "http" && isLoopback(url)))
+        uri.scheme in setOf("https", "http")
 }.getOrDefault(false)
 
 object ProviderPresets {
