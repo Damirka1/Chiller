@@ -143,9 +143,9 @@ class AgentCoordinator(
         val hasUnfinishedRun = latestRunEvent?.type == "run.started"
         val interrupted = unresolvedCalls.isNotEmpty() || hasUnfinishedRun || lastEvent in setOf("tool.prepared", "activity", "message")
         val recoveryMessage = when {
-            pendingQuestion != null -> "A question was waiting for an answer: ${pendingQuestion.question}. This interrupted run cannot resume automatically. Review the prompt, then start a new chat."
-            unresolvedCalls.isNotEmpty() -> "An operation may have started before interruption. Its outcome is unknown and it will not be replayed; review the session, then start a new chat."
-            interrupted -> "The run was interrupted and cannot be resumed automatically. Review the session, then start a new chat."
+            pendingQuestion != null -> "A question was waiting for an answer: ${pendingQuestion.question}. This interrupted run cannot resume automatically. Answer or say how to go on in a new message; nothing is replayed."
+            unresolvedCalls.isNotEmpty() -> "An operation may have started before interruption. Its outcome is unknown and it will not be replayed; send a message to continue, and the model will check it first."
+            interrupted -> "The run was interrupted and cannot be resumed automatically. Send a message to continue."
             else -> null
         }
         val restoredStatus = when {
@@ -193,14 +193,10 @@ class AgentCoordinator(
     /** Explicit user recovery closes protocol gaps with UNKNOWN receipts, never executes old tools. */
     suspend fun recoverInterrupted() = lock.withLock {
         check(job?.isActive != true) { "Stop the active run before recovery" }
-        val pending = unresolvedToolCalls(_state.value.messages)
-        if (pending.isEmpty() && _state.value.status != "interrupted") return@withLock
-        for (call in pending) {
-            val result = ToolResult.failure("OUTCOME_UNKNOWN", "Previous operation outcome is unknown. It was not replayed. Inspect current state; ask the user before repeating any side-effecting process.")
-            appendMessage(AgentMessage("tool", json.encodeToString(result), toolCallId = call.id))
-        }
+        if (unresolvedToolCalls(_state.value.messages).isEmpty() && _state.value.status != "interrupted") return@withLock
+        val closed = closeUnresolvedCalls()
         appendMessage(AgentMessage("assistant", "Прерванные действия не повторялись. Перед продолжением нужно проверить текущее состояние файлов и процессов.", origin = MessageOrigin(MessageOriginKind.APPLICATION)))
-        events.append(sessionId, "run.recovered", buildJsonObject { put("unknownCalls", pending.size) })
+        events.append(sessionId, "run.recovered", buildJsonObject { put("unknownCalls", closed) })
         _state.update { it.copy(status = "idle", error = null, question = null, streamingText = "") }
     }
 
@@ -328,6 +324,16 @@ class AgentCoordinator(
         _state.update { it.copy(messages = it.messages + message) }
     }
 
+    /** Answers every call still without a result as OUTCOME_UNKNOWN; nothing is executed. Returns how many. */
+    private suspend fun closeUnresolvedCalls(): Int {
+        val pending = unresolvedToolCalls(_state.value.messages)
+        for (call in pending) {
+            val result = ToolResult.failure("OUTCOME_UNKNOWN", "Previous operation outcome is unknown. It was not replayed. Inspect current state; ask the user before repeating any side-effecting process.")
+            appendMessage(AgentMessage("tool", json.encodeToString(result), toolCallId = call.id))
+        }
+        return pending.size
+    }
+
     private fun unresolvedToolCalls(messages: List<AgentMessage>): List<ToolCall> {
         val pending = mutableListOf<ToolCall>()
         for (message in messages) {
@@ -377,9 +383,10 @@ class AgentCoordinator(
 
     private suspend fun run(text: String, mode: ExecutionMode, allowProcesses: Boolean, allowNetwork: Boolean, allowScreenshots: Boolean, attachments: List<ComposerAttachment>, id: String, onAccepted: () -> Unit, stats: RunStats) {
         _state.update { it.copy(status = "preparing", error = null, recoveryNotice = null, reasoning = "", streamingText = "", activeModelId = model, usage = TokenUsage(), usageIncomplete = false, toolCalls = 0, failedToolCalls = 0, runDurationMs = null) }
-        // An interrupted tool group cannot be silently sent back as if it completed.
-        val previous = _state.value.messages
-        if (unresolvedToolCalls(previous).isNotEmpty()) throw IllegalStateException("Предыдущая операция прервана. Начните новый диалог; неизвестные действия не повторяются.")
+        // A step cut off mid-tools (stopped, timed out, app closed) left calls without results. The user's new message is
+        // the decision to go on: those calls are closed as unknown, never repeated, and the model is told to check them.
+        val closed = closeUnresolvedCalls()
+        if (closed > 0) events.append(sessionId, "run.recovered", buildJsonObject { put("unknownCalls", closed); put("onSend", true) })
         events.append(sessionId, "run.started", buildJsonObject { put("runId", id); put("maxRounds", maxRounds) })
         appendMessage(AgentMessage("user", text, attachments = attachments))
         onAccepted()

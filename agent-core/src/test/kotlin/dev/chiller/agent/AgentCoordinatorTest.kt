@@ -522,14 +522,15 @@ class AgentCoordinatorTest {
         assertEquals("call-1", restored.coordinator.state.value.activities.single().toolCallId)
     }
 
-    @Test fun interruptedToolHistoryRejectsContinuationWithoutCallingProvider() = runTest {
+    @Test fun interruptedToolHistoryIsClosedAsUnknownWhenTheUserContinues() = runTest {
         val oldCall = ToolCall("call-interrupted", "write", "{}")
         val events = MemoryEvents().apply {
             append("session", "message", Json.encodeToJsonElement(AgentMessage("assistant", toolCalls = listOf(oldCall))).jsonObject)
             append("session", "tool.prepared", buildJsonObject { put("callId", oldCall.id); put("name", oldCall.name); put("arguments", buildJsonObject { put("path", "src/main.kt") }) })
             append("session", "run.failed", buildJsonObject { put("runId", "run-old"); put("message", "old failure") })
         }
-        val provider = ScriptedProvider { error("provider must not receive an incomplete tool group") }
+        val requests = mutableListOf<ModelRequest>()
+        val provider = ScriptedProvider { request -> flow { requests += request; emit(ModelEvent.Completed(AgentMessage("assistant", "checked"), "stop")) } }
         val tools = RecordingTools()
         val fixture = fixture(provider, tools, events, StandardTestDispatcher(testScheduler))
         fixture.coordinator.restore()
@@ -538,10 +539,12 @@ class AgentCoordinatorTest {
         var accepted = false
         fixture.coordinator.send("continue", ExecutionMode.WORKSPACE_EDIT) { accepted = true }
         advanceUntilIdle()
-        assertEquals(false, accepted)
-        assertEquals(0, provider.calls)
-        assertTrue(tools.executed.isEmpty())
-        assertEquals("failed", fixture.coordinator.state.value.status)
+        assertEquals(true, accepted)
+        assertTrue(tools.executed.isEmpty(), "the interrupted write is never replayed")
+        assertEquals("completed", fixture.coordinator.state.value.status)
+        // The provider never sees an incomplete tool group: the old call is answered as unknown before the new message.
+        val sent = requests.single().messages
+        assertTrue(sent.any { it.role == "tool" && it.toolCallId == oldCall.id && it.content.orEmpty().contains("OUTCOME_UNKNOWN") })
     }
 
     @Test fun restoreExposesInterruptedQuestionPromptWithoutResumingIt() = runTest {
@@ -551,7 +554,7 @@ class AgentCoordinatorTest {
             append("session", "message", Json.encodeToJsonElement(AgentMessage("assistant", toolCalls = listOf(questionCall))).jsonObject)
             append("session", "tool.prepared", buildJsonObject { put("callId", questionCall.id); put("name", questionCall.name); put("arguments", Json.parseToJsonElement(questionCall.arguments)) })
         }
-        val provider = ScriptedProvider { error("restored question must not resume the provider") }
+        val provider = ScriptedProvider { flow { emit(ModelEvent.Completed(AgentMessage("assistant", "going on"), "stop")) } }
         val tools = RecordingTools()
         val fixture = fixture(provider, tools, events, StandardTestDispatcher(testScheduler))
 
@@ -563,11 +566,11 @@ class AgentCoordinatorTest {
         assertEquals("Which target should I use?", restored.question?.question)
         assertEquals(listOf("A", "B"), restored.question?.options)
         assertTrue(restored.error.orEmpty().contains("cannot resume automatically"))
-        assertTrue(restored.error.orEmpty().contains("start a new chat"))
+        assertTrue(restored.error.orEmpty().contains("new message"))
         fixture.coordinator.send("continue", ExecutionMode.WORKSPACE_EDIT)
         advanceUntilIdle()
-        assertEquals(0, provider.calls)
-        assertTrue(tools.executed.isEmpty())
+        assertTrue(tools.executed.isEmpty(), "the old question is not asked again by itself")
+        assertEquals("completed", fixture.coordinator.state.value.status)
     }
 
     @Test fun fileChangesWaitForTheUsersDecision() = runTest {
@@ -815,6 +818,35 @@ class AgentCoordinatorTest {
         assertTrue(unknown.content!!.contains("OUTCOME_UNKNOWN"))
         f.coordinator.restore()
         assertEquals("idle", f.coordinator.state.value.status)
+    }
+
+    @Test fun aNewMessageAfterAnInterruptedStepContinuesWithoutRepeatingIt() = runTest {
+        val entered = CompletableDeferred<Unit>()
+        var started = 0
+        val tools = RecordingTools().apply { onExecute = { started++; entered.complete(Unit); awaitCancellation() } }
+        val requests = mutableListOf<ModelRequest>()
+        val provider = ScriptedProvider { request -> flow {
+            requests += request
+            if (requests.size == 1) emit(ModelEvent.Completed(AgentMessage("assistant", toolCalls = listOf(ToolCall("pending", "write", "{}"))), "tool_calls"))
+            else emit(ModelEvent.Completed(AgentMessage("assistant", "Checked and continued."), "stop"))
+        } }
+        val events = MemoryEvents()
+        val f = fixture(provider, tools, events, StandardTestDispatcher(testScheduler))
+        f.coordinator.send("write", ExecutionMode.WORKSPACE_EDIT)
+        runCurrent()
+        entered.await()
+        f.coordinator.stop()
+        assertEquals("cancelled", f.coordinator.state.value.status)
+
+        f.coordinator.send("Продолжай", ExecutionMode.WORKSPACE_EDIT)
+        advanceUntilIdle()
+        assertEquals("completed", f.coordinator.state.value.status, f.coordinator.state.value.error)
+        assertEquals(1, started, "the interrupted call is not run again")
+        val sent = requests.last().messages
+        val unknown = sent.indexOfFirst { it.role == "tool" && it.toolCallId == "pending" }
+        assertTrue(unknown >= 0 && sent[unknown].content!!.contains("OUTCOME_UNKNOWN"))
+        assertTrue(unknown < sent.indexOfLast { it.role == "user" && it.content == "Продолжай" }, "the gap is closed before the new message")
+        assertTrue(events.records.any { it.type == "run.recovered" })
     }
 
     @Test fun stoppingDuringStreamCancelsRoundBeforeAnyToolExecution() = runTest {
