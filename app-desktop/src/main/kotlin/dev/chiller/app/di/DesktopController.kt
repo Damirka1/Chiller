@@ -378,12 +378,16 @@ class DesktopController(
         catch (_: Exception) { null }
     }
 
+    /** Where a dialog without a project folder writes its generated images. */
+    private fun chatFolder(session: String): Path = directory.resolve("chats").resolve(session)
+
     private fun presentationPath(raw: String): Path? {
         if (raw.startsWith("attachment:")) return inputAttachments.rawPath(_state.value.sessionId, raw.removePrefix("attachment:"))
         return runCatching {
             val path = Path.of(raw)
+            // A dialog without a folder keeps its pictures in its own folder under the app data.
             val allowed = if (path.isAbsolute) directory.resolve("captures").resolve(_state.value.sessionId).toRealPath()
-                else Path.of(_state.value.settings.workspace ?: return null).toRealPath()
+                else (_state.value.settings.workspace?.let { Path.of(it) } ?: chatFolder(_state.value.sessionId)).toRealPath()
             val candidate = if (path.isAbsolute) path else allowed.resolve(path)
             val real = candidate.toRealPath()
             if (!real.startsWith(allowed) || Files.isSymbolicLink(candidate) || !Files.isRegularFile(real)) null else real
@@ -1209,7 +1213,7 @@ class DesktopController(
         val options = s.settings.agent.sanitized()
         val folderless = s.settings.workspace == null
         // A dialog without a folder gets its own folder under the app data for generated images and captures.
-        val root = s.settings.workspace?.let { Path.of(it) } ?: withContext(Dispatchers.IO) { Files.createDirectories(directory.resolve("chats").resolve(s.sessionId)) }
+        val root = s.settings.workspace?.let { Path.of(it) } ?: withContext(Dispatchers.IO) { Files.createDirectories(chatFolder(s.sessionId)) }
         // Reads scale with the model's window; a cost budget caps the prompt at its input ceiling.
         val listedWindow = s.catalog.models.firstOrNull { it.id == (modelOverride ?: s.settings.model) }?.contextWindow
         val readWindow = if (s.settings.costBudget.enabled) minOf(listedWindow ?: 32_768, s.settings.costBudget.inputTokenCeiling) else listedWindow

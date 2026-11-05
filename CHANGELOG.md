@@ -6,6 +6,10 @@ All notable changes to Chiller. The format follows [Keep a Changelog](https://ke
 
 ## [Unreleased]
 
+### Fixed
+
+- **Images in a dialog without a folder:** generated pictures open in the conversation and "Show in folder" leads to the dialog's folder in Chiller's data; before, they were saved but could not be opened.
+
 ## [1.3.0-rc.1] — 2026-10-29
 
 The first candidate of 1.3: the interface in English and Russian, providers over plain HTTP and through a corporate proxy, another provider from the model menu and for images, the model's reasoning step by step, a configurable time per task, and dialogs that keep going after an interrupted step.

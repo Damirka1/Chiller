@@ -26,6 +26,21 @@ class DesktopControllerTest {
 
     @TempDir lateinit var directory: Path
 
+    @Test fun `a dialog without a folder previews the images it generated`() = runBlocking {
+        val controller = DesktopController(directory, initialCredential = null, catalogClient = OfflineCatalog)
+        try {
+            controller.initialize()
+            assertNull(controller.state.value.settings.workspace)
+            val session = controller.state.value.sessionId
+            val chat = java.nio.file.Files.createDirectories(directory.resolve("chats").resolve(session).resolve("images"))
+            val png = java.io.ByteArrayOutputStream().also { javax.imageio.ImageIO.write(java.awt.image.BufferedImage(2, 2, java.awt.image.BufferedImage.TYPE_INT_RGB), "png", it) }.toByteArray()
+            java.nio.file.Files.write(chat.resolve("cat.png"), png)
+            java.nio.file.Files.write(directory.resolve("chats").resolve("other.png"), png)
+            assertNotNull(controller.previewFile("images/cat.png"), "the generated picture opens from the dialog's own folder")
+            assertNull(controller.previewFile("../other.png"), "nothing outside that folder")
+        } finally { controller.close() }
+    }
+
     @Test fun `process permission persists enabled and disabled across restarts`() = runBlocking {
         suspend fun open() = DesktopController(directory, initialCredential = null, catalogClient = OfflineCatalog).also { it.initialize() }
         var controller = open()
