@@ -91,7 +91,8 @@ class KtorModelCatalogClient(private val client: HttpClient) : ModelCatalogClien
                 id = id,
                 displayName = displayName(entry["name"]),
                 // vLLM itself reports max_model_len; gateways use context_window or context_length.
-                contextWindow = positiveInt(entry["context_window"]) ?: positiveInt(entry["context_length"]) ?: positiveInt(entry["max_model_len"]),
+                contextWindow = positiveInt(entry["context_window"]) ?: positiveInt(entry["context_length"]) ?: positiveInt(entry["max_model_len"])
+                    ?: llamaCppWindow(entry),
                 maxOutputTokens = positiveInt(entry["max_output_tokens"]),
                 vision = inputs?.let { "image" in it } ?: capabilities?.let { "vision" in it },
                 reasoning = capabilities?.let { "reasoning" in it },
@@ -146,6 +147,22 @@ private fun declared(capabilities: Set<String>?, capability: String, endpoints: 
     return capabilities?.contains(capability) == true || endpoints?.any { it.endsWith(endpoint) } == true
 }
 
+/**
+ * llama.cpp lists no window field: a loaded model reports `meta.n_ctx`, and router mode lists every model's
+ * launch `status.args`. The server splits its context across `--parallel` slots unless the KV cache is unified,
+ * so one request gets `n_ctx / slots`. `--ctx-size 0` means "the training length", which only `meta` knows.
+ */
+private fun llamaCppWindow(entry: JsonObject): Int? {
+    val args = ((entry["status"] as? JsonObject)?.get("args") as? JsonArray)
+        ?.take(MAX_ARGS)?.mapNotNull { (it as? JsonPrimitive)?.takeIf { p -> p.isString }?.content }.orEmpty()
+    fun arg(vararg names: String): Int? = args.indices.firstOrNull { args[it] in names }
+        ?.let { args.getOrNull(it + 1)?.trim()?.toIntOrNull() }
+    val total = positiveInt((entry["meta"] as? JsonObject)?.get("n_ctx")) ?: arg("--ctx-size", "-c")?.takeIf { it > 0 } ?: return null
+    val unified = args.any { it == "--kv-unified" || it == "-kvu" }
+    val slots = arg("--parallel", "-np")?.takeIf { it > 1 && !unified } ?: 1
+    return (total / slots).takeIf { it > 0 }
+}
+
 private fun positiveInt(node: JsonElement?): Int? {
     val primitive = node as? JsonPrimitive ?: return null
     if (primitive.isString) return null
@@ -176,3 +193,4 @@ private const val MAX_MODELS = 500
 private const val MAX_ID_CHARS = 200
 private const val MAX_NAME_CHARS = 200
 private const val MAX_NAMES = 64
+private const val MAX_ARGS = 256

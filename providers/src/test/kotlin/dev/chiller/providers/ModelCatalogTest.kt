@@ -67,6 +67,28 @@ class ModelCatalogTest {
         }
     }
 
+    @Test fun llamaCppRouterWindowComesFromMetaOrLaunchArgsPerSlot() = runBlocking {
+        Fixture { exchange, _ ->
+            sendJson(exchange, """
+                {"object":"list","data":[
+                  {"id":"qwen-loaded","owned_by":"llamacpp","meta":{"n_ctx":262144,"n_ctx_train":262144},
+                   "status":{"value":"loaded","args":["llama-server","--ctx-size","262144","--parallel","1"]}},
+                  {"id":"gemma-unloaded","owned_by":"llamacpp","status":{"value":"unloaded","args":["llama-server","--ctx-size","131072","--parallel","1"]}},
+                  {"id":"qwen-slots","owned_by":"llamacpp","status":{"value":"unloaded","args":["llama-server","-c","262144","-np","4"]}},
+                  {"id":"qwen-unified","owned_by":"llamacpp","status":{"value":"unloaded","args":["llama-server","--ctx-size","262144","--parallel","4","--kv-unified"]}},
+                  {"id":"train-length","owned_by":"llamacpp","status":{"value":"unloaded","args":["llama-server","--ctx-size","0"]}}
+                ]}
+            """.trimIndent())
+        }.use { fixture ->
+            val byId = fixture.discover().models.associateBy { it.id }
+            assertEquals(262144, byId.getValue("qwen-loaded").contextWindow)
+            assertEquals(131072, byId.getValue("gemma-unloaded").contextWindow)
+            assertEquals(65536, byId.getValue("qwen-slots").contextWindow, "each of four slots gets a quarter")
+            assertEquals(262144, byId.getValue("qwen-unified").contextWindow)
+            assertNull(byId.getValue("train-length").contextWindow, "ctx-size 0 is unknown until the model loads")
+        }
+    }
+
     @Test fun imageModelsAreToldApartFromChatModels() = runBlocking {
         Fixture { exchange, _ ->
             sendJson(exchange, """
