@@ -6,8 +6,13 @@ All notable changes to Chiller. The format follows [Keep a Changelog](https://ke
 
 ## [Unreleased]
 
+## [1.3.0] — 2026-11-06
+
+The stable 1.3 version: everything from [1.3.0-rc.1](https://github.com/Damirka1/Chiller/releases/tag/v1.3.0-rc.1) — the interface in English and Russian, providers over plain HTTP and through a corporate proxy, another provider from the model menu and for images, the model's reasoning step by step, a configurable time per task, and dialogs that keep going after an interrupted step — plus the fixes below.
+
 ### Fixed
 
+- **Context window of llama.cpp models:** the model catalog reads it from llama.cpp's own listing (`meta.n_ctx` of a loaded model, `--ctx-size` of the others in router mode) and divides it by the number of `--parallel` slots; before, every llama.cpp model got 32K.
 - **Images in a dialog without a folder:** generated pictures open in the conversation and "Show in folder" leads to the dialog's folder in Chiller's data; before, they were saved but could not be opened.
 
 ## [1.3.0-rc.1] — 2026-10-29
@@ -226,6 +231,7 @@ The first release candidate of the 1.2 branch: profiles for small models, a veri
 
 The first public preview: a desktop app with Focus and Studio modes, code tools with file snapshots and undo, processes, subagent helpers, presets for OpenAI-compatible providers, a settings page and DMG/MSI builds in CI.
 
+[1.3.0]: https://github.com/Damirka1/Chiller/compare/v1.3.0-rc.1...v1.3.0
 [1.3.0-rc.1]: https://github.com/Damirka1/Chiller/compare/v1.2.1...v1.3.0-rc.1
 [1.2.1]: https://github.com/Damirka1/Chiller/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/Damirka1/Chiller/compare/v1.2.0-rc.3...v1.2.0
