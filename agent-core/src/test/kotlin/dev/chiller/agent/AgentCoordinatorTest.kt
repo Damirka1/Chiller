@@ -1194,6 +1194,33 @@ class AgentCoordinatorTest {
 
     }
 
+    @Test fun compactedHistoryKeepsTheSamePromptPrefixAcrossRounds() = runTest {
+        val store = MemoryEvents()
+        val json = Json { encodeDefaults = true }
+        (1..6).flatMap { listOf(AgentMessage("user", "Topic $it"), AgentMessage("assistant", "Answer $it " + "y".repeat(24_000))) }
+            .forEach { store.append("session", "message", json.encodeToJsonElement(AgentMessage.serializer(), it).jsonObject) }
+        store.append("session", "run.completed", buildJsonObject { put("runId", "old") })
+        val requests = mutableListOf<ModelRequest>()
+        val provider = ScriptedProvider { r -> flow {
+            requests += r
+            if (requests.size <= 3) emit(ModelEvent.Completed(AgentMessage("assistant", toolCalls = listOf(ToolCall("r${requests.size}", "read", "{}"))), "tool_calls"))
+            else emit(ModelEvent.Completed(AgentMessage("assistant", "done"), "stop"))
+        } }
+        val f = fixture(provider, eventStore = store, dispatcher = StandardTestDispatcher(testScheduler))
+        f.coordinator.restore()
+        f.coordinator.send("Next", ExecutionMode.PLAN)
+        advanceUntilIdle()
+        assertEquals("completed", f.coordinator.state.value.status)
+        assertEquals(4, requests.size)
+        // Cut once, well below the limit; every later round extends the previous request instead of reshuffling it.
+        assertEquals(1, store.records.count { it.type == "context.summary" })
+        requests.zipWithNext().forEach { (before, after) -> assertEquals(before.messages, after.messages.take(before.messages.size)) }
+        val memory = requests.first().messages.single { it.content.orEmpty().startsWith("Conversation reference") }.content.orEmpty()
+        val kept = requests.first().messages.filter { it.role == "user" }.map { it.content.orEmpty().substringBefore("\n") }
+        assertTrue("Topic 1" in memory && "Topic 1" !in kept, memory.take(300))
+        assertTrue(kept.none { it.startsWith("Topic") && it in memory }, "the memory quotes only the turns cut off: $kept")
+    }
+
     private fun fixture(
         provider: ScriptedProvider,
         tools: ToolExecutor = RecordingTools(),

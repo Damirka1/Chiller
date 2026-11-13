@@ -211,4 +211,35 @@ class ContextPlannerTest {
         assertEquals("Rule 30: never touch file30.txt.", found.last().second)
     }
 
+
+    @Test fun cutLandsOnATurnStartAndLeavesRoomBelowTheTarget() {
+        val system = AgentMessage("system", "instructions")
+        val history = (1..6).flatMap { listOf(AgentMessage("user", "turn $it"), AgentMessage("assistant", "a".repeat(200))) }
+        val planner = ContextPlanner(maxCharacters = 1_200, outputReserveCharacters = 0)
+        val cut = planner.cutFor(listOf(system), history, 0.6)
+        assertTrue(cut > 0 && history[cut].role == "user", "cut at $cut")
+        assertEquals(0, planner.select(listOf(system) + history.drop(cut)).droppedMessages)
+        assertTrue(planner.cutFor(listOf(system), history, 0.9) < cut, "a higher target cuts less")
+        assertEquals(0, planner.cutFor(listOf(system), history.take(2), 0.1), "the current turn is never cut")
+    }
+
+    @Test fun oldToolResultsAreStubbedInBatchesUntilTheLimitIsNear() {
+        fun turn(results: Int) = listOf(AgentMessage("user", "go")) + (1..results).flatMap {
+            listOf(AgentMessage("assistant", toolCalls = listOf(ToolCall("c$it", "read", "{}"))), AgentMessage("tool", "r".repeat(700), toolCallId = "c$it"))
+        }
+        fun pruned(results: Int, budget: Int) =
+            ContextPlanner(maxCharacters = budget, outputReserveCharacters = 0, keepToolResults = 0).select(turn(results)).prunedResults
+        assertEquals(0, pruned(5, 5_000), "fewer than a batch waits")
+        assertEquals(8, pruned(9, 9_000), "one whole batch, the newest one waits for the next")
+        assertEquals(9, pruned(9, 7_200), "near the limit everything eligible goes")
+    }
+
+    @Test fun providerReportedPromptSizesCalibrateTheEstimate() {
+        fun event(type: String, key: String, value: Int) =
+            dev.chiller.contracts.StoredEvent(sessionId = "s", seq = 0, type = type, payload = buildJsonObject { put(key, value) })
+        fun round(estimate: Int, reported: Int) = listOf(event("context.selected", "estimatedTokens", estimate), event("context.usage", "promptTokens", reported))
+        assertEquals(null, reportedToEstimatedRatio(round(10_000, 3_000)), "one round is not enough")
+        val journal = round(10_000, 3_000) + round(8_000, 2_400) + round(1_000, 900) + round(12_000, 4_000)
+        assertEquals(0.3, reportedToEstimatedRatio(journal)!!, 1e-9)
+    }
 }

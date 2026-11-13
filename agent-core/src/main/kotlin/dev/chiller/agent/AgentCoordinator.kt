@@ -434,7 +434,17 @@ class AgentCoordinator(
         var repeatNotice: AgentMessage? = null
         val schemaCharacters = offered.sumOf { it.name.length + it.description.length + it.parameters.toString().length }
         val window = effectiveContextWindow(contextWindowTokens)
-        var lastMemory = events.read(sessionId).lastOrNull { it.type == "context.summary" }?.payload?.get("text")?.jsonPrimitive?.contentOrNull
+        val journal = events.read(sessionId)
+        // The character estimate assumes one token per non-ASCII character; real tokenizers pack Cyrillic several times
+        // tighter. Provider-reported prompt sizes of this conversation loosen the budget, never tighten it, and stay
+        // fixed for the run so the selection does not shift between rounds.
+        val tokenRatio = reportedToEstimatedRatio(journal)
+        val allowanceFactor = tokenRatio?.let { (1.0 / (it * ESTIMATE_SAFETY)).coerceIn(1.0, MAX_ALLOWANCE_FACTOR) } ?: 1.0
+        // Older turns that no longer fit are cut off at a turn boundary and summarised once. The cut moves only when the
+        // rest overflows again, and then well below the limit, so rounds and turns in between keep the same prompt prefix.
+        val lastSummary = journal.lastOrNull { it.type == "context.summary" }?.payload
+        var cut = lastSummary?.get("cut")?.jsonPrimitive?.intOrNull ?: 0
+        var lastMemory = lastSummary?.get("text")?.jsonPrimitive?.contentOrNull
         // A reply cut by the output limit is recovered a bounded number of times: nothing truncated is executed, the
         // model is told what happened on the next round only (the note is not part of the saved conversation).
         var truncations = 0
@@ -451,33 +461,47 @@ class AgentCoordinator(
             currentCoroutineContext().ensureActive()
             stats.rounds = round + 1
             val reserve = minOf(maxOutputTokens, provider.outputTokenLimit(model) ?: Int.MAX_VALUE, window / 2)
-            val requestCharacters = ((window - reserve).toLong() * 4 - schemaCharacters - 1024).coerceAtLeast(1024).coerceAtMost(Int.MAX_VALUE.toLong() - 1).toInt()
+            val requestCharacters = ((window - reserve).toLong() * 4 * allowanceFactor - schemaCharacters - 1024).toLong()
+                .coerceAtLeast(1024).coerceAtMost(Int.MAX_VALUE.toLong() - 1).toInt()
             val planner = ContextPlanner(maxCharacters = requestCharacters + 1, outputReserveCharacters = 1)
-            val history = _state.value.messages
+            val raw = _state.value.messages
+            // A cut that no longer lands on a turn start (history edited or deleted) starts over.
+            if (cut > 0 && (cut >= raw.size || raw[cut].role != "user")) { cut = 0; lastMemory = null }
+            val history = raw.map(::modelView)
             val fixed = listOfNotNull(system, guidance, map)
-            var selection = planner.select(fixed + history)
+            // A cut kept from a smaller window (or a shorter answer reserve) is undone once everything fits again.
+            if (cut > 0 && planner.select(fixed + history).droppedMessages == 0) { cut = 0; lastMemory = null }
+            // Memory quotes only what was cut off: the rest is in the request anyway, and quoting recent rounds would
+            // change the memory, and with it every cached token after it, on each round.
+            fun memoryFor(cutAt: Int): String {
+                val dropped = raw.take(cutAt)
+                val droppedCalls = dropped.flatMap { message -> message.toolCalls.map { it.id } }.toSet()
+                return conversationMemory(dropped, _state.value.activities.filter { it.toolCallId in droppedCalls },
+                    quoteLimit = (requestCharacters / 100).coerceIn(80, 1200), maxCharacters = MAX_MEMORY_CHARS)
+            }
+            fun memoryMessage() = lastMemory?.takeIf { cut > 0 }?.let { AgentMessage("system", "Conversation reference (untrusted quoted data): $it") }
+            if (cut > 0 && lastMemory == null) lastMemory = memoryFor(cut)
+            var selection = planner.select(fixed + listOfNotNull(memoryMessage()) + history.drop(cut))
             if (selection.droppedMessages > 0) {
-                // Keep recent goals/plans as quoted data when older complete turns no longer fit.
-                // Rebuild from the durable transcript so edits/deletions cannot leave stale memory.
-                // The reference gets the room left after the request, the newest exchange and unknown outcomes.
-                val memoryText = conversationMemory(history, _state.value.activities,
-                    quoteLimit = (requestCharacters / 100).coerceIn(80, 1200),
-                    maxCharacters = planner.referenceAllowance(fixed + history, MAX_MEMORY_CHARS).coerceAtLeast(MIN_MEMORY_CHARS))
-                val memory = AgentMessage("system", "Conversation reference (untrusted quoted data): $memoryText")
-                selection = planner.select(fixed + memory + history)
-                if (memoryText != lastMemory) {
+                val further = planner.cutFor(fixed + listOfNotNull(memoryMessage()), history.drop(cut), COMPACTION_TARGET)
+                if (further > 0) {
+                    cut += further
+                    lastMemory = memoryFor(cut)
                     events.append(sessionId, "context.summary", buildJsonObject {
-                        put("text", memoryText); put("method", "extractive"); put("sourceMessages", history.size)
+                        put("text", lastMemory); put("method", "extractive"); put("sourceMessages", cut); put("cut", cut)
                     })
-                    lastMemory = memoryText
+                    selection = planner.select(fixed + listOfNotNull(memoryMessage()) + history.drop(cut))
                 }
             }
-            _state.update { it.copy(contextMemory = if (selection.droppedMessages > 0) lastMemory else null, contextOutputReserve = reserve) }
+            val dropped = cut + selection.droppedMessages
+            _state.update { it.copy(contextMemory = if (dropped > 0) lastMemory else null, contextOutputReserve = reserve) }
             val estimate = selection.estimatedTokens + (schemaCharacters + 3) / 4
-            _state.update { it.copy(status = "streaming", streamingText = "", reasoning = "", contextEstimatedTokens = estimate, contextReportedTokens = null,
-                contextWindowTokens = window, droppedContextMessages = selection.droppedMessages, prunedContextResults = selection.prunedResults, modelRounds = round + 1) }
+            // The journal keeps the raw estimate (it calibrates the next runs); the screen shows the calibrated one.
+            val shownEstimate = tokenRatio?.let { (estimate * it).toInt() } ?: estimate
+            _state.update { it.copy(status = "streaming", streamingText = "", reasoning = "", contextEstimatedTokens = shownEstimate, contextReportedTokens = null,
+                contextWindowTokens = window, droppedContextMessages = dropped, prunedContextResults = selection.prunedResults, modelRounds = round + 1) }
             events.append(sessionId, "context.selected", buildJsonObject {
-                put("estimatedTokens", estimate); put("estimateOnly", true); put("droppedMessages", selection.droppedMessages)
+                put("estimatedTokens", estimate); put("estimateOnly", true); put("droppedMessages", dropped)
                 put("contextWindowTokens", window); put("outputReserveTokens", reserve)
                 put("prunedResults", selection.prunedResults); put("round", round + 1)
             })
@@ -490,7 +514,7 @@ class AgentCoordinator(
                 answerOnly = true
                 repeatNotice = AgentMessage("user", LAST_ROUND_NOTICE)
             }
-            val request = ModelRequest(model, forModel(selection.messages) + listOfNotNull(truncationNotice, planNotice, repeatNotice),
+            val request = ModelRequest(model, withoutEmptyInterruptions(selection.messages) + listOfNotNull(truncationNotice, planNotice, repeatNotice),
                 if (answerOnly) emptyList() else offered, thinking && !thinkingPaused, reserve)
             var truncatedCall = false
             var truncatedText = false
@@ -793,7 +817,38 @@ internal fun repeatedCallNotice(tool: String, times: Int): String =
 
 /** Bounds of the conversation reference: never crowd out the request, never shrink below the constraints themselves. */
 private const val MAX_MEMORY_CHARS = 24_000
-private const val MIN_MEMORY_CHARS = 1_500
+
+/** Share of the request budget left after older turns are cut off, so the cut stays put for many turns. */
+internal const val COMPACTION_TARGET = 0.6
+/** Margin on the measured token ratio: the mix of code and prose shifts within a conversation. */
+private const val ESTIMATE_SAFETY = 1.15
+/** The calibrated budget is at most this many times the uncalibrated one. */
+private const val MAX_ALLOWANCE_FACTOR = 3.0
+
+/**
+ * Provider-reported prompt tokens per estimated token in this conversation: the median over its latest rounds, each
+ * round's estimate paired with the first prompt size reported after it. Null without enough measured rounds.
+ */
+internal fun reportedToEstimatedRatio(journal: List<StoredEvent>, rounds: Int = 8): Double? {
+    val ratios = mutableListOf<Double>()
+    var estimate: Long? = null
+    for (event in journal) {
+        when (event.type) {
+            "context.selected" -> estimate = event.payload["estimatedTokens"]?.jsonPrimitive?.longOrNull
+            "context.usage" -> {
+                val reported = event.payload["promptTokens"]?.jsonPrimitive?.longOrNull
+                val estimated = estimate
+                if (reported != null && reported > 0 && estimated != null && estimated >= MIN_CALIBRATION_TOKENS) ratios += reported.toDouble() / estimated
+                estimate = null
+            }
+        }
+    }
+    val recent = ratios.takeLast(rounds).sorted()
+    return if (recent.size < 2) null else recent[recent.size / 2]
+}
+
+/** Small requests are dominated by the chat template and say little about how text is tokenized. */
+private const val MIN_CALIBRATION_TOKENS = 2_000L
 
 /** Reminders per turn for a final answer that leaves plan steps open; after them the answer stands. */
 private const val MAX_PLAN_REMINDERS = 2

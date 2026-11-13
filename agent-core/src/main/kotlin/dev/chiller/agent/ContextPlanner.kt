@@ -86,14 +86,26 @@ class ContextPlanner(
         return ContextSelection(selected, dropped, estimatedTokens, prunedResults = pruned)
     }
 
-    /** Space a reference can use without evicting the current request, newest exchange or unknown outcomes. */
-    internal fun referenceAllowance(history: List<AgentMessage>, limit: Int): Int {
+    /**
+     * How many leading [history] messages to cut off so that [fixed] plus the rest takes at most [fraction] of the
+     * budget. Cuts fall on turn starts, never into the current turn, and never keep a turn older than one with an
+     * unpaired tool call. Cutting well below the limit lets the following turns reuse the same prompt prefix.
+     */
+    internal fun cutFor(fixed: List<AgentMessage>, history: List<AgentMessage>, fraction: Double): Int {
         val (messages, _) = compactResults(history)
-        val current = splitIntoGroups(messages).lastOrNull()
-        val removable = current?.let { removableExchanges(it, messages).flatten().toSet() }.orEmpty()
-        val required = messages.filter { it.role == "system" }.sumOf(::messageCharacters) +
-            current?.indices.orEmpty().filterNot { it in removable }.sumOf { messageCharacters(messages[it]) }
-        return (maxCharacters.toLong() - outputReserveCharacters - required).coerceIn(0, limit.coerceAtLeast(0).toLong()).toInt()
+        val groups = splitIntoGroups(messages)
+        if (groups.size <= 1) return 0
+        val target = (maxCharacters - outputReserveCharacters) * fraction - fixed.sumOf(::messageCharacters)
+        var kept = groups.last().indices.sumOf { messageCharacters(messages[it]) }
+        var start = groups.last().indices.first()
+        for (index in groups.lastIndex - 1 downTo 0) {
+            val group = groups[index]
+            val cost = group.indices.sumOf { messageCharacters(messages[it]) }
+            if (!group.toolPairsComplete || kept + cost > target) break
+            kept += cost
+            start = group.indices.first()
+        }
+        return start
     }
 
     private fun compactResults(history: List<AgentMessage>): Pair<List<AgentMessage>, Set<Int>> {
@@ -103,7 +115,11 @@ class ContextPlanner(
         val candidates = history.indices.filter {
             history[it].role == "tool" && (history[it].content?.length ?: 0) > pruneAboveCharacters
         }.dropLast(keepToolResults)
-        val prune = if (history.sumOf(::messageCharacters) > budget * pruneThreshold) candidates.toSet() else emptySet()
+        val total = history.sumOf(::messageCharacters)
+        // Results are stubbed in batches: replacing one more old result on every round would change the prompt in the
+        // middle each time and invalidate the provider's cache from there. Close to the limit everything eligible goes.
+        val count = if (total > budget * NEAR_LIMIT) candidates.size else candidates.size / PRUNE_BATCH * PRUNE_BATCH
+        val prune = if (total > budget * pruneThreshold) candidates.take(count).toSet() else emptySet()
         val messages = history.mapIndexed { index, message ->
             if (index in prune) message.copy(content = prunedResult(message.content)) else message
         }
@@ -180,6 +196,11 @@ class ContextPlanner(
         val indices: List<Int>,
         val toolPairsComplete: Boolean,
     )
+
+    private companion object {
+        const val PRUNE_BATCH = 8
+        const val NEAR_LIMIT = 0.9
+    }
 
     private fun prunedResult(content: String?): String {
         val original = runCatching { Json.parseToJsonElement(content.orEmpty()) as? JsonObject }.getOrNull()
