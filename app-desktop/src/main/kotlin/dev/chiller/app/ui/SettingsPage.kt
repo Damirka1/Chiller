@@ -632,13 +632,26 @@ private fun ProfileCard(data: SettingsData, actions: SettingsActions) {
             }
         }
         Text(strings.settings.temperature, color = c.text, fontSize = 13.sp)
+        // A saved value outside the presets is a custom one; the field stays open for it.
+        val customValue = a.temperature?.takeIf { it !in TEMPERATURE_PRESETS }
+        var customOpen by remember(a.temperature) { mutableStateOf(customValue != null) }
         FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            val options = listOf<Double?>(null, 0.0, 0.2, 0.5, 0.8, 1.0)
             val recommended = ModelProfiles.recommendedSampling(data.model, listed?.displayName) != null
-            options.forEach { t ->
+            TEMPERATURE_PRESETS.forEach { t ->
                 val label = t?.toString() ?: (defaultTemperature(resolved, data.model, listed)?.let { if (recommended) strings.settings.recommended(it.toString()) else strings.settings.profileValue(it.toString()) } ?: strings.settings.byDefault)
-                ChillerControl(label, { actions.agent(a.copy(temperature = t)) }, style = if (a.temperature == t) ControlStyle.SELECTED else ControlStyle.QUIET)
+                ChillerControl(label, { customOpen = false; actions.agent(a.copy(temperature = t)) },
+                    style = if (!customOpen && a.temperature == t) ControlStyle.SELECTED else ControlStyle.QUIET)
             }
+            ChillerControl(customValue?.let { "${strings.settings.customTemperature}: $it" } ?: strings.settings.customTemperature, { customOpen = true },
+                style = if (customOpen) ControlStyle.SELECTED else ControlStyle.QUIET)
+        }
+        if (customOpen) {
+            var draft by remember(a.temperature) { mutableStateOf(customValue?.toString().orEmpty()) }
+            val parsed = parseTemperature(draft)
+            ChillerField(draft, { draft = it }, strings.settings.customTemperatureField, "0.7")
+            if (draft.isNotBlank() && parsed == null) Text(strings.settings.customTemperatureInvalid, color = c.negative, fontSize = 11.sp, lineHeight = 16.sp)
+            ChillerControl(strings.settings.saveFields, { parsed?.let { actions.agent(a.copy(temperature = it)) } },
+                style = ControlStyle.OUTLINE, enabled = parsed != null && parsed != a.temperature)
         }
         var extras by remember(a.requestExtras) { mutableStateOf(a.requestExtras) }
         val problem = validateRequestExtras(extras)

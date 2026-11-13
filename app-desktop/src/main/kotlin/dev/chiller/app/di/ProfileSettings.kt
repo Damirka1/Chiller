@@ -62,6 +62,14 @@ fun requestExtrasFor(profile: ModelProfile, options: AgentOptions, modelId: Stri
     return JsonObject(fields)
 }
 
+/** Temperatures offered as one-click choices in Settings; null keeps the recommended or profile value. */
+val TEMPERATURE_PRESETS: List<Double?> = listOf(null, 0.0, 0.2, 0.5, 0.8, 1.0)
+
+/** A typed temperature: a dot or comma decimal from 0 to 2, rounded to hundredths; null when it is not one. */
+fun parseTemperature(text: String): Double? =
+    text.trim().replace(',', '.').toDoubleOrNull()?.takeIf { it.isFinite() && it in 0.0..2.0 }
+        ?.let { Math.round(it * 100) / 100.0 }
+
 /** The temperature a request gets when the user has not chosen one: the model family's recommendation, else the profile's. */
 fun defaultTemperature(profile: ModelProfile, modelId: String, listed: ProviderModel? = null): Double? =
     ModelProfiles.recommendedSampling(modelId, listed?.displayName)?.temperature ?: profile.temperature

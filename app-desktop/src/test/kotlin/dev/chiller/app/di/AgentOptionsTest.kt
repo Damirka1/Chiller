@@ -14,6 +14,18 @@ class AgentOptionsTest {
         assertEquals(listOf(200, 1024, 1, 4_194_304), listOf(typo.maxRounds, typo.maxOutputTokens, typo.maxRequests, typo.totalOutputTokens))
     }
 
+    @Test fun `a typed temperature accepts a dot or comma from 0 to 2 and rejects anything else`() {
+        assertEquals(0.7, parseTemperature("0.7"))
+        assertEquals(0.65, parseTemperature(" 0,65 "))
+        assertEquals(1.23, parseTemperature("1.2345"))
+        assertEquals(0.0, parseTemperature("0"))
+        assertEquals(2.0, parseTemperature("2"))
+        listOf("", "abc", "-0.1", "2.01", "NaN", "Infinity").forEach { assertEquals(null, parseTemperature(it), it) }
+        // A value the user can type but no preset offers; it is kept as is when saved.
+        assertEquals(0.6, AgentOptions(temperature = 0.6).sanitized().temperature)
+        kotlin.test.assertTrue(0.6 !in TEMPERATURE_PRESETS)
+    }
+
     @Test fun `gemma's recommended sampling is the default and the user's settings still win`() {
         val gemma = dev.chiller.contracts.ProviderModel("quasar", displayName = "Gemma 4 26B A4B")
         val compact = dev.chiller.agent.ModelProfiles.COMPACT

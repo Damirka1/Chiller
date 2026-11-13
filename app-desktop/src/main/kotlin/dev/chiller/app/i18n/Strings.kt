@@ -215,6 +215,10 @@ interface SettingsStrings {
     fun recommended(value: String): String
     fun profileValue(value: String): String
     val byDefault: String
+    /** The choice that opens a field for any temperature. */
+    val customTemperature: String
+    val customTemperatureField: String
+    val customTemperatureInvalid: String
     val requestExtras: String
     val requestExtrasNote: String
     val saveFields: String
