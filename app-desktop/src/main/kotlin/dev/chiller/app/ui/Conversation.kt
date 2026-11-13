@@ -160,6 +160,8 @@ internal fun Conversation(state: RunState, reduced: Boolean, onAnswer: (String) 
                             rewindCount = if (entry.message.role == "user" && canUndo) turnChangeIds(state.messages, state.activities, entry.index, undoneChanges).size else 0,
                             onRewind = if (canUndo) ({ onRewind(turnChangeIds(state.messages, state.activities, entry.index, undoneChanges)) }) else null)
                         ToolGroup(entry.activities, reduced, onUndo, canUndo, onPreviewFile, onRevealFile)
+                        if (entry.message.interrupted) Text(strings.conversation.interruptedReply, color = LocalChillerPalette.current.faint, fontSize = 11.sp, lineHeight = 16.sp,
+                            modifier = Modifier.padding(start = 34.dp))
                     }
                 }
             }

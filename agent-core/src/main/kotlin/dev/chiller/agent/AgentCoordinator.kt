@@ -214,18 +214,21 @@ class AgentCoordinator(
                     if (maxRunMinutes > 0) withTimeout(maxRunMinutes * 60_000L) { work() } else work()
                 } catch (timeout: TimeoutCancellationException) {
                     withContext(NonCancellable) {
+                        runCatching { savePartialReply() }
                         val message = tr("The task time limit ($maxRunMinutes min) was reached. Check the results and continue the task; the limit is in Settings → Agent.", "Лимит времени задачи ($maxRunMinutes мин) достигнут. Проверьте результаты и продолжите задачу; лимит меняется в Настройки → Агент.")
                         events.append(sessionId, "run.failed", buildJsonObject { put("runId", id); put("message", message) })
                         _state.update { it.copy(status = "failed", error = message, streamingText = "", activeModelId = null, runDurationMs = stats.durationMs) }
                     }
                 } catch (cancelled: CancellationException) {
                     withContext(NonCancellable) {
+                        runCatching { savePartialReply() }
                         runCatching { answerStoppedQuestions() }
                         events.append(sessionId, "run.cancelled", buildJsonObject { put("runId", id) })
                         _state.update { it.copy(status = "cancelled", streamingText = "", activeModelId = null, runDurationMs = stats.durationMs) }
                     }
                     throw cancelled
                 } catch (error: Exception) {
+                    withContext(NonCancellable) { runCatching { savePartialReply() } }
                     val safe = error.message?.take(400) ?: error.javaClass.simpleName
                     _state.update { it.copy(status = "failed", error = safe, streamingText = "", activeModelId = null, runDurationMs = stats.durationMs) }
                     if (stats.rounds > 0 && unresolvedToolCalls(_state.value.messages).isEmpty()) {
@@ -318,6 +321,20 @@ class AgentCoordinator(
     private val awaitingApproval: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
 
     private fun roundReasoning(): String? = _state.value.reasoning.takeIf { it.isNotBlank() }
+
+    /**
+     * Keeps what the model had streamed when a round was cut off (stop, failure, timeout): the reasoning and text so far
+     * become an interrupted reply instead of disappearing. Tool calls being assembled are never kept or executed.
+     */
+    private suspend fun savePartialReply() {
+        val state = _state.value
+        if (state.status != "streaming") return
+        val text = state.streamingText.takeIf { it.isNotBlank() }
+        val reasoning = roundReasoning()
+        if (text == null && reasoning == null) return
+        appendMessage(AgentMessage("assistant", text, origin = MessageOrigin(MessageOriginKind.MODEL, state.activeModelId ?: model),
+            reasoning = reasoning, interrupted = true))
+    }
 
     private suspend fun appendMessage(message: AgentMessage) {
         events.append(sessionId, "message", json.encodeToJsonElement(message).jsonObject)
@@ -467,7 +484,7 @@ class AgentCoordinator(
                 answerOnly = true
                 repeatNotice = AgentMessage("user", LAST_ROUND_NOTICE)
             }
-            val request = ModelRequest(model, selection.messages + listOfNotNull(truncationNotice, planNotice, repeatNotice),
+            val request = ModelRequest(model, forModel(selection.messages) + listOfNotNull(truncationNotice, planNotice, repeatNotice),
                 if (answerOnly) emptyList() else enabled, thinking && !thinkingPaused, reserve)
             var truncatedCall = false
             var truncatedText = false
@@ -796,6 +813,20 @@ internal fun openPlanNotice(open: List<String>): String =
     "[Chiller] You are about to finish, but your plan still has open steps:\n" + open.joinToString("\n") { "- $it" } +
         "\nDo them now if you can. Otherwise call update_plan marking each one done or skipped (put the reason in the step text), " +
         "then give your final answer and say plainly what was not done."
+
+/**
+ * The transcript as the model sees it. An interrupted reply with text stays, marked as cut off so the model does not
+ * take it for a finished answer; one that only reasoned has nothing to send (reasoning never goes back) and is skipped.
+ */
+internal fun forModel(messages: List<AgentMessage>): List<AgentMessage> = messages.mapNotNull { message ->
+    when {
+        !message.interrupted -> message
+        message.content.isNullOrBlank() -> null
+        else -> message.copy(content = message.content + "\n\n" + INTERRUPTED_REPLY_NOTE)
+    }
+}
+
+internal const val INTERRUPTED_REPLY_NOTE = "[This reply was cut off before it finished.]"
 
 /** Date only, with weekday and UTC offset: it changes once a day, so the provider's prompt cache survives the day. */
 internal fun todayLine(clock: java.time.Clock): String {

@@ -404,6 +404,7 @@ object RuStrings : Strings {
         override val toLatest = "К последнему сообщению"
         override fun rewindConfirm(n: Int) = "Откатить $n ${ruPlural(n, "правку", "правки", "правок")}?"
         override val rewindTurn = "Откатить изменения файлов этого хода"
+        override val interruptedReply = "Ответ остановлен до завершения; написанное сохранено"
         override val editMessage = "Изменить сообщение"
         override val deleteTurn = "Удалить ход диалога"
         override val copy = "Копировать"

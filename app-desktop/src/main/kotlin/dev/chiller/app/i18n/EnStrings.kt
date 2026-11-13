@@ -404,6 +404,7 @@ object EnStrings : Strings {
         override val toLatest = "To the latest message"
         override fun rewindConfirm(n: Int) = "Undo $n ${enPlural(n, "edit", "edits")}?"
         override val rewindTurn = "Undo this turn's file changes"
+        override val interruptedReply = "The reply was stopped before it finished; what was written is kept"
         override val editMessage = "Edit message"
         override val deleteTurn = "Delete this turn"
         override val copy = "Copy"

@@ -448,6 +448,8 @@ interface ConversationStrings {
     val toLatest: String
     fun rewindConfirm(n: Int): String
     val rewindTurn: String
+    /** Under a reply that was cut off by stop, failure or the time limit. */
+    val interruptedReply: String
     val editMessage: String
     val deleteTurn: String
     val copy: String

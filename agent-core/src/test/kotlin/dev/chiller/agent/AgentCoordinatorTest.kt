@@ -872,6 +872,45 @@ class AgentCoordinatorTest {
         assertEquals("cancelled", fixture.coordinator.state.value.status)
     }
 
+    @Test fun stoppingMidReplyKeepsItsReasoningAndTextAndTheNextRequestSeesThemAsCutOff() = runTest {
+        val started = CompletableDeferred<Unit>()
+        val requests = mutableListOf<ModelRequest>()
+        val provider = ScriptedProvider { request -> flow {
+            requests += request
+            if (requests.size == 1) {
+                emit(ModelEvent.ReasoningDelta("Compare the two options first."))
+                emit(ModelEvent.TextDelta("The first option is"))
+                started.complete(Unit)
+                awaitCancellation()
+            } else emit(ModelEvent.Completed(AgentMessage("assistant", "Continued."), "stop"))
+        } }
+        val events = MemoryEvents()
+        val fixture = fixture(provider, eventStore = events, dispatcher = StandardTestDispatcher(testScheduler))
+        fixture.coordinator.send("compare", ExecutionMode.WORKSPACE_EDIT)
+        runCurrent()
+        assertTrue(started.isCompleted)
+        fixture.coordinator.stop()
+
+        val kept = fixture.coordinator.state.value.messages.last()
+        assertEquals("assistant", kept.role)
+        assertEquals("The first option is", kept.content)
+        assertEquals("Compare the two options first.", kept.reasoning)
+        assertTrue(kept.interrupted)
+        val journaled = events.records.last { it.type == "message" }.payload
+        assertEquals(true, journaled["interrupted"]?.jsonPrimitive?.boolean)
+        assertEquals("cancelled", fixture.coordinator.state.value.status)
+
+        fixture.coordinator.send("go on", ExecutionMode.WORKSPACE_EDIT)
+        advanceUntilIdle()
+        val replay = requests.last().messages.single { it.role == "assistant" }
+        assertEquals("The first option is\n\n$INTERRUPTED_REPLY_NOTE", replay.content)
+    }
+
+    @Test fun anInterruptedReplyWithOnlyReasoningIsShownButNotSentBack() {
+        val messages = listOf(AgentMessage("user", "q"), AgentMessage("assistant", null, reasoning = "thinking", interrupted = true), AgentMessage("user", "again"))
+        assertEquals(listOf("q", "again"), forModel(messages).map { it.content })
+    }
+
     @Test fun consecutiveReadCallsStartTogetherAndKeepCallOrder() = runTest {
         val gate = CompletableDeferred<Unit>()
         val started = mutableListOf<String>()

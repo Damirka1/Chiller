@@ -30,6 +30,8 @@ data class AgentMessage(
     val attachments: List<ComposerAttachment> = emptyList(),
     /** What the model reasoned before this reply, kept for the user to read; providers never send it back. */
     val reasoning: String? = null,
+    /** A reply cut off mid-stream (stopped, failed or timed out): kept for the user, never holds tool calls. */
+    val interrupted: Boolean = false,
 )
 
 @Serializable
