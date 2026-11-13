@@ -282,7 +282,7 @@ class AgentCoordinatorTest {
         }
     }
 
-    @Test fun planModeSendsOnlyReadAndInteractionToolSpecs() = runTest {
+    @Test fun switchingModesKeepsToolsAndSystemPromptAndStatesThePermissionsWithTheMessage() = runTest {
         val requests = mutableListOf<ModelRequest>()
         val provider = ScriptedProvider { request -> flow {
             requests += request
@@ -291,9 +291,39 @@ class AgentCoordinatorTest {
         val fixture = fixture(provider, dispatcher = StandardTestDispatcher(testScheduler))
         fixture.coordinator.send("plan", ExecutionMode.PLAN)
         advanceUntilIdle()
-        val names = requests.single().tools.map { it.name }.toSet()
-        assertEquals(setOf("read", "ask"), names)
-        assertEquals("completed", fixture.coordinator.state.value.status)
+        fixture.coordinator.send("edit", ExecutionMode.WORKSPACE_EDIT)
+        advanceUntilIdle()
+        val (plan, edit) = requests
+        // The cacheable prefix (tools, system prompt, the first turn) is identical after the switch.
+        assertEquals(listOf("read", "ask", "write", "process"), plan.tools.map { it.name })
+        assertEquals(plan.tools, edit.tools)
+        assertEquals(plan.messages.first(), edit.messages.first())
+        assertEquals(plan.messages.last { it.role == "user" }, edit.messages.first { it.role == "user" })
+        val planNote = plan.messages.last { it.role == "user" }.content.orEmpty()
+        assertTrue(planNote.startsWith("plan\n\n[Turn context] Mode PLAN"), planNote)
+        assertTrue("Refused in this turn if called: write, process." in planNote, planNote)
+        val editNote = edit.messages.last { it.role == "user" }.content.orEmpty()
+        assertTrue("Mode WORKSPACE_EDIT" in editNote && "Refused" !in editNote, editNote)
+        // The note is kept beside the message, not in what the user wrote.
+        val stored = fixture.coordinator.state.value.messages.filter { it.role == "user" }
+        assertEquals(listOf("plan", "edit"), stored.map { it.content })
+        assertTrue(stored.all { it.turnNote?.startsWith("[Turn context]") == true })
+    }
+
+    @Test fun aWriteCallInPlanModeIsRefusedThoughTheToolIsOffered() = runTest {
+        val tools = RecordingTools()
+        val requests = mutableListOf<ModelRequest>()
+        val provider = ScriptedProvider { request -> flow {
+            requests += request
+            if (requests.size == 1) emit(ModelEvent.Completed(AgentMessage("assistant", toolCalls = listOf(ToolCall("w", "write", "{}"))), "tool_calls"))
+            else emit(ModelEvent.Completed(AgentMessage("assistant", "ok"), "stop"))
+        } }
+        val fixture = fixture(provider, tools, dispatcher = StandardTestDispatcher(testScheduler))
+        fixture.coordinator.send("plan", ExecutionMode.PLAN)
+        advanceUntilIdle()
+        assertTrue(tools.executed.isEmpty())
+        val result = requests.last().messages.single { it.role == "tool" && it.toolCallId == "w" }.content.orEmpty()
+        assertTrue("PERMISSION_DENIED" in result, result)
     }
 
     @Test fun externalToolCatalogRequiresEachExplicitPermissionEvenInEditMode() = runTest {
@@ -310,15 +340,18 @@ class AgentCoordinatorTest {
             override suspend fun execute(call: ToolCall, context: ToolContext) = error("No execution expected")
         }
         val fixture = fixture(provider, tools, dispatcher = StandardTestDispatcher(testScheduler))
+        fun note() = requests.last().messages.last { it.role == "user" }.content.orEmpty()
         fixture.coordinator.send("default", ExecutionMode.WORKSPACE_EDIT)
         advanceUntilIdle()
-        assertTrue(requests.last().tools.isEmpty())
+        assertEquals(listOf("web", "capture"), requests.last().tools.map { it.name })
+        assertTrue("Refused in this turn if called: web, capture." in note(), note())
         fixture.coordinator.send("network", ExecutionMode.PLAN, allowNetwork = true)
         advanceUntilIdle()
-        assertEquals(listOf("web"), requests.last().tools.map { it.name })
+        assertTrue("Refused in this turn if called: capture." in note(), note())
         fixture.coordinator.send("capture", ExecutionMode.PLAN, allowScreenshots = true)
         advanceUntilIdle()
-        assertEquals(listOf("capture"), requests.last().tools.map { it.name })
+        assertTrue("Refused in this turn if called: web." in note(), note())
+        assertEquals(listOf("web", "capture"), requests.last().tools.map { it.name })
     }
 
     @Test fun projectInstructionsAreAStableSystemMessageAndRoundsAreTraced() = runTest {
@@ -630,17 +663,23 @@ class AgentCoordinatorTest {
         assertTrue(restored.state.value.messages.last { it.role == "tool" }.content.orEmpty().contains("nothing was written"))
     }
 
-    @Test fun planModeOffersOnlyReadOnlyServerTools() = runTest {
+    @Test fun planModeRefusesServerToolsThatChangeThingsButStillOffersThem() = runTest {
         val offered = mutableListOf<List<String>>()
+        val notes = mutableListOf<String>()
         val tools = object : ToolExecutor {
             override val specs = listOf(ToolSpec("mcp__gh__search", "", JsonObject(emptyMap()), ToolEffect.READ), ToolSpec("mcp__gh__create_issue", "", JsonObject(emptyMap()), ToolEffect.EXTERNAL))
             override suspend fun execute(call: ToolCall, context: ToolContext) = ToolResult(true)
         }
-        val provider = ScriptedProvider { request -> offered += request.tools.map { it.name }; flow { emit(ModelEvent.Completed(AgentMessage("assistant", "ok"), "stop")) } }
+        val provider = ScriptedProvider { request ->
+            offered += request.tools.map { it.name }; notes += request.messages.last { it.role == "user" }.content.orEmpty()
+            flow { emit(ModelEvent.Completed(AgentMessage("assistant", "ok"), "stop")) }
+        }
         val f = fixture(provider, tools, dispatcher = StandardTestDispatcher(testScheduler))
         f.coordinator.send("plan", ExecutionMode.PLAN); advanceUntilIdle()
         f.coordinator.send("edit", ExecutionMode.WORKSPACE_EDIT); advanceUntilIdle()
-        assertEquals(listOf(listOf("mcp__gh__search"), listOf("mcp__gh__search", "mcp__gh__create_issue")), offered)
+        assertEquals(List(2) { listOf("mcp__gh__search", "mcp__gh__create_issue") }, offered)
+        assertTrue("Refused in this turn if called: mcp__gh__create_issue." in notes[0], notes[0])
+        assertTrue("Refused" !in notes[1], notes[1])
     }
 
     @Test fun stoppingWhileOnlyAQuestionWaitsRestoresAsStopped() = runTest {
@@ -849,7 +888,7 @@ class AgentCoordinatorTest {
         val sent = requests.last().messages
         val unknown = sent.indexOfFirst { it.role == "tool" && it.toolCallId == "pending" }
         assertTrue(unknown >= 0 && sent[unknown].content!!.contains("OUTCOME_UNKNOWN"))
-        assertTrue(unknown < sent.indexOfLast { it.role == "user" && it.content == "Продолжай" }, "the gap is closed before the new message")
+        assertTrue(unknown < sent.indexOfLast { it.role == "user" && it.content.orEmpty().startsWith("Продолжай") }, "the gap is closed before the new message")
         assertTrue(events.records.any { it.type == "run.recovered" })
     }
 

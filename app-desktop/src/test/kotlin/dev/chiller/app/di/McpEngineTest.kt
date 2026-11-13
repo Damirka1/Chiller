@@ -40,12 +40,16 @@ class McpEngineTest {
         """.trimIndent())
     }
 
-    @Test fun `a connected server's tools reach the dialog, only read ones in plan`() = runBlocking<Unit> {
+    @Test fun `a connected server's tools reach the dialog, changing ones refused in plan`() = runBlocking<Unit> {
         val offered = mutableListOf<List<String>>()
+        val notes = mutableListOf<String>()
         val model = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0).apply {
             createContext("/") { exchange ->
                 val request = Json.parseToJsonElement(exchange.requestBody.readBytes().toString(Charsets.UTF_8)).jsonObject
-                synchronized(offered) { offered += request["tools"]?.jsonArray.orEmpty().map { it.jsonObject["function"]!!.jsonObject["name"]!!.jsonPrimitive.content } }
+                synchronized(offered) {
+                    offered += request["tools"]?.jsonArray.orEmpty().map { it.jsonObject["function"]!!.jsonObject["name"]!!.jsonPrimitive.content }
+                    notes += request["messages"]!!.jsonArray.last { it.jsonObject["role"]?.jsonPrimitive?.content == "user" }.toString()
+                }
                 exchange.responseHeaders.add("Content-Type", "text/event-stream")
                 exchange.sendResponseHeaders(200, 0)
                 exchange.responseBody.use { it.write("data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n".toByteArray()) }
@@ -71,8 +75,12 @@ class McpEngineTest {
             turn(ExecutionMode.PLAN)
             turn(ExecutionMode.WORKSPACE_EDIT)
             val (plan, edit) = synchronized(offered) { offered.toList() }
-            assertTrue("mcp__tracker__search" in plan && "mcp__tracker__create_issue" !in plan, plan.toString())
+            // The same tools are offered in both modes (the cached prompt survives the switch); Plan refuses the changing one.
             assertTrue("mcp__tracker__search" in edit && "mcp__tracker__create_issue" in edit, edit.toString())
+            assertEquals(plan, edit)
+            val (planNote, editNote) = synchronized(offered) { notes.toList() }
+            assertTrue(planNote.substringAfter("Refused in this turn if called:").let { "mcp__tracker__create_issue" in it && "mcp__tracker__search" !in it }, planNote)
+            assertTrue("mcp__tracker__" !in editNote.substringAfter("Refused in this turn if called:", ""), editNote)
         } finally { controller.close(); model.stop(0) }
     }
 }

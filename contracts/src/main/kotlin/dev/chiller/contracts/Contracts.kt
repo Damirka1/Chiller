@@ -32,6 +32,12 @@ data class AgentMessage(
     val reasoning: String? = null,
     /** A reply cut off mid-stream (stopped, failed or timed out): kept for the user, never holds tool calls. */
     val interrupted: Boolean = false,
+    /**
+     * The harness's note for the turn a user message starts (mode, permissions, what is unavailable). It is sent to the
+     * model with the message, never shown, and stored with it so later requests repeat it verbatim and the prompt
+     * prefix stays cacheable.
+     */
+    val turnNote: String? = null,
 )
 
 @Serializable
