@@ -1,0 +1,23 @@
+services:
+  chiller-website:
+    image: nginx:stable-alpine
+    restart: unless-stopped
+    volumes:
+      - type: bind
+        source: ./website/dist
+        target: /srv/chiller
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./website/nginx.conf
+        target: /etc/nginx/conf.d/default.conf
+        read_only: true
+        bind:
+          create_host_path: false
+    networks:
+      - tunnel_shared_network
+
+networks:
+  tunnel_shared_network:
+    external: true

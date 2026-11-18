@@ -35,6 +35,12 @@ The prepared workflow is `.github/workflows/website.yml`. It runs **manually onl
 
 Expected URL after a successful deployment: `https://Damirka1.github.io/Chiller/`. This is a configured target, not proof that a site is live. `astro.config.mjs` owns the site URL and base path. If these change, update the font URLs, browser tests and this guide too.
 
+## Self-hosting with Docker Compose
+
+Build locally from `website` with `npm ci` and `CHILLER_SELF_HOSTED=1 npm run build`. On the server, place `compose.yaml`, `website/nginx.conf` and the generated `website/dist/` in the same layout. From the directory containing `compose.yaml`, run `docker compose up -d`. Nginx serves the mounted build at `https://chiller.damirka.space/` and `/ru/`. Upload updated files to `website/dist/` to update the site.
+
+For the Cloudflare Tunnel published application, use `http://chiller-website:80`. The service and `cloudflared` share the external Docker network `tunnel_shared_network`.
+
 ## Editing
 
 - `src/content.ts`: English and Russian copy; update together.
