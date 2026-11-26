@@ -647,6 +647,41 @@ class AgentCoordinatorTest {
         assertEquals(listOf(false, true, true), events.records.filter { it.type == "tool.approval" }.map { it.payload["approved"]!!.jsonPrimitive.boolean })
     }
 
+    @Test fun aToolCallBeingWrittenIsShownUntilItsActivityTakesItsPlace() = runTest {
+        val tools = RecordingTools()
+        val named = CompletableDeferred<Unit>(); val complete = CompletableDeferred<Unit>()
+        var round = 0
+        val provider = ScriptedProvider { flow {
+            if (round++ == 0) {
+                emit(ModelEvent.ReasoningDelta("I'll write the page."))
+                // Gemma writes content before path; a quoted "path" inside the content is not the target.
+                emit(ModelEvent.ToolCallProgress(0, "write", """{"content":"<p>\"path\": \"no\"</p>"""))
+                named.await()
+                emit(ModelEvent.ToolCallProgress(0, "write", """{"content":"<p>\"path\": \"no\"</p>","path":"index.html"}"""))
+                complete.await()
+                emit(ModelEvent.Completed(AgentMessage("assistant", toolCalls = listOf(ToolCall("w1", "write", """{"path":"index.html"}"""))), "tool_calls"))
+            } else emit(ModelEvent.Completed(AgentMessage("assistant", "done"), "stop"))
+        } }
+        val fixture = fixture(provider, tools, dispatcher = StandardTestDispatcher(testScheduler))
+        fixture.coordinator.send("write", ExecutionMode.WORKSPACE_EDIT)
+        runCurrent()
+        assertEquals(ToolCallDraft("write", "", 35), fixture.coordinator.state.value.draftCall)
+        assertTrue(tools.executed.isEmpty(), "a call being written never runs")
+        named.complete(Unit); runCurrent()
+        assertEquals("index.html", fixture.coordinator.state.value.draftCall?.target)
+        complete.complete(Unit); advanceUntilIdle()
+        assertEquals(null, fixture.coordinator.state.value.draftCall)
+        assertEquals(listOf("w1"), tools.executed.map { it.id })
+        assertEquals("index.html", fixture.coordinator.state.value.activities.single { it.name == "write" }.target)
+    }
+
+    @Test fun theTargetOfACallBeingWrittenComesFromCompleteStringsOnly() {
+        assertEquals("src/a.kt → src/b.kt", draftTarget("""{"path":"src/a.kt","destination":"src/b.kt","snapshot_id":"""))
+        assertEquals("", draftTarget("""{"path":"src/unfinish"""))
+        assertEquals("C:\\logs\\app.txt", draftTarget("""{"content":"x \"path\":\"y\"","path":"C:\\logs\\app.txt"}"""))
+        assertEquals("«def greet»", draftTarget("""{"query":"def greet","glob":"*.py"}"""))
+    }
+
     @Test fun theUserSeesTheFullDiffWhileTheModelGetsTheShortResult() = runTest {
         val events = MemoryEvents()
         val fullDiff = "--- /dev/null\n+++ b/big.txt\n@@ -0,0 +1,300 @@\n" + (1..300).joinToString("") { "+line $it\n" }

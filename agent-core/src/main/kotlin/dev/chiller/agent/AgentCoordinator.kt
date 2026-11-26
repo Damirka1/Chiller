@@ -498,7 +498,7 @@ class AgentCoordinator(
             val estimate = selection.estimatedTokens + (schemaCharacters + 3) / 4
             // The journal keeps the raw estimate (it calibrates the next runs); the screen shows the calibrated one.
             val shownEstimate = tokenRatio?.let { (estimate * it).toInt() } ?: estimate
-            _state.update { it.copy(status = "streaming", streamingText = "", reasoning = "", contextEstimatedTokens = shownEstimate, contextReportedTokens = null,
+            _state.update { it.copy(status = "streaming", streamingText = "", reasoning = "", draftCall = null, contextEstimatedTokens = shownEstimate, contextReportedTokens = null,
                 contextWindowTokens = window, droppedContextMessages = dropped, prunedContextResults = selection.prunedResults, modelRounds = round + 1) }
             events.append(sessionId, "context.selected", buildJsonObject {
                 put("estimatedTokens", estimate); put("estimateOnly", true); put("droppedMessages", dropped)
@@ -519,13 +519,16 @@ class AgentCoordinator(
             var truncatedCall = false
             var truncatedText = false
             var retryShown = false
+            // A complete call keeps its draft row until its activity row takes the place; any other end of the round drops it.
+            var keepDraft = false
             try {
                 provider.stream(request).collect { event ->
                     check(!terminated) { "Provider emitted after terminal event" }
                     when (event) {
                         is ModelEvent.TextDelta -> _state.update { it.copy(streamingText = it.streamingText + event.text, recoveryNotice = if (retryShown) null else it.recoveryNotice) }.also { retryShown = false }
                         is ModelEvent.ReasoningDelta -> _state.update { it.copy(reasoning = (it.reasoning + event.text).takeLast(48_000), recoveryNotice = if (retryShown) null else it.recoveryNotice) }.also { retryShown = false }
-                        is ModelEvent.Retrying -> { retryShown = true; _state.update { it.copy(recoveryNotice = retryNotice(event)) } }
+                        is ModelEvent.Retrying -> { retryShown = true; _state.update { it.copy(recoveryNotice = retryNotice(event), draftCall = null) } }
+                        is ModelEvent.ToolCallProgress -> _state.update { it.copy(draftCall = ToolCallDraft(event.name, draftTarget(event.partialArguments), event.partialArguments.length)) }
                         is ModelEvent.Usage -> {
                             roundUsage = roundUsage + event.usage
                             _state.update { it.copy(usage = it.usage + event.usage, contextReportedTokens = roundUsage.promptTokens) }
@@ -545,10 +548,12 @@ class AgentCoordinator(
                         }
                     }
                 }
+                keepDraft = completion?.toolCalls?.isNotEmpty() == true && !truncatedCall && !truncatedText
             } catch (error: Throwable) {
                 trace(id, round, request, completion, finishReason, roundUsage, roundStarted, error.message ?: error.javaClass.simpleName)
                 throw error
             } finally {
+                if (!keepDraft) _state.update { it.copy(draftCall = null) }
                 if (roundUsage.promptTokens == null || roundUsage.completionTokens == null) {
                     _state.update { it.copy(usageIncomplete = true) }
                 }
@@ -620,7 +625,7 @@ class AgentCoordinator(
                 Activity(id = operationId, name = call.name, target = target, status = "running", toolCallId = call.id)
             }
             prepared.forEach { activity(it) }
-            _state.update { it.copy(status = "executing") }
+            _state.update { it.copy(status = "executing", draftCall = null) }
             val results = executeCalls(calls, enabled, mode, allowProcesses, allowNetwork, allowScreenshots, id)
             var tooManyRepeatedErrors = false
             var noProgress: String? = null
@@ -735,6 +740,17 @@ internal fun retryNotice(event: ModelEvent.Retrying): String {
     val seconds = (event.delayMs + 999) / 1000
     val reason = if (event.code == "RATE_LIMITED") tr("The provider limited the request rate", "Провайдер ограничил частоту запросов") else tr("The provider is temporarily unavailable (${event.code})", "Провайдер временно недоступен (${event.code})")
     return tr("$reason. Retrying in $seconds s (attempt ${event.attempt}/${event.maxAttempts}).", "$reason. Повтор через $seconds с (попытка ${event.attempt}/${event.maxAttempts}).")
+}
+
+/**
+ * What a tool call still being written acts on, from its partial JSON: a path (and destination), a query or a URL whose
+ * string is already complete. Gemma writes `content` before `path`, so a file's name often appears only at the end.
+ * A quote preceded by a backslash belongs to a string value, so `\"path\"` inside written content is not taken.
+ */
+internal fun draftTarget(partialArguments: String): String {
+    fun value(key: String): String? = Regex("""(?<!\\)"$key"\s*:\s*"((?:[^"\\]|\\.)*)"""").find(partialArguments)?.groupValues?.get(1)
+        ?.let { raw -> runCatching { Json.parseToJsonElement("\"$raw\"").jsonPrimitive.content }.getOrNull() }?.takeIf { it.isNotBlank() }
+    return (value("path")?.let { path -> value("destination")?.let { "$path → $it" } ?: path } ?: value("query")?.let { "«$it»" } ?: value("url") ?: "").take(160)
 }
 
 internal fun truncatedCallNotice(replyTokens: Int, tools: Set<String> = emptySet(), again: Boolean = false): String {

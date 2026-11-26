@@ -440,6 +440,7 @@ object EnStrings : Strings {
         override val expand = "Expand"
         override val tagError = "error"
         override val tagRunning = "running"
+        override fun tagWriting(chars: Int) = "writing · " + if (chars < 1000) "$chars chars" else "%.1fK chars".format(java.util.Locale.ROOT, chars / 1000.0)
         override val tagInterrupted = "interrupted"
         override val noOutput = "No output"
         override val undoEdit = "Undo edit"

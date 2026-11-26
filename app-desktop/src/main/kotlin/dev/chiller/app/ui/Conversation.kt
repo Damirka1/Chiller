@@ -166,9 +166,12 @@ internal fun Conversation(state: RunState, reduced: Boolean, onAnswer: (String) 
                 }
             }
             // The step being thought right now; once the step ends, its reasoning moves into that step's message.
-            val thinking = state.reasoning.isNotBlank() && state.messages.lastOrNull()?.reasoning != state.reasoning && state.status in setOf("preparing", "streaming")
-            if (thinking) item(key = "reasoning-live") {
-                Box(entryModifier("reasoning-live").widthIn(max = 760.dp).fillMaxWidth()) { ReasoningStep(state.reasoning, live = true, reduced = reduced) }
+            val stepReasoning = state.reasoning.isNotBlank() && state.messages.lastOrNull()?.reasoning != state.reasoning && state.status in setOf("preparing", "streaming")
+            // A tool call being written ends the thinking: the reasoning stops pulsing and the call's own row does.
+            val draft = state.draftCall?.takeIf { state.status == "streaming" }
+            val thinking = stepReasoning && draft == null
+            if (stepReasoning) item(key = "reasoning-live") {
+                Box(entryModifier("reasoning-live").widthIn(max = 760.dp).fillMaxWidth()) { ReasoningStep(state.reasoning, live = thinking, reduced = reduced) }
             }
             // The streamed reply takes the key of the message it becomes, so completion does not flash.
             if (state.streamingText.isNotBlank()) item(key = "message-${state.messages.size}") {
@@ -177,6 +180,7 @@ internal fun Conversation(state: RunState, reduced: Boolean, onAnswer: (String) 
                         showHeader = state.messages.lastOrNull()?.role != "assistant", streaming = true)
                 }
             }
+            draft?.let { call -> item(key = "draft-call") { Box(entryModifier("draft-call").widthIn(max = 760.dp).fillMaxWidth()) { DraftCallRow(call) } } }
             if (projection.unlinked.isNotEmpty()) item(key = "unlinked-activities") {
                 Column(entryModifier("unlinked-activities"), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(strings.conversation.sessionActions, color = c.muted, fontSize = 12.sp)
@@ -190,7 +194,7 @@ internal fun Conversation(state: RunState, reduced: Boolean, onAnswer: (String) 
                 item(key = "turn-plan") { PlanChecklist(steps, running = state.status in setOf("preparing", "streaming", "executing"), modifier = entryModifier("turn-plan")) }
             }
             // The live reasoning row already shows that the model is working; a retry notice still gets its line.
-            val statusShownByThinking = thinking && state.streamingText.isBlank() && state.recoveryNotice == null && state.question == null && state.approval == null
+            val statusShownByThinking = (draft != null || thinking && state.streamingText.isBlank()) && state.recoveryNotice == null && state.question == null && state.approval == null
             if (state.status in setOf("preparing", "streaming", "executing") && !statusShownByThinking) item(key = "run-status") {
                 val label = runProgressLabel(state).orEmpty()
                 Row(entryModifier("run-status").padding(start = 6.dp), verticalAlignment = Alignment.CenterVertically) {

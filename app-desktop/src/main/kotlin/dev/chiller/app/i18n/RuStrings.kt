@@ -440,6 +440,7 @@ object RuStrings : Strings {
         override val expand = "Развернуть"
         override val tagError = "ошибка"
         override val tagRunning = "выполняется"
+        override fun tagWriting(chars: Int) = "пишется · " + if (chars < 1000) "$chars симв." else "%.1f".format(java.util.Locale.ROOT, chars / 1000.0).replace('.', ',') + " тыс. симв."
         override val tagInterrupted = "прервано"
         override val noOutput = "Без вывода"
         override val undoEdit = "Отменить правку"

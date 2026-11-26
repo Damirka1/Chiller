@@ -481,6 +481,8 @@ interface RunStrings {
     val expand: String
     val tagError: String
     val tagRunning: String
+    /** A tool call the model is still writing, with the characters of its arguments so far. */
+    fun tagWriting(chars: Int): String
     val tagInterrupted: String
     val noOutput: String
     val undoEdit: String

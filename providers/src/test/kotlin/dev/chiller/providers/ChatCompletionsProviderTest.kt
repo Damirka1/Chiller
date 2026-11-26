@@ -291,6 +291,23 @@ class ChatCompletionsProviderTest {
         assertEquals(listOf("{\"a\":1}", "{\"b\":2}"), completed.message.toolCalls.map { it.arguments })
     }
 
+    @Test fun aToolCallBeingWrittenIsReportedByNameAndThenEvery512Characters() = runBlocking {
+        val server = testServer { exchange ->
+            val body = (listOf(toolChunk(0, "call-1", "create_file", "{\"content\":\"")) +
+                List(4) { toolChunk(0, null, null, "x".repeat(300)) } +
+                listOf(toolChunk(0, null, null, "\",\"path\":\"a.txt\"}"), "{\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}"))
+                .joinToString("\n\ndata: ", prefix = "data: ", postfix = "\n\ndata: [DONE]\n\n")
+            sendSse(exchange, body)
+        }
+        val events = invoke(server)
+        val progress = events.filterIsInstance<ModelEvent.ToolCallProgress>()
+        // The name at once, then after 600 and 1200 more characters; the short tail is not reported on its own.
+        assertEquals(listOf(12, 612, 1212), progress.map { it.partialArguments.length }, "Stream events: $events")
+        assertTrue(progress.all { it.name == "create_file" && it.index == 0 })
+        val completed = assertIs<ModelEvent.Completed>(events.last(), "Stream events: $events")
+        assertTrue(completed.message.toolCalls.single().arguments.endsWith("\"path\":\"a.txt\"}"))
+    }
+
     @Test fun oversizedSseLineFailsBeforeParsing() = runBlocking {
         val server = testServer { exchange ->
             val body = "data: " + "x".repeat(1_048_577) + "\n\n"

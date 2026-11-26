@@ -45,6 +45,7 @@ import androidx.compose.ui.unit.sp
 import dev.chiller.contracts.Activity
 import dev.chiller.contracts.FilePresentation
 import dev.chiller.contracts.RunState
+import dev.chiller.contracts.ToolCallDraft
 import dev.chiller.contracts.plus
 import dev.chiller.design.*
 import kotlinx.coroutines.Dispatchers
@@ -206,6 +207,26 @@ internal fun ToolRow(activity: Activity, reduced: Boolean, onUndo: (String) -> U
                 }
             }
         }
+    }
+}
+
+/**
+ * The tool call the model is still writing, as the row it will become: the tool, its target once written, and the size of
+ * its arguments so far. Nothing has run yet; the activity row replaces it when the call is complete.
+ */
+@Composable
+internal fun DraftCallRow(call: ToolCallDraft) {
+    val c = LocalChillerPalette.current
+    val shape = RoundedCornerShape(8.dp)
+    Row(Modifier.fillMaxWidth().clip(shape).border(1.dp, c.border, shape).padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(16.dp), contentAlignment = Alignment.Center) { Pulse(c.accent) }
+        Spacer(Modifier.width(9.dp))
+        Text(toolLabel(call.name), color = c.muted, fontSize = 12.sp, lineHeight = 18.sp)
+        Spacer(Modifier.width(8.dp))
+        Text(call.target, color = c.text, fontSize = 12.sp, lineHeight = 18.sp, fontFamily = ChillerFonts.mono, maxLines = 1,
+            overflow = if (' ' in call.target.trim()) TextOverflow.Ellipsis else TextOverflow.MiddleEllipsis, modifier = Modifier.weight(1f))
+        Spacer(Modifier.width(8.dp))
+        StatusTag(strings.run.tagWriting(call.argumentChars), c.muted)
     }
 }
 

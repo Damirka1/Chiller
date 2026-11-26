@@ -161,7 +161,8 @@ class ChatCompletionsProvider private constructor(
             var terminalUsage: TokenUsage? = null
             val outcome = try {
                 attemptStream(key, payload.toString()) { event ->
-                    emittedAny = true
+                    // A call being written is shown, not kept: a retry drops it, so it does not rule the retry out.
+                    if (event !is ModelEvent.ToolCallProgress) emittedAny = true
                     emit(event)
                 }.also { result ->
                     // A usage chunk in an interrupted stream may be partial. Only settle a complete response.
@@ -301,6 +302,7 @@ class ChatCompletionsProvider private constructor(
                             }
                             chunk.text?.let { emitEvent(ModelEvent.TextDelta(it)) }
                             chunk.reasoning?.let { emitEvent(ModelEvent.ReasoningDelta(it)) }
+                            accumulator.toolProgress()?.let { emitEvent(it) }
                         }
                     } else if (!line.startsWith(':')) {
                         val colon = line.indexOf(':')
@@ -408,6 +410,8 @@ private const val MAX_SSE_FRAME_CHARS = 1_048_576
 /** Counted, not stored: room for a reply at a model's full output limit (hundreds of thousands of tokens). */
 private const val MAX_SSE_RESPONSE_CHARS = 67_108_864
 private const val MAX_ATTEMPTS = 3
+/** Some 50 progress updates for a 24k-character file instead of one per streamed chunk. */
+private const val TOOL_PROGRESS_CHARS = 512
 /** Delta fields that carry reasoning text on OpenAI-compatible servers: DeepSeek/SGLang/older vLLM, then vLLM 0.10+. */
 private val VISIBLE_REASONING_FIELDS = listOf("reasoning_content", "reasoning")
 const val TLS_FAILURE_MESSAGE = "TLS connection failed: the provider certificate is not trusted by the JDK or the system certificate store"
@@ -466,6 +470,21 @@ private class StreamAccumulator(private val reasoningField: String?) {
             fn?.get("arguments")?.takeUnless { it is JsonNull }?.let { partial.args.append(it.jsonPrimitive.content) }
         }
         return Delta(text, why)
+    }
+
+    private val reported = mutableMapOf<Int, Pair<String, Int>>()
+
+    /**
+     * The call being written, when its name is new or its arguments grew by [TOOL_PROGRESS_CHARS] since the last report:
+     * a 24k-character create_file took minutes on Gemma with only "thinking" on screen. Bounded so a long call does not
+     * send an event per chunk.
+     */
+    fun toolProgress(): ModelEvent.ToolCallProgress? {
+        val (index, tool) = tools.entries.lastOrNull { it.value.name.isNotEmpty() } ?: return null
+        val last = reported[index]
+        if (last != null && last.first == tool.name && tool.args.length < last.second + TOOL_PROGRESS_CHARS) return null
+        reported[index] = tool.name to tool.args.length
+        return ModelEvent.ToolCallProgress(index, tool.name, tool.args.toString())
     }
 
     fun hasToolCalls() = tools.isNotEmpty()

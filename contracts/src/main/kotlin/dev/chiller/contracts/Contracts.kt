@@ -80,6 +80,11 @@ sealed interface ModelEvent {
     data class Usage(val usage: TokenUsage) : ModelEvent
     /** Non-terminal: the stateless request failed before any delta and is resent after [delayMs]. */
     data class Retrying(val code: String, val delayMs: Long, val attempt: Int, val maxAttempts: Int) : ModelEvent
+    /**
+     * Non-terminal: the model is writing tool call [index], so far [partialArguments]. Only for showing progress: the
+     * arguments are incomplete and nothing runs before [Completed]. Unlike text, it does not stop a retry of the request.
+     */
+    data class ToolCallProgress(val index: Int, val name: String, val partialArguments: String) : ModelEvent
     data class Completed(val message: AgentMessage, val finishReason: String) : ModelEvent
     data class Failed(val code: String, val message: String) : ModelEvent
 }
@@ -353,12 +358,16 @@ fun interface ApprovalGate { suspend fun approve(request: ApprovalRequest): Bool
 
 @Serializable
 data class Activity(val id: String = newId(), val name: String, val target: String, val status: String, val output: String = "", val diff: String? = null, val toolCallId: String? = null)
+/** A tool call the model is still writing: shown as its future row, never executed or journaled. */
+data class ToolCallDraft(val name: String, val target: String, val argumentChars: Int)
 data class RunState(
     val status: String = "idle",
     val messages: List<AgentMessage> = emptyList(),
     val streamingText: String = "",
     val reasoning: String = "",
     val recoveryNotice: String? = null,
+    /** The tool call being written in the current round, until it is complete or the round ends otherwise. */
+    val draftCall: ToolCallDraft? = null,
     val activities: List<Activity> = emptyList(),
     val error: String? = null,
     val question: UserQuestion? = null,
