@@ -28,7 +28,7 @@ Chiller lets you choose a full or a compact tool set and bound the context. The 
 
 | What | How | Effect (live measurements, DeepSeek V4.1 Flash) |
 |---|---|---|
-| **Compact profile** for small models | 17 core tools in the current version (including append, delete and move), a short step-by-step prompt, one call per step, temperature 0.2; for Gemma, Google's recommended temperature 1.0, top_p 0.95, top_k 64 | In an early 11-tool profile: 13/13 tasks with **~146k** prompt tokens versus **~235k** for the full profile, **38% fewer** |
+| **Compact profile** for small models | 18 core tools in the current version (including append, rewrite, delete and move), a short step-by-step prompt, one call per step; sampling is left to the server, and Gemma gets Google's recommended temperature 1.0, top_p 0.95, top_k 64 | In an early 11-tool profile: 13/13 tasks with **~146k** prompt tokens versus **~235k** for the full profile, **38% fewer** |
 | **Project map** in context from the first round | files by folder and their top-level declarations, within 3000 characters | 14/14 in both cases; rounds **67 → 56 (−16%)**, tool calls 78 → 61, time 120 → 108 s; "find where in the code…" tasks take 2 rounds instead of 4 |
 | **Edits without re-reading** | `edit_file` returns a new `snapshot_id`, so later edits of the same file skip another `read_file` | fewer rounds on multi-step edits |
 | **Parallel reads** | independent READ calls run at once, changes run strictly in order | several files in one round |

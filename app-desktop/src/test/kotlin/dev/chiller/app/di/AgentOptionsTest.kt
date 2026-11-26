@@ -31,7 +31,7 @@ class AgentOptionsTest {
         val compact = dev.chiller.agent.ModelProfiles.COMPACT
         assertEquals("""{"temperature":1.0,"top_p":0.95,"top_k":64,"parallel_tool_calls":false}""", requestExtrasFor(compact, AgentOptions(), "quasar", gemma).toString())
         assertEquals(1.0, defaultTemperature(compact, "quasar", gemma))
-        assertEquals(0.2, defaultTemperature(compact, "nebula"))
+        assertEquals(null, defaultTemperature(compact, "nebula"), "without a recommendation the server's own default applies")
         // The user's temperature replaces the recommendation; a null extra drops a field a server rejects.
         assertEquals("""{"temperature":0.5,"top_p":0.95,"parallel_tool_calls":false,"min_p":0.05}""",
             requestExtrasFor(compact, AgentOptions(temperature = 0.5, requestExtras = """{"top_k": null, "min_p": 0.05}"""), "quasar", gemma).toString())

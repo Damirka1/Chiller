@@ -67,7 +67,9 @@ object ModelProfiles {
     val COMPACT = ModelProfile(
         "compact", "Compact",
         "For small models (about 4–14B active parameters, for example Gemma 26B-A4B): ${CORE_TOOLS.size} core tools, a short step-by-step prompt, no helpers, one call per step.",
-        tools = CORE_TOOLS, systemPrompt = COMPACT_PROMPT, maxOutputTokens = 2048, temperature = 0.2, parallelToolCalls = false, projectMap = true,
+        // No temperature: the server applies the model's own recommended sampling (vLLM reads it from generation_config.json).
+        // On the tool-* probes Gemma passed 18/20 both at 0.2 and at Google's 1.0, so a fixed 0.2 bought nothing.
+        tools = CORE_TOOLS, systemPrompt = COMPACT_PROMPT, maxOutputTokens = 2048, parallelToolCalls = false, projectMap = true,
     )
 
     val all = listOf(FULL, COMPACT)

@@ -41,8 +41,8 @@ class ModelProfilesTest {
         val gemma = ModelProfiles.requestDefaults(ModelProfiles.COMPACT, "quasar", "Gemma 4 26B A4B")
         assertEquals("""{"temperature":1.0,"top_p":0.95,"top_k":64,"parallel_tool_calls":false}""", gemma.toString())
         assertEquals(ModelProfiles.GEMMA_SAMPLING, ModelProfiles.recommendedSampling("google/gemma-4-26B-A4B-it"))
-        // Families without a known recommendation keep the profile's temperature; the full profile leaves it to the server.
-        assertEquals("""{"temperature":0.2,"parallel_tool_calls":false}""", ModelProfiles.requestDefaults(ModelProfiles.COMPACT, "nebula", "Qwen 3.6 35B A3B").toString())
+        // Families without a known recommendation leave sampling to the server in both profiles.
+        assertEquals("""{"parallel_tool_calls":false}""", ModelProfiles.requestDefaults(ModelProfiles.COMPACT, "nebula", "Qwen 3.6 35B A3B").toString())
         assertEquals("{}", ModelProfiles.requestDefaults(ModelProfiles.FULL, "deepseek-flash").toString())
         assertEquals("""{"temperature":1.0,"top_p":0.95,"top_k":64}""", ModelProfiles.requestDefaults(ModelProfiles.FULL, "gemma-3-27b-it").toString())
     }
