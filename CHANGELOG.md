@@ -6,6 +6,33 @@ All notable changes to Chiller. The format follows [Keep a Changelog](https://ke
 
 ## [Unreleased]
 
+## [1.4.0-rc.1] — 2026-11-26
+
+The first candidate of 1.4: a whole file is rewritten in one step, large edits stay out of the model's context and can be undone again, the provider's prompt cache survives mode switches and long conversations, and any temperature can be typed in.
+
+### Added
+
+- **`write_file`:** replaces the whole content of an existing file in one call, with the `snapshot_id` of its current version. Every line of that version must have been read or written by the model, and the file keeps its line endings and BOM. Before, a model that meant to rewrite a file went through `read_file`, `delete_file` and `create_file`: in a live run six rounds instead of two, with the file written three times. It is in the compact profile, shows as "Rewrite" in the timeline and has its own card when edits are confirmed.
+- **Any temperature:** a "Custom" choice next to the presets takes any value from 0 to 2, with a dot or a comma. Before, only the fixed values 0, 0.2, 0.5, 0.8 and 1 could be chosen.
+- The `tool-rewrite` eval task: rewriting an existing file from scratch.
+
+### Changed
+
+- **Prompt cache across mode switches:** the model always gets the same tools and system prompt; the turn's mode and permissions travel with the user message, and calls outside them are still refused. Switching from Plan to Edit no longer makes the provider recompute the conversation: on vLLM with a conversation of about 10K tokens, the answer came after 0.5 s instead of 5.0 s (Qwen 3.6) and 0.2 s instead of 6.6 s (Gemma 4).
+- **Long conversations:** the context estimate is calibrated by the prompt sizes the provider reported, so a conversation in Russian with code is no longer trimmed at about half its real budget. Once the history overflows, older turns are cut at a turn boundary and old tool results are shortened in batches, so the provider's cache is not lost on every round.
+- **Large edits in the model's context:** an edit result gives the model the diff only when it is short, otherwise the number of added and removed lines; the timeline still shows the whole diff. Before, creating or deleting a 300-line file returned about 16K characters that stayed in every later round.
+- Tool errors suggest the next step: `replace_text` without `old_text` and `create_file` on an existing file point to `write_file`, naming the `snapshot_id` when the model already has the whole file; a missing argument lists all required ones.
+
+### Fixed
+
+- **Undo of large changes:** a change whose result was longer than about 16K characters (a file of some 300 lines) could not be undone from the timeline or rewound with its turn, because its id was lost when the result was cut or saved as an artifact.
+- **A step cut off by stop:** stopping, a failure or the time limit in the middle of a step no longer loses it. Its reasoning and text are saved as an interrupted step, shown as stopped and sent to the model with a note; tool calls being written are still never run.
+
+### Known limitations
+
+- Checked by unit and UI tests and the offline evals; `write_file` and the changed prompts have not yet been measured live on Gemma, and the packaged app was not checked by hand.
+- The installers are not signed: on macOS, open the app the first time with right-click → "Open"; on Windows, SmartScreen may ask for confirmation.
+
 ## [1.3.0] — 2026-11-06
 
 The stable 1.3 version: everything from [1.3.0-rc.1](https://github.com/Damirka1/Chiller/releases/tag/v1.3.0-rc.1) — the interface in English and Russian, providers over plain HTTP and through a corporate proxy, another provider from the model menu and for images, the model's reasoning step by step, a configurable time per task, and dialogs that keep going after an interrupted step — plus the fixes below.
@@ -231,6 +258,7 @@ The first release candidate of the 1.2 branch: profiles for small models, a veri
 
 The first public preview: a desktop app with Focus and Studio modes, code tools with file snapshots and undo, processes, subagent helpers, presets for OpenAI-compatible providers, a settings page and DMG/MSI builds in CI.
 
+[1.4.0-rc.1]: https://github.com/Damirka1/Chiller/compare/v1.3.0...v1.4.0-rc.1
 [1.3.0]: https://github.com/Damirka1/Chiller/compare/v1.3.0-rc.1...v1.3.0
 [1.3.0-rc.1]: https://github.com/Damirka1/Chiller/compare/v1.2.1...v1.3.0-rc.1
 [1.2.1]: https://github.com/Damirka1/Chiller/compare/v1.2.0...v1.2.1
