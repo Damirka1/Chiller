@@ -35,6 +35,12 @@ Workflow `.github/workflows/website.yml` запускается **только �
 
 Ожидаемый адрес после успешной публикации: `https://Damirka1.github.io/Chiller/`. Это настроенный адрес, а не подтверждение доступности сайта. Домен и базовый путь задаются в `astro.config.mjs`; при изменении также обновите URL шрифтов, браузерные тесты и инструкцию.
 
+## Развёртывание через Docker Compose
+
+Соберите сайт локально из папки `website` командами `npm ci` и `CHILLER_SELF_HOSTED=1 npm run build`. На сервере разместите `compose.yaml`, `website/nginx.conf` и готовый `website/dist/` с той же структурой каталогов. Из папки с `compose.yaml` запустите `docker compose up -d`. Nginx раздаёт файлы из подключённой папки на `https://chiller.damirka.space/` и `/ru/`. Для обновлений загружайте свежие файлы в `website/dist/`.
+
+В маршруте Cloudflare Tunnel укажите адрес `http://chiller-website:80`. Сервис и `cloudflared` используют внешнюю сеть Docker `tunnel_shared_network`.
+
 ## Редактирование
 
 - `src/content.ts`: тексты на двух языках; обновляйте вместе.
