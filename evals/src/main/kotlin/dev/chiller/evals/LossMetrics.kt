@@ -25,7 +25,7 @@ data class LossMetrics(
     val largestToolOutput: Int = 0,
 )
 
-internal val FILE_WRITE_TOOLS = setOf("edit_file", "replace_text", "create_file", "create_directory", "move_file", "delete_file")
+internal val FILE_WRITE_TOOLS = setOf("edit_file", "replace_text", "create_file", "write_file", "create_directory", "move_file", "delete_file")
 
 fun lossMetrics(messages: List<AgentMessage>, activities: List<Activity>): LossMetrics {
     val failedIds = activities.filter { it.status == "failed" }.mapNotNull { it.toolCallId }.toSet()

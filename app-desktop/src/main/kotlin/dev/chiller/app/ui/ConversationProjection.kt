@@ -26,7 +26,7 @@ fun activityGroupLabel(activities: List<Activity>): String {
     val count = paths.size
     return when {
         complete && paths.size == activities.map { it.target }.distinct().size && count > 0 && activities.all { it.name == "read_file" } -> I18n.current.screens.filesRead(count)
-        complete && activities.all { it.target.isNotBlank() && it.name in setOf("edit_file", "replace_text", "append_file", "create_file", "move_file", "delete_file", "generate_image") } -> I18n.current.screens.filesChanged(count)
+        complete && activities.all { it.target.isNotBlank() && it.name in setOf("edit_file", "replace_text", "append_file", "create_file", "write_file", "move_file", "delete_file", "generate_image") } -> I18n.current.screens.filesChanged(count)
         else -> I18n.current.screens.actionsCount(activities.size)
     }
 }

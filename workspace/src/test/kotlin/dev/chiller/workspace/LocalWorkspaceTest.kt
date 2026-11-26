@@ -68,6 +68,67 @@ class LocalWorkspaceTest {
         assertTrue("Binary files differ (12 → 0 bytes)" in undone.diff, undone.diff)
     }
 
+    @Test fun writeReplacesAFileTheModelWroteAndIsUndone() = workspace { root, ws ->
+        val created = ws.create("index.html", "<p>old</p>\n<p>page</p>\n")
+        // create_file's own snapshot is enough: the model wrote every line, so it rewrites without a read.
+        val written = ws.write("index.html", created.snapshotId!!, "<main>\n  new\n</main>\n")
+        assertEquals("<main>\n  new\n</main>\n", Files.readString(root.resolve("index.html")))
+        assertTrue("-<p>old</p>" in written.diff && "+<main>" in written.diff, written.diff)
+        // The returned snapshot chains into the next edit like any other change.
+        ws.replaceText("index.html", written.snapshotId!!, "  new", "  newer")
+        assertEquals("<main>\n  newer\n</main>\n", Files.readString(root.resolve("index.html")))
+        val again = ws.write("index.html", ws.read(ReadFileRequest("index.html")).snapshotId, "")
+        assertEquals("", Files.readString(root.resolve("index.html")))
+        ws.undo(again.id)
+        assertEquals("<main>\n  newer\n</main>\n", Files.readString(root.resolve("index.html")))
+    }
+
+    @Test fun writeRefusesUnseenLinesStaleSnapshotsAndCarriageReturns() = workspace { root, ws ->
+        val file = root.resolve("big.txt")
+        Files.writeString(file, (1..10).joinToString("") { "line $it\n" })
+        val part = ws.read(ReadFileRequest("big.txt", 1, 4))
+        try { ws.write("big.txt", part.snapshotId, "short\n"); error("A partly read file was overwritten") }
+        catch (e: ToolException) {
+            assertEquals("UNOBSERVED_RANGE", e.code)
+            assertTrue("5-10" in e.message && "read_file" in e.recovery.orEmpty(), e.message)
+        }
+        // Lines read in parts under snapshots of the same bytes all count, as for edits.
+        ws.read(ReadFileRequest("big.txt", 5, 10))
+        ws.write("big.txt", part.snapshotId, "short\n")
+        assertEquals("short\n", Files.readString(file))
+        val stale = ws.read(ReadFileRequest("big.txt"))
+        Files.writeString(file, "user edit\n")
+        expectError("STALE_SNAPSHOT") { ws.write("big.txt", stale.snapshotId, "model\n") }
+        assertEquals("user edit\n", Files.readString(file))
+        expectError("INVALID_EDIT") { ws.write("big.txt", ws.read(ReadFileRequest("big.txt")).snapshotId, "a\r\nb\r\n") }
+        expectError("NOT_FOUND") { ws.write("missing.txt", stale.snapshotId, "x\n") }
+    }
+
+    @Test fun writeKeepsTheFilesCrLfAndBom() = workspace { root, ws ->
+        val bom = byteArrayOf(0xef.toByte(), 0xbb.toByte(), 0xbf.toByte())
+        Files.write(root.resolve("a.txt"), bom + "one\r\ntwo\r\n".toByteArray())
+        ws.write("a.txt", ws.read(ReadFileRequest("a.txt")).snapshotId, "first\nsecond\nthird\n")
+        assertContentEquals(bom + "first\r\nsecond\r\nthird\r\n".toByteArray(), Files.readAllBytes(root.resolve("a.txt")))
+    }
+
+    @Test fun createOnAnExistingFileNamesTheSnapshotToRewriteWith() = workspace { root, ws ->
+        val created = ws.create("page.html", "<p>one</p>\n")
+        try { ws.create("page.html", "<p>two</p>\n"); error("create_file overwrote a file") }
+        catch (e: ToolException) {
+            assertEquals("ALREADY_EXISTS", e.code)
+            val recovery = e.recovery.orEmpty()
+            assertTrue("write_file" in recovery && created.snapshotId!! in recovery, recovery)
+        }
+        // Changed outside the agent: the model has not seen these bytes, so it is sent to read them first.
+        Files.writeString(root.resolve("page.html"), "<p>user</p>\n")
+        try { ws.create("page.html", "<p>two</p>\n"); error("create_file overwrote a file") }
+        catch (e: ToolException) {
+            val recovery = e.recovery.orEmpty()
+            assertTrue("read it with read_file" in recovery && "write_file" in recovery && created.snapshotId!! !in recovery, recovery)
+        }
+        assertEquals("<p>user</p>\n", Files.readString(root.resolve("page.html")))
+    }
+
     @Test fun rejectsStaleSnapshotWithoutWriting() = workspace { root, ws ->
         Files.writeString(root.resolve("a.txt"), "old\n")
         val snapshot = ws.read(ReadFileRequest("a.txt"))

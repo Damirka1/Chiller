@@ -34,7 +34,7 @@ class ModelProfilesTest {
         assertEquals(2048 + ModelProfiles.THINKING_HEADROOM_TOKENS, ModelProfiles.replyTokens(2048, thinking = true))
         assertEquals(Int.MAX_VALUE, ModelProfiles.replyTokens(Int.MAX_VALUE, thinking = true), "unlimited stays unlimited")
         assertTrue(ModelProfiles.COMPACT.tools!!.containsAll(setOf("read_artifact", "show_file", "find_symbols")), "compact keeps attachments and results usable")
-        assertTrue(ModelProfiles.COMPACT.tools!!.containsAll(setOf("append_file", "delete_file", "move_file", "create_directory")), "compact can write in parts and delete or move with undo")
+        assertTrue(ModelProfiles.COMPACT.tools!!.containsAll(setOf("append_file", "delete_file", "move_file", "create_directory", "write_file")), "compact can write in parts, rewrite, and delete or move with undo")
     }
 
     @Test fun `gemma gets its recommended sampling instead of the profile temperature`() {

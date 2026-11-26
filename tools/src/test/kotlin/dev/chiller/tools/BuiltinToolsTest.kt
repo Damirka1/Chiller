@@ -146,6 +146,56 @@ class BuiltinToolsTest {
         } finally { processes.close(); root.toFile().deleteRecursively() }
     }
 
+    /**
+     * The live run behind write_file: replace_text with only new_text, then create_file on the existing file, then read,
+     * delete_file and create_file again, with the whole file echoed back as a diff each time.
+     */
+    @Test fun aWholeFileIsRewrittenInOneCallAndTheModelGetsNoEcho() = runBlocking<Unit> {
+        val root = Files.createTempDirectory("chiller-write-tool")
+        val workspace = LocalWorkspace(root)
+        val processes = LocalProcessService(root)
+        val artifacts = object : ArtifactStore {
+            override suspend fun put(sessionId: String, content: String) = ArtifactRef("unused", sessionId, content.length.toLong())
+            override suspend fun read(sessionId: String, artifactId: String, offset: Int, limit: Int) = ""
+        }
+        val tools = BuiltinTools(workspace, processes, artifacts, object : InteractionBroker { override suspend fun ask(question: UserQuestion) = "a" })
+        val context = ToolContext("s", "r", ExecutionMode.WORKSPACE_EDIT)
+        fun content(word: String) = (1..300).joinToString("\\n", postfix = "\\n") { "<p>$word paragraph number $it</p>" }
+        try {
+            val created = tools.execute(ToolCall("1", "create_file", """{"path":"index.html","content":"${content("old")}"}"""), context)
+            assertTrue(created.ok, created.error?.message)
+            val data = created.data!!.jsonObject
+            val snapshot = data.getValue("snapshot_id").jsonPrimitive.content
+            // The model wrote these 300 lines: it gets their count, the user's view gets the whole diff.
+            assertFalse("diff" in data, data.toString())
+            assertEquals(300, data.getValue("lines_added").jsonPrimitive.int)
+            assertEquals(0, data.getValue("lines_removed").jsonPrimitive.int)
+            assertTrue(created.diff!!.startsWith("--- /dev/null") && "+<p>old paragraph number 300</p>" in created.diff!!)
+            val forModel = Json.encodeToString(ToolResult.serializer(), created)
+            assertTrue(forModel.length < 400 && "paragraph" !in forModel, forModel)
+
+            val noOldText = tools.execute(ToolCall("2", "replace_text", """{"path":"index.html","snapshot_id":"$snapshot","new_text":"${content("new")}"}"""), context)
+            assertEquals("Missing required argument old_text", noOldText.error?.message)
+            assertTrue("write_file" in noOldText.error?.recovery.orEmpty(), noOldText.error?.recovery)
+            val exists = tools.execute(ToolCall("3", "create_file", """{"path":"index.html","content":"${content("new")}"}"""), context)
+            assertEquals("ALREADY_EXISTS", exists.error?.code)
+            assertTrue("write_file" in exists.error?.recovery.orEmpty() && snapshot in exists.error?.recovery.orEmpty(), exists.error?.recovery)
+            val noContent = tools.execute(ToolCall("4", "write_file", """{"path":"index.html","snapshot_id":"$snapshot"}"""), context)
+            assertEquals("Send all required arguments: path, snapshot_id, content", noContent.error?.recovery)
+
+            val written = tools.execute(ToolCall("5", "write_file", """{"path":"index.html","snapshot_id":"$snapshot","content":"${content("new")}"}"""), context)
+            assertTrue(written.ok, written.error?.message)
+            assertEquals((1..300).joinToString("") { "<p>new paragraph number $it</p>\n" }, Files.readString(root.resolve("index.html")))
+            assertEquals(300, written.data!!.jsonObject.getValue("lines_removed").jsonPrimitive.int)
+            // A small edit's diff still reaches the model, so it can check the change.
+            val next = written.data!!.jsonObject.getValue("snapshot_id").jsonPrimitive.content
+            val small = tools.execute(ToolCall("6", "replace_text", """{"path":"index.html","snapshot_id":"$next","old_text":"new paragraph number 7<","new_text":"seventh paragraph<"}"""), context)
+            assertTrue(small.ok, small.error?.message)
+            assertTrue("+<p>seventh paragraph</p>" in small.data!!.jsonObject.getValue("diff").jsonPrimitive.content)
+            assertEquals(small.data!!.jsonObject.getValue("diff").jsonPrimitive.content, small.diff)
+        } finally { processes.close(); root.toFile().deleteRecursively() }
+    }
+
     @Test fun readArtifactFindsLinesAcrossChunksAndReportsMore() = runBlocking<Unit> {
         // ~200 KiB log; the needle line straddles the 64 KiB chunk boundary to exercise the carried partial line.
         val prefix = "x".repeat(65_530) + "\n"

@@ -57,6 +57,61 @@ private val PROBE_FUNCTION = REGISTRY_NAMES[PROBE_INDEX]
 
 private const val SQUARES_COUNT_LAST = 399
 
+/** Old code to throw away whole: global state, prints and a main block, none of which may survive the rewrite. */
+private const val LEGACY_REPORT = """# Order report, old version: global state and printing everywhere.
+ORDERS = []
+TOTAL = 0
+LARGEST_ID = None
+LARGEST_AMOUNT = -1
+
+
+def load_orders(rows):
+    global TOTAL, LARGEST_ID, LARGEST_AMOUNT
+    for row in rows:
+        ORDERS.append(row)
+        TOTAL += row['amount']
+        if row['amount'] > LARGEST_AMOUNT:
+            LARGEST_AMOUNT = row['amount']
+            LARGEST_ID = row['id']
+
+
+def format_money(value):
+    return '%.2f' % value
+
+
+def print_header():
+    print('=' * 40)
+    print('ORDER REPORT')
+    print('=' * 40)
+
+
+def print_orders():
+    for order in ORDERS:
+        print(order['id'], format_money(order['amount']))
+
+
+def print_totals():
+    print('-' * 40)
+    print('count:', len(ORDERS))
+    print('total:', format_money(TOTAL))
+    print('largest:', LARGEST_ID)
+
+
+def print_report(rows):
+    load_orders(rows)
+    print_header()
+    print_orders()
+    print_totals()
+
+
+if __name__ == '__main__':
+    print_report([{'id': 'a', 'amount': 5}, {'id': 'b', 'amount': 12}])
+"""
+
+private const val NEW_REPORT = "def summarize(orders):\n    if not orders:\n        return {'count': 0, 'total': 0, 'largest': None}\n" +
+    "    largest = max(orders, key=lambda order: order['amount'])\n" +
+    "    return {'count': len(orders), 'total': sum(order['amount'] for order in orders), 'largest': largest['id']}\n"
+
 /**
  * Short tasks aimed at one tool-calling skill each: exact edits at the end of a file, JSON escaping of
  * backslashes and quotes, tabs, replace-all counts, chained edits, partial reads, long output and writing
@@ -240,5 +295,28 @@ print('patterns ok')
             Files.writeString(project.resolve("squares.py"), "SQUARES = [\n" + (0..SQUARES_COUNT_LAST).joinToString("") { "    ${it * it},\n" } + "]\n")
             "Created squares.py with ${SQUARES_COUNT_LAST + 1} literal values; checks pass."
         },
+    ),
+    // Live, a model that meant to rewrite a file sent replace_text without old_text, then create_file, then read,
+    // delete_file and create_file again. Compare rounds and failed calls, not only the verdict.
+    EvalTask(
+        id = "tool-rewrite",
+        title = "Переписать существующий файл целиком",
+        prompt = "Rewrite report.py from scratch: none of its current code stays. The new file has only one function, summarize(orders), that takes a list of " +
+            "dicts with 'id' and 'amount' and returns {'count': number of orders, 'total': sum of amounts, 'largest': id of the order with the largest amount}; " +
+            "for an empty list it returns {'count': 0, 'total': 0, 'largest': None}. No module-level variables, no print and no main block. Run `python3 checks.py`.",
+        files = mapOf(
+            "report.py" to LEGACY_REPORT,
+            "checks.py" to "import ast\nimport pathlib\nsource = pathlib.Path('report.py').read_text()\ntree = ast.parse(source)\n" +
+                "functions = sorted(node.name for node in tree.body if isinstance(node, (ast.FunctionDef, ast.ClassDef)))\n" +
+                "assert functions == ['summarize'], f'top-level definitions: {functions}'\n" +
+                "assert all(isinstance(node, (ast.FunctionDef, ast.Import, ast.ImportFrom)) or (isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant)) for node in tree.body), " +
+                "'module-level code besides imports, a docstring and summarize'\n" +
+                "assert 'print(' not in source, 'print left in report.py'\nfrom report import summarize\n" +
+                "assert summarize([]) == {'count': 0, 'total': 0, 'largest': None}, summarize([])\n" +
+                "orders = [{'id': 'a', 'amount': 5}, {'id': 'b', 'amount': 12}, {'id': 'c', 'amount': 7}]\n" +
+                "assert summarize(orders) == {'count': 3, 'total': 24, 'largest': 'b'}, summarize(orders)\nprint('report ok')\n",
+        ),
+        check = { project, _ -> python(project, "checks.py") },
+        reference = { project -> Files.writeString(project.resolve("report.py"), NEW_REPORT); "Rewrote report.py as a single summarize function; checks pass." },
     ),
 )

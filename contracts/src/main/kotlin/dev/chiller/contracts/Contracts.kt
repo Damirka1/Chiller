@@ -283,6 +283,13 @@ interface WorkspaceService {
      */
     suspend fun append(path: String, snapshotId: String, content: String): FileChange =
         throw ToolException("UNSUPPORTED", "Appending is not supported by this workspace")
+    /**
+     * Replaces the whole content of an existing text file. The snapshot must describe its current bytes, and every line
+     * of them must have been read or written under snapshots of those bytes, so a model that saw only part of a file
+     * cannot drop the rest unseen. The file's line endings and BOM are kept. Undoable like an edit.
+     */
+    suspend fun write(path: String, snapshotId: String, content: String): FileChange =
+        throw ToolException("UNSUPPORTED", "Rewriting files is not supported by this workspace")
 }
 
 @Serializable

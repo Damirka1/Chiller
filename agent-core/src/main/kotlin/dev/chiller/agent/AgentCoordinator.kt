@@ -741,7 +741,8 @@ internal fun truncatedCallNotice(replyTokens: Int, tools: Set<String> = emptySet
     // About a character per token: digits and JSON escapes take a token each on Gemma, and a part that is cut off again costs a whole reply.
     val partChars = replyTokens.toLong().coerceIn(1_000, 200_000)
     val start = "Do not resend it in one piece: write large content in parts. Your reply limit is about $replyTokens tokens including any reasoning, so keep each call's " +
-        "content under about $partChars characters. Create the file with the first part, then "
+        "content under about $partChars characters. " +
+        (if ("write_file" in tools) "Write the first part with create_file (or write_file if the file already exists), then " else "Create the file with the first part, then ")
     // The append step names a tool the model actually has; append_file needs no copy of existing text, which small models get wrong.
     val parts = when {
         "append_file" in tools -> "add each next part with append_file and the snapshot_id the previous call returned. Each part continues exactly where the file ends; " +
@@ -940,7 +941,7 @@ private const val SYSTEM_PROMPT = """You are Chiller, a precise coding assistant
 - When available, use git_status/git_diff/git_log/git_show for repository inspection and find_symbols/read_symbol for lexical navigation. These do not provide semantic rename or LSP guarantees.
 - Background processes belong to this run and stop when it ends. Save important output before finishing; never repeat a side-effecting command merely to recover expired output.
 - The user may point to files as @path (workspace-relative); read them before relying on their content.
-- read_file returns snapshot_id. For small changes use replace_text with old_text copied exactly (no line-number prefix); for larger ones edit_file by line number. Both return snapshot_id: reuse it for the next edit of that file without re-reading.
+- read_file returns snapshot_id. For small changes use replace_text with old_text copied exactly (no line-number prefix); for larger ones edit_file by line number; to rewrite a whole existing file, write_file. All return snapshot_id: reuse it for the next edit of that file without re-reading.
 - For tasks with several steps, keep a short checklist with update_plan and update it as you go: mark a step done right after finishing it, or skipped with the reason. Close every step before the final answer.
 - Never invent tool results. Do not claim checks passed unless a process you ran reported it; quote the command and exit code.
 - Facts and numbers you write into files or answers must come from tool results in this conversation. If a search was empty or a page lacked the data, say so plainly and stop or ask; never fill in plausible values. Placeholder data only when the user asks for it, labeled as placeholder. Your final answer reports what failed or was not done.

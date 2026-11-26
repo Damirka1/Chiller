@@ -423,7 +423,7 @@ object EnStrings : Strings {
         override fun toolLabel(name: String) = when (name) {
             "web_search" -> "Web search"; "web_fetch" -> "Web page"; "create_directory" -> "Folder"; "show_file" -> "File"; "capture_window" -> "Window snapshot"; "list_capture_targets" -> "Window to capture"
             "git_status" -> "Git status"; "git_diff" -> "Git changes"; "git_log" -> "Git history"; "git_show" -> "File from Git"; "find_symbols" -> "Declarations"; "read_symbol" -> "Function"; "read_diagnostics" -> "Diagnostics"
-            "read_file" -> "Read"; "list_files" -> "Files"; "search_text" -> "Search"; "edit_file" -> "Edit"; "replace_text" -> "Replace"; "append_file" -> "Append"; "update_plan" -> "Plan"; "spawn_agent" -> "Helper"; "list_agents" -> "Helpers"; "wait_agents" -> "Waiting"; "agent_result" -> "Report"; "message_agent" -> "Message"; "cancel_agent" -> "Stop"; "create_file" -> "Create"; "generate_image" -> "Image"
+            "read_file" -> "Read"; "list_files" -> "Files"; "search_text" -> "Search"; "edit_file" -> "Edit"; "replace_text" -> "Replace"; "append_file" -> "Append"; "update_plan" -> "Plan"; "spawn_agent" -> "Helper"; "list_agents" -> "Helpers"; "wait_agents" -> "Waiting"; "agent_result" -> "Report"; "message_agent" -> "Message"; "cancel_agent" -> "Stop"; "create_file" -> "Create"; "write_file" -> "Rewrite"; "generate_image" -> "Image"
             "move_file" -> "Move"; "delete_file" -> "Delete"; "run_process" -> "Command"; "read_process" -> "Output"; "stop_process" -> "Stop"
             "read_artifact" -> "Result"; "ask_user" -> "Question"; "undo" -> "Undo"; else -> name
         }
@@ -595,6 +595,8 @@ object EnStrings : Strings {
         override fun approveAllPlaces(n: Int) = "In all $n places"
         override val approveCreate = "Create file"
         override val approveAppend = "Append to the end"
+        override val approveRewrite = "Rewrite file"
+        override val approveRewriteNote = "Replaces the whole content; undo brings the old one back"
         override val approveEditLines = "Change lines"
         override fun approveDeleteLines(start: Int?, end: Int?) = "@@ delete lines $start–$end"
         override fun approveInsertBefore(line: Int?) = "@@ insert before line $line"

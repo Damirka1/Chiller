@@ -392,6 +392,51 @@ class LocalWorkspace(
         return edit(EditFileRequest(path, snapshotId, listOf(FileEdit("insert", beforeLine = lines + 1, content = content.removeSuffix("\n")))))
     }
 
+    override suspend fun write(path: String, snapshotId: String, content: String): FileChange = withContext(Dispatchers.IO) { lock.withLock {
+        if ('\r' in content) fail("INVALID_EDIT", "Use LF line separators in content; the file keeps its own line endings")
+        val file = resolve(path, true)
+        val snap = requireSnapshot(snapshotId, file)
+        val before = readBytes(file)
+        if (sha(before) != snap.hash) fail("STALE_SNAPSHOT", "File changed after it was read; nothing was written")
+        val old = decode(before)
+        unreadLines(file, snap.hash, old.lines.size)?.let { (first, last) ->
+            throw ToolException("UNOBSERVED_RANGE", "Lines $first-$last were not read with this snapshot; write_file replaces the whole file, so every line must be read first",
+                "Read lines $first-$last with read_file and call write_file with the snapshot_id it returns, or change only the lines you read with replace_text")
+        }
+        val eol = when (old.endings.firstOrNull()) { "CRLF" -> "\r\n"; "CR" -> "\r"; else -> "\n" }
+        val body = (if (eol == "\n") content else content.replace("\n", eol)).toByteArray(StandardCharsets.UTF_8)
+        val after = if (old.bom) byteArrayOf(0xef.toByte(), 0xbb.toByte(), 0xbf.toByte()) + body else body
+        val change = commit(file, before, after)
+        // The model wrote every line, as with create_file: the next edit needs no read.
+        val next = snapshotId()
+        saveSnapshot(next, Snapshot(file, sha(after), (1..decode(after).lines.size).toSet()))
+        change.copy(snapshotId = next)
+    } }
+
+    /** The first and last line of [file] at [hash] that no snapshot of those bytes observed, or null when all were. */
+    private fun unreadLines(file: Path, hash: String, lineCount: Int): Pair<Int, Int>? {
+        val observed = snapshots.values.filter { it.path == file && it.hash == hash }.flatMapTo(HashSet()) { it.observed }
+        val unread = (1..lineCount).filter { it !in observed }
+        return if (unread.isEmpty()) null else unread.first() to unread.last()
+    }
+
+    /**
+     * A model that calls create_file on an existing file means to rewrite it. Live, Gemma then read, deleted and created
+     * the file again: three more rounds, with the whole file in its context twice more. When the model already has every
+     * line of the present bytes (it wrote or read them), the hint names the snapshot to rewrite with; otherwise it must read.
+     */
+    private fun existingFileRecovery(file: Path): String {
+        val name = relative(file)
+        if (!Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS) || Files.isSymbolicLink(file)) return "$name exists and is not a regular file; choose another path"
+        val known = runCatching {
+            val bytes = readBytes(file); val hash = sha(bytes)
+            if (unreadLines(file, hash, decode(bytes).lines.size) != null) null
+            else snapshots.entries.filter { it.value.path == file && it.value.hash == hash }.maxByOrNull { it.value.observed.size }?.key
+        }.getOrNull()
+        return if (known != null) "$name exists. To replace all of its content, call write_file with snapshot_id $known and the same content; to change a part, use replace_text with that snapshot_id"
+            else "$name exists. To replace all of its content, read it with read_file and call write_file with the snapshot_id it returns; to change a part, use replace_text"
+    }
+
     override suspend fun createBinary(path: String, bytes: ByteArray): FileChange {
         if (bytes.size > MAX_BINARY_CREATE_BYTES) throw ToolException("TOO_LARGE", "Binary file exceeds ${MAX_BINARY_CREATE_BYTES / 1_048_576} MiB")
         return createNew(path, bytes)
@@ -399,8 +444,7 @@ class LocalWorkspace(
 
     private suspend fun createNew(path: String, bytes: ByteArray): FileChange = withContext(Dispatchers.IO) { lock.withLock {
         val file = resolve(path, false)
-        if (Files.exists(file, LinkOption.NOFOLLOW_LINKS)) throw ToolException("ALREADY_EXISTS", "Destination already exists",
-            "${relative(file)} exists. To change it, read it and use replace_text; to write it from scratch, delete_file it with its snapshot_id first")
+        if (Files.exists(file, LinkOption.NOFOLLOW_LINKS)) throw ToolException("ALREADY_EXISTS", "Destination already exists", existingFileRecovery(file))
         val parent = file.parent ?: fail("INVALID_PATH", "A parent directory is required")
         val plannedDirectories = planDirectories(parent)
         val id = UUID.randomUUID().toString()

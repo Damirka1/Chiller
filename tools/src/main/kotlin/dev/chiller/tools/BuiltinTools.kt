@@ -45,7 +45,9 @@ class BuiltinTools(
             mapOf("path" to string(), "snapshot_id" to string("From read_file or from the last edit of this file"),
                 "old_text" to string("Exact current text copied from read_file, without the \"12 | \" prefixes"), "new_text" to string("Text that replaces old_text"),
                 "expected_count" to integer("How many times the whole old_text occurs in the file; omit it when old_text occurs once")), "path", "snapshot_id", "old_text", "new_text"),
-        spec("create_file", "Create a new UTF-8 file, safely creating missing parent directories. Never overwrites existing files. Returns snapshot_id for further edits.", ToolEffect.FILE_WRITE, mapOf("path" to string(), "content" to string()), "path", "content"),
+        spec("create_file", "Create a new UTF-8 file, safely creating missing parent directories. Never overwrites existing files; to replace one use write_file. Returns snapshot_id for further edits.", ToolEffect.FILE_WRITE, mapOf("path" to string(), "content" to string()), "path", "content"),
+        spec("write_file", "Replace the whole content of an existing file, e.g. to rewrite it from scratch. Every line of the current version must have been read or written by you. For small changes replace_text is cheaper. Returns snapshot_id for further edits.", ToolEffect.FILE_WRITE,
+            mapOf("path" to string(), "snapshot_id" to string("From read_file, create_file or the last edit of this file"), "content" to string("The complete new content of the file")), "path", "snapshot_id", "content"),
         spec("append_file", "Add lines to the end of a file, e.g. the next part of a long file written in parts. Existing lines are not changed. Returns snapshot_id for the next part.", ToolEffect.FILE_WRITE,
             mapOf("path" to string(), "snapshot_id" to string("From create_file, read_file or the last edit of this file"), "content" to string("Lines that follow the current last line")), "path", "snapshot_id", "content"),
         spec("create_directory", "Create a directory and missing parents inside the workspace; succeeds if the directory already exists, refuses files and symlinks.", ToolEffect.FILE_WRITE, mapOf("path" to string()), "path"),
@@ -94,6 +96,9 @@ class BuiltinTools(
             val args = try { json.parseToJsonElement(call.arguments) } catch (_: kotlinx.serialization.SerializationException) {
                 return ToolResult.failure("INVALID_ARGUMENTS", "Arguments are not valid JSON", recovery = "Send one JSON object; escape quotes as \\\" , backslashes as \\\\ and line breaks as \\n inside strings")
             } as? JsonObject ?: return ToolResult.failure("INVALID_ARGUMENTS", "Arguments must be a JSON object with named arguments")
+            // Live: a model sent replace_text with only new_text, the whole new file, meaning to rewrite it.
+            if (call.name == "replace_text" && "old_text" !in args && "new_text" in args) return ToolResult.failure("INVALID_ARGUMENTS", "Missing required argument old_text",
+                recovery = "replace_text changes one part of a file and needs old_text. To replace the whole file, call write_file with path, snapshot_id and content (the complete new text)")
             validateObject(args, spec.parameters)
             val result = when (call.name) {
                 "list_files" -> workspace.listPage(args.str("path", "."), args.optionalString("glob"), args.int("limit", 200), args.optionalString("cursor"))
@@ -157,6 +162,7 @@ class BuiltinTools(
                     })
                 }
                 "create_file" -> changed(workspace.create(args.str("path"), args.str("content")))
+                "write_file" -> changed(workspace.write(args.str("path"), args.str("snapshot_id"), args.str("content")))
                 "append_file" -> changed(workspace.append(args.str("path"), args.str("snapshot_id"), args.str("content")))
                 "generate_image" -> generateImage(args, context)
                 "create_directory" -> workspace.createDirectory(args.str("path"))
@@ -336,7 +342,8 @@ class BuiltinTools(
     private fun validateObject(value: JsonObject, schema: JsonObject, prefix: String = "") {
         val properties = schema.getValue("properties").jsonObject
         value.keys.firstOrNull { it !in properties }?.let { invalidArgument("Unknown argument $prefix$it", "Allowed arguments: ${properties.keys.joinToString { key -> "$prefix$key" }}") }
-        schema["required"]?.jsonArray?.map { it.jsonPrimitive.content }?.firstOrNull { it !in value }?.let { invalidArgument("Missing required argument $prefix$it") }
+        val required = schema["required"]?.jsonArray?.map { it.jsonPrimitive.content }.orEmpty()
+        required.firstOrNull { it !in value }?.let { invalidArgument("Missing required argument $prefix$it", "Send all required arguments: ${required.joinToString { key -> "$prefix$key" }}") }
         value.forEach { (key, item) -> validateValue(item, properties.getValue(key).jsonObject, prefix + key) }
     }
     private fun validateValue(item: JsonElement, schema: JsonObject, name: String) {

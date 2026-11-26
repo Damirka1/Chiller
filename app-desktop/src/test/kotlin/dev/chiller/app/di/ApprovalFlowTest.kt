@@ -41,6 +41,10 @@ class ApprovalFlowTest {
         assertEquals("2 edits by line number", edits.note)
         assertTrue("@@ delete lines 3–4" in edits.diff!! && "@@ insert before line 9\n+x" in edits.diff!!)
         assertEquals("→ c.txt", approvalPreview(request("move_file", """{"path":"a.txt","snapshot_id":"s","destination":"c.txt"}""")).note)
+        val rewrite = approvalPreview(request("write_file", """{"path":"index.html","snapshot_id":"s","content":"<main>\n</main>\n"}"""))
+        assertEquals("Rewrite file", rewrite.title)
+        assertEquals("--- a/index.html\n+++ b/index.html\n@@\n+<main>\n+</main>", rewrite.diff)
+        assertTrue("whole content" in rewrite.note.orEmpty(), rewrite.note)
     }
 
     @Test fun `a change waits for the user, a declined one is never written`() = runBlocking<Unit> {

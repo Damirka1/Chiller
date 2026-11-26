@@ -638,6 +638,8 @@ interface StudioStrings {
     fun approveAllPlaces(n: Int): String
     val approveCreate: String
     val approveAppend: String
+    val approveRewrite: String
+    val approveRewriteNote: String
     val approveEditLines: String
     fun approveDeleteLines(start: Int?, end: Int?): String
     fun approveInsertBefore(line: Int?): String

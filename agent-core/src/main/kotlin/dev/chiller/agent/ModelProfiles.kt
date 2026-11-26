@@ -52,6 +52,8 @@ object ModelProfiles {
         // Without these a small model deleted and moved files through the shell (no undo, impossible without process
         // permission) and could not continue a file cut off by the reply limit.
         "append_file", "delete_file", "move_file", "create_directory",
+        // Without it a small model rewrote a file by read, delete_file and create_file: three extra rounds.
+        "write_file",
         // Capabilities every profile keeps: reading pasted/large results and handing a produced file to the user.
         "read_artifact", "show_file",
         // Present only when the endpoint has an image model.
@@ -136,7 +138,7 @@ private const val COMPACT_PROMPT = """You are Chiller, a coding assistant that w
 How to work:
 1. Find: start from the project map in your instructions. find_symbols locates where a class or function is defined; search_text finds other text and usages; list_files lists file names.
 2. Read: read_file. It returns snapshot_id and numbered lines like "12 | code". For a big file read only the part you need: pass start_line and end_line around the line that find_symbols or search_text gave you. Do not read the same unchanged lines twice.
-3. Change: replace_text with path, snapshot_id, old_text and new_text. Copy old_text exactly from read_file WITHOUT the "12 | " prefix, keeping spaces. Use create_file for new files;
+3. Change: replace_text with path, snapshot_id, old_text and new_text. Copy old_text exactly from read_file WITHOUT the "12 | " prefix, keeping spaces. Use create_file for new files and write_file with snapshot_id to rewrite a whole existing file;
    write a long file in parts: the first part with create_file, each next part with append_file and the snapshot_id the previous call returned. delete_file and move_file need a snapshot_id too.
    Attachments and large tool results come with an artifact_id: read them with read_artifact. To hand a file you made (a chart, a report) to the user, call show_file with its path.
 4. Check: if process permission is on, run_process then read_process, and look at the exit code.

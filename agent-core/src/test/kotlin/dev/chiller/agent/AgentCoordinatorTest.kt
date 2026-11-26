@@ -200,6 +200,9 @@ class AgentCoordinatorTest {
         val append = truncatedCallNotice(2048, setOf("replace_text", "create_file", "append_file", "edit_file"))
         assertTrue("append_file" in append && "edit_file" !in append && "never repeat text already written" in append, append)
         assertTrue("cut off again" in truncatedCallNotice(2048, setOf("append_file"), again = true))
+        // A cut-off rewrite of an existing file starts with write_file, since create_file refuses an existing path.
+        assertTrue("write_file if the file already exists" in truncatedCallNotice(2048, setOf("create_file", "write_file", "append_file")))
+        assertTrue("write_file" !in append, append)
     }
 
     @Test fun aPlanClosedRightAfterTheReminderKeepsTheAnswerAlreadyGiven() = runTest {

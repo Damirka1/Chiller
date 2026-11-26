@@ -54,6 +54,7 @@ fun approvalPreview(request: ApprovalRequest): ApprovalPreview {
             args["expected_count"]?.jsonPrimitive?.intOrNull?.takeIf { it > 1 }?.let { I18n.current.studio.approveAllPlaces(it) })
         "create_file" -> ApprovalPreview(I18n.current.studio.approveCreate, path, "--- /dev/null\n+++ b/$path\n@@\n" + lines('+', str("content")))
         "append_file" -> ApprovalPreview(I18n.current.studio.approveAppend, path, header() + "@@\n" + lines('+', str("content")))
+        "write_file" -> ApprovalPreview(I18n.current.studio.approveRewrite, path, header() + "@@\n" + lines('+', str("content")), I18n.current.studio.approveRewriteNote)
         "edit_file" -> {
             val edits = args["edits"]?.jsonArray.orEmpty().map { it.jsonObject }
             ApprovalPreview(I18n.current.studio.approveEditLines, path, header() + edits.joinToString("\n") { edit ->
