@@ -631,7 +631,8 @@ class AgentCoordinator(
                 if (!result.ok) stats.failedToolCalls++
                 _state.update { it.copy(toolCalls = stats.toolCalls, failedToolCalls = stats.failedToolCalls) }
                 val data = result.data as? JsonObject
-                val diff = data?.get("diff")?.jsonPrimitive?.contentOrNull
+                // The full diff travels outside the model's copy of the result; a tool that keeps it in data still works.
+                val diff = result.diff ?: data?.get("diff")?.jsonPrimitive?.contentOrNull
                 val changeId = data?.get("id")?.jsonPrimitive?.contentOrNull
                 val done = a.copy(status = if (result.ok) "completed" else "failed", output = json.encodeToString(result).take(16_384), diff = diff)
                 activity(done)

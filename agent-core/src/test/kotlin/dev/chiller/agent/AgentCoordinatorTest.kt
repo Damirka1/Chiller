@@ -644,6 +644,32 @@ class AgentCoordinatorTest {
         assertEquals(listOf(false, true, true), events.records.filter { it.type == "tool.approval" }.map { it.payload["approved"]!!.jsonPrimitive.boolean })
     }
 
+    @Test fun theUserSeesTheFullDiffWhileTheModelGetsTheShortResult() = runTest {
+        val events = MemoryEvents()
+        val fullDiff = "--- /dev/null\n+++ b/big.txt\n@@ -0,0 +1,300 @@\n" + (1..300).joinToString("") { "+line $it\n" }
+        val tools = object : ToolExecutor {
+            override val specs = listOf(ToolSpec("write", "write", JsonObject(emptyMap()), ToolEffect.FILE_WRITE))
+            override suspend fun execute(call: ToolCall, context: ToolContext) = ToolResult(true, buildJsonObject {
+                put("snapshot_id", "s1"); put("path", "big.txt"); put("id", "change-1"); put("lines_added", 300); put("lines_removed", 0)
+            }, diff = fullDiff)
+        }
+        var round = 0
+        val provider = ScriptedProvider { flow {
+            if (round++ == 0) emit(ModelEvent.Completed(AgentMessage("assistant", toolCalls = listOf(ToolCall("w1", "write", "{}"))), "tool_calls"))
+            else emit(ModelEvent.Completed(AgentMessage("assistant", "done"), "stop"))
+        } }
+        val fixture = fixture(provider, tools, events, StandardTestDispatcher(testScheduler))
+        fixture.coordinator.send("write", ExecutionMode.WORKSPACE_EDIT)
+        advanceUntilIdle()
+        val activity = fixture.coordinator.state.value.activities.single { it.name == "write" }
+        assertEquals(fullDiff, activity.diff)
+        // The output the UI reads the change id from stays whole JSON; before, a 16 KiB cut broke undo of big changes.
+        assertEquals("change-1", Json.parseToJsonElement(activity.output).jsonObject["data"]?.jsonObject?.get("id")?.jsonPrimitive?.content)
+        val toModel = fixture.coordinator.state.value.messages.single { it.role == "tool" }.content.orEmpty()
+        assertTrue("line 150" !in toModel && "\"lines_added\":300" in toModel, toModel)
+        assertTrue(events.records.any { it.type == "change.reference" && it.payload["changeId"]?.jsonPrimitive?.content == "change-1" })
+    }
+
     @Test fun stoppingWhileAChangeWaitsForApprovalRestoresAsStopped() = runTest {
         val events = MemoryEvents()
         val tools = object : ToolExecutor {

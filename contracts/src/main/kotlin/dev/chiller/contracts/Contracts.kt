@@ -2,6 +2,7 @@ package dev.chiller.contracts
 
 import kotlinx.coroutines.flow.Flow
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.Transient
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import java.time.Instant
@@ -174,6 +175,11 @@ data class ToolResult(
     val truncated: Boolean = false,
     val nextCursor: String? = null,
     val artifactId: String? = null,
+    /**
+     * The full diff of a file change, for the user's timeline, review and undo. Never serialized, so the model does not
+     * get it: [data] carries the diff to the model only when it is short.
+     */
+    @Transient val diff: String? = null,
 ) {
     companion object {
         fun failure(code: String, message: String, retryable: Boolean = false, recovery: String? = null) =

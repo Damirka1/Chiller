@@ -198,7 +198,7 @@ class BuiltinTools(
             val text = json.encodeToString(result)
             if (text.length > 24_000) {
                 val artifact = artifacts.put(context.sessionId, text)
-                ToolResult(result.ok, buildJsonObject { put("summary", "Result saved as artifact; read it in pages"); put("preview", text.take(6000)) }, result.error, truncated = true, nextCursor = result.nextCursor, artifactId = artifact.id)
+                ToolResult(result.ok, buildJsonObject { put("summary", "Result saved as artifact; read it in pages"); put("preview", text.take(6000)) }, result.error, truncated = true, nextCursor = result.nextCursor, artifactId = artifact.id, diff = result.diff)
             } else result
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (e: ToolException) { ToolResult.failure(e.code, e.message, e.code in setOf("STALE_SNAPSHOT", "UNKNOWN_SNAPSHOT"), e.recovery ?: if (e.code.contains("SNAPSHOT")) "Read the file again" else null) }
@@ -213,11 +213,20 @@ class BuiltinTools(
      * A file change as the model reads it: snapshot_id first, named like the argument it feeds. Live Gemma runs passed the
      * change id or afterHash (both listed before a trailing snapshotId) as snapshot_id; the hashes are left out, the id
      * stays for undo.
+     *
+     * The model gets the diff of a small change to check it, and only line counts for a large one: it wrote or saw that
+     * text already. Live, a 299-line file's diff came back after create_file and again after delete_file (16.7k and
+     * 16.6k characters) and stayed in the context of every later round. The user's view gets the full diff in [ToolResult.diff].
      */
     private fun changed(change: FileChange) = ToolResult(true, buildJsonObject {
         change.snapshotId?.let { put("snapshot_id", it) }
-        put("path", change.path); put("id", change.id); put("diff", change.diff)
-    })
+        put("path", change.path); put("id", change.id)
+        if (change.diff.length <= MODEL_DIFF_CHARS) put("diff", change.diff)
+        else {
+            val lines = change.diff.lineSequence().filterNot { it.startsWith("+++ ") || it.startsWith("--- ") }.toList()
+            put("lines_added", lines.count { it.startsWith('+') }); put("lines_removed", lines.count { it.startsWith('-') })
+        }
+    }, diff = change.diff)
 
     /**
      * A finished process whose output is longer than one page: its beginning, the lines of the omitted middle that
@@ -390,6 +399,8 @@ private val IMAGE_EXTENSIONS = linkedMapOf("png" to "image/png", "jpg" to "image
 private val ARTIFACT_ID = Regex("[0-9a-fA-F-]{16,64}")
 private val IMAGE_SIZE = Regex("[0-9]{2,4}x[0-9]{2,4}")
 private const val MAX_ARTIFACT_MATCHES = 40
+/** About 100 diff lines: an ordinary edit's diff reaches the model whole, a rewritten or deleted file's does not. */
+private const val MODEL_DIFF_CHARS = 4_000
 // A model searched with the glob src/*, which skips subfolders, and reported 3 of 5 matches.
 private const val PATH_ARGUMENT = "Folder or file, relative to the project; subfolders are included"
 private const val GLOB_ARGUMENT = "File name pattern such as *.py, applied in every subfolder. To limit to a folder use path, not a glob like src/*"
