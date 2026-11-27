@@ -226,6 +226,36 @@ class BuiltinToolsTest {
         root.toFile().deleteRecursively()
     }
 
+    @Test fun aLongMissingBlockIsPointedOnlyToToolsTheModelHas() = runBlocking<Unit> {
+        val root = Files.createTempDirectory("chiller-long-block")
+        val original = (1..60).joinToString("\n") { "line $it" } + "\n"
+        Files.writeString(root.resolve("big.txt"), original)
+        val artifacts = object : ArtifactStore {
+            override suspend fun put(sessionId: String, content: String) = ArtifactRef("a", sessionId, content.length.toLong())
+            override suspend fun read(sessionId: String, artifactId: String, offset: Int, limit: Int) = ""
+        }
+        val full = BuiltinTools(LocalWorkspace(root), LocalProcessService(root), artifacts, object : InteractionBroker { override suspend fun ask(question: UserQuestion) = "" })
+        val compact = ProfiledTools(full, setOf("read_file", "replace_text", "write_file"))
+        val context = ToolContext("s", "r", ExecutionMode.WORKSPACE_EDIT)
+        val snapshot = full.execute(ToolCall("1", "read_file", """{"path":"big.txt"}"""), context).data!!.jsonObject.getValue("snapshot_id").jsonPrimitive.content
+        fun replace(oldText: String) = ToolCall("2", "replace_text", buildJsonObject {
+            put("path", "big.txt"); put("snapshot_id", snapshot); put("old_text", oldText); put("new_text", "x")
+        }.toString())
+        val long = (1..40).joinToString("\n") { "line ${if (it == 20) "twenty" else it.toString()}" }
+
+        val inFull = full.execute(replace(long), context).error!!
+        assertEquals("NO_MATCH", inFull.code)
+        assertTrue("old_text has 40 lines" in inFull.recovery.orEmpty() && "edit_file" in inFull.recovery.orEmpty(), inFull.recovery)
+        val inCompact = compact.execute(replace(long), context).error!!
+        assertEquals("NO_MATCH", inCompact.code)
+        assertTrue("old_text has 40 lines" in inCompact.recovery.orEmpty() && "write_file" in inCompact.recovery.orEmpty(), inCompact.recovery)
+        assertFalse("edit_file" in inCompact.recovery.orEmpty(), "compact has no edit_file: ${inCompact.recovery}")
+        val short = full.execute(replace("line 3\nline four"), context).error!!
+        assertFalse("edit_file" in short.recovery.orEmpty(), "a short old_text keeps the usual hint")
+        assertEquals(original, Files.readString(root.resolve("big.txt")))
+        root.toFile().deleteRecursively()
+    }
+
     @Test fun longFinishedProcessOutputShowsItsBeginningAndEnd() = runBlocking<Unit> {
         // A test runner puts its summary last; the model got only the first page and ran the same command again.
         val text = (0 until 3000).joinToString("") { if (it == 1500) "case 1500: FAILED, expected 15\n" else "case $it: ok\n" } + "1 failure: case 1500\n"

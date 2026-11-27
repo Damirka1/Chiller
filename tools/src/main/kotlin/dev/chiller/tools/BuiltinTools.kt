@@ -151,7 +151,11 @@ class BuiltinTools(
                     if (edits.isEmpty() || edits.size > 32) throw ToolException("INVALID_ARGUMENTS", "Provide 1–32 edits")
                     changed(workspace.edit(EditFileRequest(args.str("path"), args.str("snapshot_id"), edits)))
                 }
-                "replace_text" -> changed(workspace.replaceText(args.str("path"), args.str("snapshot_id"), args.str("old_text"), args.str("new_text"), args.int("expected_count", 1)))
+                "replace_text" -> {
+                    val oldText = args.str("old_text")
+                    try { changed(workspace.replaceText(args.str("path"), args.str("snapshot_id"), oldText, args.str("new_text"), args.int("expected_count", 1))) }
+                    catch (e: ToolException) { throw if (e.code == "NO_MATCH") e.withLongBlockHint(oldText, context.offeredTools) else e }
+                }
                 "update_plan" -> {
                     val steps = args.getValue("steps").jsonArray.map { it.jsonObject.str("step").trim().take(200) to it.jsonObject.str("status") }
                     if (steps.isEmpty() || steps.any { it.first.isEmpty() }) throw ToolException("INVALID_ARGUMENTS", "Provide 1–20 non-empty steps")
@@ -214,6 +218,20 @@ class BuiltinTools(
     }
 
     private inline fun <reified T> success(value: T) = ToolResult(true, json.encodeToJsonElement(value))
+
+    /**
+     * Live Gemma runs failed again and again to copy a block of about 100 lines exactly. For a long old_text that was not
+     * found, the hint adds a way that needs no long copy, among the tools the model was offered: the compact profile has
+     * no edit_file, and a hint naming it would cost a round on TOOL_NOT_IN_PROFILE.
+     */
+    private fun ToolException.withLongBlockHint(oldText: String, offered: Set<String>?): ToolException {
+        val count = oldText.trimEnd('\n').split('\n').size
+        if (count <= LONG_OLD_TEXT_LINES) return this
+        fun has(tool: String) = offered == null || tool in offered
+        val way = if (has("edit_file")) "with edit_file (op replace, start_line and end_line from read_file) than to copy exactly"
+            else "in parts, replace_text with a few lines of old_text at a time" + (if (has("write_file")) ", or with write_file and the complete new content when most of the file changes" else "")
+        return ToolException(code, message, listOfNotNull(recovery?.takeIf { it.isNotBlank() }, "old_text has $count lines; a block this long is easier to change $way").joinToString(". "))
+    }
 
     /**
      * A file change as the model reads it: snapshot_id first, named like the argument it feeds. Live Gemma runs passed the
@@ -406,6 +424,7 @@ private val IMAGE_EXTENSIONS = linkedMapOf("png" to "image/png", "jpg" to "image
 private val ARTIFACT_ID = Regex("[0-9a-fA-F-]{16,64}")
 private val IMAGE_SIZE = Regex("[0-9]{2,4}x[0-9]{2,4}")
 private const val MAX_ARTIFACT_MATCHES = 40
+private const val LONG_OLD_TEXT_LINES = 30
 /** About 100 diff lines: an ordinary edit's diff reaches the model whole, a rewritten or deleted file's does not. */
 private const val MODEL_DIFF_CHARS = 4_000
 // A model searched with the glob src/*, which skips subfolders, and reported 3 of 5 matches.

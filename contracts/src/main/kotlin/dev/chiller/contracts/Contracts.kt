@@ -224,7 +224,9 @@ fun pngSize(bytes: ByteArray): Pair<Int, Int>? {
 fun interface AttachmentImages { suspend fun load(sessionId: String, artifactId: String): ImageData? }
 
 enum class ExecutionMode { PLAN, WORKSPACE_EDIT }
-data class ToolContext(val sessionId: String, val runId: String, val mode: ExecutionMode, val allowProcesses: Boolean = false, val allowNetwork: Boolean = false, val allowScreenshots: Boolean = false)
+/** [offeredTools]: the tool names the model was offered, so recovery hints name only those; null means every tool of the executor. */
+data class ToolContext(val sessionId: String, val runId: String, val mode: ExecutionMode, val allowProcesses: Boolean = false, val allowNetwork: Boolean = false, val allowScreenshots: Boolean = false,
+    val offeredTools: Set<String>? = null)
 interface ToolExecutor {
     val specs: List<ToolSpec>
     suspend fun execute(call: ToolCall, context: ToolContext): ToolResult
