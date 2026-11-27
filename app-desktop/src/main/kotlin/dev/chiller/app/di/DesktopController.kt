@@ -1266,7 +1266,7 @@ class DesktopController(
         val engine = AgentCoordinator(provider, tools, events, processes, s.sessionId, modelOverride ?: s.settings.model, s.settings.thinking, maxRounds = options.effectiveMaxRounds, maxOutputTokens = maxOutput,
             projectInstructions = instructions?.text, traces = traceSink(s.sessionId), subagents = supervisor.takeIf { helpers }, systemPrompt = if (folderless) ModelProfiles.CHAT_PROMPT else modelProfile.systemPrompt, projectMap = map, scope = scope,
             // With a cost budget the prompt must stay within the input ceiling its reservations assume.
-            approvals = approvals, maxRunMinutes = options.maxRunMinutes,
+            approvals = approvals, maxRunMinutes = options.maxRunMinutes, requirePlan = modelProfile.requirePlan && !folderless,
             contextWindowTokens = (s.catalog.models.firstOrNull { it.id == (modelOverride ?: s.settings.model) }?.contextWindow ?: 32_768).let { window ->
                 if (cost == null) s.catalog.models.firstOrNull { it.id == (modelOverride ?: s.settings.model) }?.contextWindow
                 else minOf(window, s.settings.costBudget.inputTokenCeiling + maxOutput.coerceAtMost(window / 2))

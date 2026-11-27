@@ -88,6 +88,11 @@ class AgentCoordinator(
     private val approvals: ApprovalGate? = null,
     /** Wall-clock limit of one task in minutes; 0 lets it run until it finishes or is stopped. */
     private val maxRunMinutes: Int = 10,
+    /**
+     * Every task (user message) that changes files starts with a plan: until update_plan succeeds in the run, file changes
+     * are refused with PLAN_REQUIRED and nothing is written. The user asked for a detailed plan per task, not per call.
+     */
+    private val requirePlan: Boolean = false,
 ) {
     private val json = Json { encodeDefaults = true; ignoreUnknownKeys = true }
     private val _state = MutableStateFlow(RunState())
@@ -96,6 +101,8 @@ class AgentCoordinator(
     val isRunning: Boolean get() = job?.isActive == true
     private var job: Job? = null
     private var runId: String? = null
+    /** update_plan succeeded in the current run; see [requirePlan]. */
+    @Volatile private var planned = false
 
     init {
         // Up to 1000: the desktop's "no step limit" runs with a 500-step backstop.
@@ -416,8 +423,10 @@ class AgentCoordinator(
         appendMessage(AgentMessage("user", text, attachments = attachments,
             turnNote = turnNote(mode, allowProcesses, allowNetwork, allowScreenshots, offered, enabled)))
         onAccepted()
+        planned = false
+        val planRule = if (requirePlan && offered.any { it.name == "update_plan" }) "\n$PLAN_FIRST_RULE" else ""
         val delegation = if (offered.any { it.name == "spawn_agent" }) "\n- For independent investigations (several areas to explore, a review in parallel) start read-only helpers with spawn_agent, keep working, then collect them with wait_agents and agent_result. Helpers cannot edit files; verify their claims before relying on them." else ""
-        val system = AgentMessage("system", (systemPrompt ?: SYSTEM_PROMPT) + delegation +
+        val system = AgentMessage("system", (systemPrompt ?: SYSTEM_PROMPT) + delegation + planRule +
             "\nEach user message ends with a [Turn context] note on that turn's mode and permissions; the latest one applies." +
             "\n${todayLine(clock)}\n$environment")
         val guidance = projectInstructions?.takeIf { it.isNotBlank() }?.let {
@@ -732,6 +741,9 @@ class AgentCoordinator(
                 else ToolResult.failure("PERMISSION_DENIED", "Tool ${call.name} is unavailable in $mode mode or without its permission", recovery = "Use one of: ${enabled.joinToString { it.name }}")
         if (allowed.effect == ToolEffect.PROCESS && !allowProcesses) return ToolResult.failure("PERMISSION_DENIED", "Process permission was not granted",
             recovery = "Do not run commands in this task. Read files with read_file or search_text instead, and tell the user in your answer which command would check the result")
+        if (requirePlan && !planned && call.name in PLANNED_CHANGES && enabled.any { it.name == "update_plan" }) return ToolResult.failure("PLAN_REQUIRED",
+            "This task has no plan yet; nothing was changed", recovery = "First call update_plan with the concrete steps of this task: which files you change, what changes in each, " +
+                "and how you check the result. Then send this change again")
         if (approvals != null && allowed.effect == ToolEffect.FILE_WRITE) {
             val arguments = runCatching { json.parseToJsonElement(call.arguments).jsonObject }.getOrDefault(JsonObject(emptyMap()))
             // Kept in the set if the run is stopped while waiting: stopping then settles the call as not written.
@@ -743,7 +755,7 @@ class AgentCoordinator(
                 recovery = "Do not send the same change again. Ask the user what to do differently, or continue without it")
         }
         return try {
-            tools.execute(call, ToolContext(sessionId, runId, mode, allowProcesses, allowNetwork, allowScreenshots))
+            tools.execute(call, ToolContext(sessionId, runId, mode, allowProcesses, allowNetwork, allowScreenshots)).also { if (call.name == "update_plan" && it.ok) planned = true }
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Exception) {
@@ -753,6 +765,11 @@ class AgentCoordinator(
 }
 
 private const val MAX_TRUNCATION_RECOVERIES = 2
+/** Project file changes that wait for the task's plan; a created folder or a generated image does not. */
+private val PLANNED_CHANGES = setOf("edit_file", "replace_text", "create_file", "write_file", "append_file", "delete_file", "move_file")
+private const val PLAN_FIRST_RULE = "- Every task that changes files starts with a plan. After reading what you need and before the first change, call update_plan " +
+    "with concrete steps: which files you change, what changes in each, and how you check the result. Changes are refused until the plan exists. " +
+    "A question answered without changing files needs no plan."
 /** The cut-off note names the actual limit and a concrete way to append, which small models need to recover. */
 /** What the user sees while a failed model request waits to be resent. */
 internal fun retryNotice(event: ModelEvent.Retrying): String {

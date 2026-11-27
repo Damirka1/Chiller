@@ -79,7 +79,9 @@ data class EvalReport(val model: String, val endpoint: String, val startedAt: St
     /** Tasks the profile cannot attempt (a required tool is not in its toolbox). */
     val skipped: List<String> = emptyList(),
     /** Extra request fields every model request carried: sampling and tool-call options. */
-    val requestFields: JsonObject = JsonObject(emptyMap()))
+    val requestFields: JsonObject = JsonObject(emptyMap()),
+    /** File changes waited for the task's plan (CHILLER_EVAL_REQUIRE_PLAN or the profile). */
+    val requirePlan: Boolean = false)
 
 /**
  * Opt-in live evaluation of the agent on [EVAL_TASKS]. Never part of `check`.
@@ -90,6 +92,7 @@ data class EvalReport(val model: String, val endpoint: String, val startedAt: St
  * - CHILLER_EVAL_TASKS (comma-separated ids), CHILLER_EVAL_REPEATS (1–5), CHILLER_EVAL_MAX_ROUNDS (≤ 20),
  *   CHILLER_EVAL_MAX_OUTPUT (≤ 4096), CHILLER_EVAL_THINKING (true/false), CHILLER_EVAL_PROJECT_MAP (true/false, A/B override)
  * - CHILLER_EVAL_EXTRAS: a JSON object of request fields over the profile's defaults, e.g. {"temperature": 0.2}; null removes a default
+ * - CHILLER_EVAL_REQUIRE_PLAN (true/false): A/B override of the profile's plan-first rule
  * Reports and per-task traces go to reports/local/evals/ (git-ignored).
  */
 fun main() = runBlocking {
@@ -122,7 +125,8 @@ fun main() = runBlocking {
     println("=== CHILLER LIVE EVAL · $model${listed?.displayName?.let { " ($it)" } ?: ""} · profile ${resolved.id} · ${tasks.size} task(s) × $repeats · maxRounds=$maxRounds maxOutput=$maxOutput thinking=$thinking" +
         " · context ${listed?.contextWindow ?: "unknown"} · images ${imageModel?.id ?: "none"} ===")
     val report = runEvalSuite(SuiteSpec(baseUrl, model, { key }, profileId, tasks.map { it.id }.toSet(), repeats, maxRounds, maxOutput, thinking, outDir = outDir,
-        requestExtras = evalExtras(env["CHILLER_EVAL_EXTRAS"]), projectMap = env["CHILLER_EVAL_PROJECT_MAP"]?.toBooleanStrictOrNull(), listed = listed, imageModel = imageModel)) { result ->
+        requestExtras = evalExtras(env["CHILLER_EVAL_EXTRAS"]), projectMap = env["CHILLER_EVAL_PROJECT_MAP"]?.toBooleanStrictOrNull(),
+        requirePlan = env["CHILLER_EVAL_REQUIRE_PLAN"]?.toBooleanStrictOrNull(), listed = listed, imageModel = imageModel)) { result ->
         println("%-20s #%d %s  rounds=%-2d tools=%-2d errors=%-2d reread=%-2d badEdits=%-2d out=%4dk %5.1fs  %s".format(result.task, result.attempt, outcomeLabel(result),
             result.rounds, result.toolCalls, result.failedToolCalls, result.loss.repeatedReads, result.loss.failedEdits, result.loss.toolOutputChars / 1000, result.durationMs / 1000.0,
             (if (result.infrastructure) result.error.orEmpty() else result.verdict).take(80)))
@@ -187,7 +191,7 @@ internal suspend fun runTask(task: EvalTask, attempt: Int, provider: ChatComplet
         suspend fun newEngine() = AgentCoordinator(budget, tools, store, processes, session, model, thinking, maxRounds = rounds, maxOutputTokens = output,
             projectInstructions = ProjectInstructions.load(project)?.text, traces = RunTraceSink { traceFile.append(it) }, subagents = supervisor.takeIf { helpersAllowed },
             systemPrompt = modelProfile.systemPrompt, projectMap = if (modelProfile.projectMap) code.projectMap() else null, scope = this,
-            contextWindowTokens = task.contextWindowTokens ?: contextWindowTokens)
+            contextWindowTokens = task.contextWindowTokens ?: contextWindowTokens, requirePlan = modelProfile.requirePlan)
         var engine = newEngine()
         // Turns run in one session; totals add up over them, and the first failing turn ends the attempt.
         var rounds = 0; var toolCalls = 0; var failedToolCalls = 0
@@ -249,7 +253,7 @@ internal fun renderMarkdown(report: EvalReport): String = buildString {
     appendLine("# Chiller eval · ${report.model}")
     appendLine()
     appendLine("Endpoint `${report.endpoint}` · started ${report.startedAt} · repeats ${report.repeats} · maxRounds ${report.maxRounds} · maxOutput ${report.maxOutputTokens}" +
-        if (report.requestFields.isEmpty()) "" else " · request fields `${report.requestFields}`")
+        (if (report.requestFields.isEmpty()) "" else " · request fields `${report.requestFields}`") + (if (report.requirePlan) " · plan required" else ""))
     appendLine()
     val infrastructure = results.count { it.infrastructure }
     appendLine("**Passed ${passed}/${results.size}**" + (if (infrastructure > 0) " (provider errors $infrastructure)" else "") + " · rounds ${results.sumOf { it.rounds }} · tool calls ${results.sumOf { it.toolCalls }} (failed ${results.sumOf { it.failedToolCalls }}) · " +

@@ -28,6 +28,12 @@ data class ModelProfile(
     val parallelToolCalls: Boolean? = null,
     /** Put a compact map of files and declarations into the context at the start, saving discovery rounds. */
     val projectMap: Boolean = false,
+    /**
+     * Every task that changes files starts with update_plan; changes before it are refused (see AgentCoordinator).
+     * Measured on Gemma 4 26B A4B with reasoning (full, 6 hard tasks × 2): a plan before the first change in 9/10 attempts
+     * instead of 4/10, one refused change, and no extra cost (168 rounds and 993 s against 174 and 1091 s).
+     */
+    val requirePlan: Boolean = true,
 )
 
 object ModelProfiles {

@@ -38,6 +38,8 @@ data class SuiteSpec(
     val outDir: Path,
     /** Overrides the profile's project map, for A/B runs; null keeps the profile's choice. */
     val projectMap: Boolean? = null,
+    /** Overrides the profile's plan-first rule, for A/B runs; null keeps the profile's choice. */
+    val requirePlan: Boolean? = null,
     /** The endpoint's catalog entry for [model]: name for the auto profile, context window, reasoning switch. */
     val listed: ProviderModel? = null,
     /** The endpoint's image model for generate_image; null skips tasks that need it. */
@@ -56,7 +58,8 @@ data class SuiteSpec(
 suspend fun runEvalSuite(spec: SuiteSpec, onResult: suspend (EvalResult) -> Unit = {}): EvalReport {
     val tasks = EVAL_TASKS.filter { spec.taskIds == null || it.id in spec.taskIds }
     require(tasks.isNotEmpty()) { "No tasks selected; known: ${EVAL_TASKS.joinToString { it.id }}" }
-    val modelProfile = ModelProfiles.resolve(spec.profileId, spec.model, spec.listed?.displayName).let { p -> spec.projectMap?.let { p.copy(projectMap = it) } ?: p }
+    val modelProfile = ModelProfiles.resolve(spec.profileId, spec.model, spec.listed?.displayName)
+        .let { p -> spec.projectMap?.let { p.copy(projectMap = it) } ?: p }.let { p -> spec.requirePlan?.let { p.copy(requirePlan = it) } ?: p }
     val (supported, skipped) = tasks.partition { task ->
         task.requiredTools.all { tool -> (modelProfile.tools == null || tool in modelProfile.tools!!) && (tool != "generate_image" || spec.imageModel != null) }
     }
@@ -89,7 +92,7 @@ suspend fun runEvalSuite(spec: SuiteSpec, onResult: suspend (EvalResult) -> Unit
         }
     } finally { http.close() }
     val report = EvalReport(spec.model, spec.baseUrl, startedAt, spec.maxRounds, spec.maxOutputTokens, spec.repeats, results, summarize(results), profile = modelProfile.id,
-        skipped = skipped.map { it.id }, requestFields = extras)
+        skipped = skipped.map { it.id }, requestFields = extras, requirePlan = modelProfile.requirePlan)
     val json = Json { prettyPrint = true; encodeDefaults = true }
     Files.writeString(spec.outDir.resolve("report.json"), json.encodeToString(EvalReport.serializer(), report))
     Files.writeString(spec.outDir.resolve("report.md"), renderMarkdown(report))

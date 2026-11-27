@@ -50,17 +50,16 @@ class ApprovalFlowTest {
     @Test fun `a change waits for the user, a declined one is never written`() = runBlocking<Unit> {
         val project = Files.createDirectories(temp.resolve("project")).toRealPath()
         var created = 0
-        // A model that creates one file per turn, then answers; served locally.
+        // A model that plans, creates one file per turn, then answers; served locally.
         val model = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0).apply {
             createContext("/") { exchange ->
-                val last = Json.parseToJsonElement(exchange.requestBody.readBytes().toString(Charsets.UTF_8)).jsonObject["messages"]!!.jsonArray.last().jsonObject
-                val chunk = if (last["role"]?.jsonPrimitive?.content == "tool") buildJsonObject {
-                    put("choices", buildJsonArray { add(buildJsonObject { put("delta", buildJsonObject { put("content", "готово") }); put("finish_reason", "stop") }) })
-                } else {
-                    created++
-                    val call = buildJsonObject { put("index", 0); put("id", "call-$created"); put("type", "function")
-                        put("function", buildJsonObject { put("name", "create_file"); put("arguments", buildJsonObject { put("path", "file-$created.txt"); put("content", "ok\n") }.toString()) }) }
-                    buildJsonObject { put("choices", buildJsonArray { add(buildJsonObject { put("delta", buildJsonObject { put("tool_calls", buildJsonArray { add(call) }) }); put("finish_reason", "tool_calls") }) }) }
+                val messages = Json.parseToJsonElement(exchange.requestBody.readBytes().toString(Charsets.UTF_8)).jsonObject["messages"]!!.jsonArray
+                val chunk = when {
+                    messages.last().jsonObject["role"]?.jsonPrimitive?.content == "user" -> fakePlan("plan-$created")
+                    answersPlan(messages) -> { created++; fakeCall("call-$created", "create_file", buildJsonObject { put("path", "file-$created.txt"); put("content", "ok\n") }.toString()) }
+                    else -> buildJsonObject {
+                        put("choices", buildJsonArray { add(buildJsonObject { put("delta", buildJsonObject { put("content", "готово") }); put("finish_reason", "stop") }) })
+                    }
                 }
                 exchange.responseHeaders.add("Content-Type", "text/event-stream")
                 exchange.sendResponseHeaders(200, 0)
@@ -103,3 +102,17 @@ class ApprovalFlowTest {
         assertEquals(listOf(false to false, true to false, true to true), decisions)
     }
 }
+
+/** A streamed reply with one tool call, as a local fake model sends it. */
+internal fun fakeCall(id: String, name: String, arguments: String) = buildJsonObject {
+    val call = buildJsonObject { put("index", 0); put("id", id); put("type", "function"); put("function", buildJsonObject { put("name", name); put("arguments", arguments) }) }
+    put("choices", buildJsonArray { add(buildJsonObject { put("delta", buildJsonObject { put("tool_calls", buildJsonArray { add(call) }) }); put("finish_reason", "tool_calls") }) })
+}
+
+/** The plan a fake model makes first: a task that changes files starts with update_plan. */
+internal fun fakePlan(id: String) = fakeCall(id, "update_plan", """{"steps":[{"step":"Create the file","status":"done"}]}""")
+
+/** The request's last message is the result of the model's update_plan call. */
+internal fun answersPlan(messages: kotlinx.serialization.json.JsonArray): Boolean = messages.size >= 2 &&
+    messages.last().jsonObject["role"]?.jsonPrimitive?.content == "tool" &&
+    messages[messages.size - 2].jsonObject["tool_calls"]?.jsonArray?.any { it.jsonObject["function"]?.jsonObject?.get("name")?.jsonPrimitive?.content == "update_plan" } == true

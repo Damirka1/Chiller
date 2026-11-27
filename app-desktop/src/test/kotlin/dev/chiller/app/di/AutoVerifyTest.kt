@@ -120,14 +120,13 @@ class AutoVerifyTest {
         val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0).apply {
             createContext("/") { exchange ->
                 val request = exchange.requestBody.readBytes().toString(Charsets.UTF_8)
-                val last = Json.parseToJsonElement(request).jsonObject["messages"]!!.jsonArray.last().jsonObject
-                val chunk = if (last["role"]?.jsonPrimitive?.content == "tool") buildJsonObject {
-                    put("choices", buildJsonArray { add(buildJsonObject { put("delta", buildJsonObject { put("content", "готово") }); put("finish_reason", "stop") }) })
-                } else {
-                    created++
-                    val arguments = buildJsonObject { put("path", "file-$created.txt"); put("content", "ok\n") }.toString()
-                    val call = buildJsonObject { put("index", 0); put("id", "call-$created"); put("type", "function"); put("function", buildJsonObject { put("name", "create_file"); put("arguments", arguments) }) }
-                    buildJsonObject { put("choices", buildJsonArray { add(buildJsonObject { put("delta", buildJsonObject { put("tool_calls", buildJsonArray { add(call) }) }); put("finish_reason", "tool_calls") }) }) }
+                val messages = Json.parseToJsonElement(request).jsonObject["messages"]!!.jsonArray
+                val chunk = when {
+                    messages.last().jsonObject["role"]?.jsonPrimitive?.content == "user" -> fakePlan("plan-$created")
+                    answersPlan(messages) -> { created++; fakeCall("call-$created", "create_file", buildJsonObject { put("path", "file-$created.txt"); put("content", "ok\n") }.toString()) }
+                    else -> buildJsonObject {
+                        put("choices", buildJsonArray { add(buildJsonObject { put("delta", buildJsonObject { put("content", "готово") }); put("finish_reason", "stop") }) })
+                    }
                 }
                 exchange.responseHeaders.add("Content-Type", "text/event-stream")
                 exchange.sendResponseHeaders(200, 0)

@@ -173,6 +173,45 @@ class AgentCoordinatorTest {
         assertEquals(null, leakedToolCalls("All good.", tools))
     }
 
+    @Test fun withAPlanRequiredAChangeWaitsForThePlanOfItsTask() = runTest {
+        val requests = mutableListOf<ModelRequest>()
+        val create = """{"path":"a.py","content":"x = 1\n"}"""
+        val provider = ScriptedProvider { request -> flow {
+            requests += request
+            when (requests.size) {
+                1 -> emit(ModelEvent.Completed(AgentMessage("assistant", null, listOf(ToolCall("c1", "create_file", create))), "tool_calls"))
+                2 -> emit(ModelEvent.Completed(AgentMessage("assistant", null, listOf(ToolCall("p1", "update_plan", """{"steps":[{"step":"Create a.py","status":"in_progress"}]}"""))), "tool_calls"))
+                3 -> emit(ModelEvent.Completed(AgentMessage("assistant", null, listOf(ToolCall("c2", "create_file", create))), "tool_calls"))
+                4 -> emit(ModelEvent.Completed(AgentMessage("assistant", null, listOf(ToolCall("p2", "update_plan", """{"steps":[{"step":"Create a.py","status":"done"}]}"""))), "tool_calls"))
+                // The next task needs its own plan.
+                6 -> emit(ModelEvent.Completed(AgentMessage("assistant", null, listOf(ToolCall("c3", "create_file", create))), "tool_calls"))
+                else -> emit(ModelEvent.Completed(AgentMessage("assistant", "Done."), "stop"))
+            }
+        } }
+        val tools = PlanAndWriteTools()
+        val fixture = fixture(provider, tools, dispatcher = StandardTestDispatcher(testScheduler), requirePlan = true)
+        fixture.coordinator.send("make a.py", ExecutionMode.WORKSPACE_EDIT)
+        advanceUntilIdle()
+        assertEquals("completed", fixture.coordinator.state.value.status)
+        assertEquals(listOf("c2"), tools.written, "the change before the plan is refused and nothing is written")
+        val refused = fixture.coordinator.state.value.messages.first { it.role == "tool" && it.toolCallId == "c1" }.content.orEmpty()
+        assertTrue("PLAN_REQUIRED" in refused && "update_plan" in refused, refused)
+        assertTrue("Every task that changes files starts with a plan" in requests[0].messages.first { it.role == "system" }.content.orEmpty())
+
+        fixture.coordinator.send("and again", ExecutionMode.WORKSPACE_EDIT)
+        advanceUntilIdle()
+        assertEquals(listOf("c2"), tools.written, "a new task starts without a plan")
+    }
+
+    private class PlanAndWriteTools : ToolExecutor {
+        val written = mutableListOf<String>()
+        override val specs = listOf(ToolSpec("update_plan", "plan", JsonObject(emptyMap()), ToolEffect.READ), ToolSpec("create_file", "create", JsonObject(emptyMap()), ToolEffect.FILE_WRITE))
+        override suspend fun execute(call: ToolCall, context: ToolContext): ToolResult {
+            if (call.name == "create_file") written += call.id
+            return ToolResult(true, buildJsonObject { put("ok", true) })
+        }
+    }
+
     private class ShowTools : ToolExecutor {
         var executed = 0
         override val specs = listOf(ToolSpec("show_file", "show", JsonObject(emptyMap()), ToolEffect.READ))
@@ -1348,10 +1387,11 @@ class AgentCoordinatorTest {
         thinking: Boolean = false,
         approvals: ApprovalGate? = null,
         maxRunMinutes: Int = 10,
+        requirePlan: Boolean = false,
     ): Fixture {
         val scope = CoroutineScope(SupervisorJob() + dispatcher)
         val processes = RecordingProcesses()
-        return Fixture(AgentCoordinator(provider, tools, eventStore, processes, "session", model, thinking = thinking, projectInstructions = instructions, traces = traces, scope = scope, contextWindowTokens = contextWindow, maxOutputTokens = maxOutputTokens, approvals = approvals, maxRunMinutes = maxRunMinutes), processes)
+        return Fixture(AgentCoordinator(provider, tools, eventStore, processes, "session", model, thinking = thinking, projectInstructions = instructions, traces = traces, scope = scope, contextWindowTokens = contextWindow, maxOutputTokens = maxOutputTokens, approvals = approvals, maxRunMinutes = maxRunMinutes, requirePlan = requirePlan), processes)
     }
 
     private data class Fixture(val coordinator: AgentCoordinator, val processes: RecordingProcesses)
