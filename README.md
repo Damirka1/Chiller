@@ -138,7 +138,9 @@ Also: `liveVisionSmoke` passed (an image with a number was read, ~1.3 s); `liveI
 | Hard `hard-*`, 6 × 2, plus 3 of them × 2 again | 13/18 | **16/18** | about the same rounds, time and tokens; the full profile is now chosen for a 26B mixture of experts |
 | Full with a plan required, `hard-*` 6 × 2 | — | 9/12 | a plan before the first change in 9/10 attempts instead of 4/10, 168 rounds and 993 s instead of 174 and 1091 s; the failures are the model rewriting `checks.py` and the untested withdrawal of the whole balance, which happened without the plan too |
 
-The most frequent failure left is the model changing a check script it was not asked to change (5 of 30 hard attempts).
+The most frequent failure on the hard tasks was the model changing a check script it was not asked to change (5 of 30 attempts); a prompt rule cut it on `hard-duration-spec` from 4 of 6 to 1 of 5.
+
+Tasks shaped like real sessions (full profile, two runs of 2 attempts, the second with the app's 24 steps per turn instead of 14): the three-turn weather page 4/4, the snake game 4/4 and the logo page 4/4, with no call written as text. The 850-line player edits 0/4: the model spends about ten steps looking around a file it has already read and then breaks or does not finish it; one attempt lost a closing brace through an `edit_file` with mixed arguments and still reported success, which is now refused.
 
 What we saw from the model: with reasoning it is noticeably more reliable (`locate-code` passes) but slower; it sometimes breaks a constraint it can see in context; in a multi-step edit `edit_file` may insert lines instead of replacing them. These are small runs, not a statistical evaluation.
 

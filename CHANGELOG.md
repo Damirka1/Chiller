@@ -11,16 +11,20 @@ All notable changes to Chiller. The format follows [Keep a Changelog](https://ke
 - **A plan for every task:** a task that changes files starts with `update_plan`. Until the plan exists, a file change is refused with `PLAN_REQUIRED` and nothing is written. On Gemma 4 26B A4B with reasoning (6 hard tasks × 2) the model planned before its first change in 9 of 10 attempts instead of 4, one change was refused, and the run took 168 rounds and 993 s instead of 174 and 1091 s.
 - **A tool call being written:** while the model streams a call's arguments, the timeline shows a row under its reasoning with the tool, its target and the characters written so far ("Rewrite index.html · writing · 12.4K chars"). On the gateway's vLLM the arguments arrive in about a hundred pieces, so the count grows during the write.
 - Evals: `CHILLER_EVAL_REQUIRE_PLAN` for A/B runs of the plan rule, and the number of replies that ended with a call written as text in `report.md`.
+- Eval tasks shaped like real sessions: a Tailwind weather page in three turns, three edits in an 850-line player page, a canvas snake game and a page around a generated pixel-art logo. Their checks read the page structure and lex its scripts, so a page cut off by the reply limit or broken by an edit fails.
 
 ### Changed
 
 - **Auto profile for mixtures of experts:** a model is judged by its total size, so `gemma-4-26b-a4b` (and a catalog name like "Gemma 4 26B A4B") gets the full profile instead of the compact one. With reasoning the full profile passed 16 of 18 hard tasks and the compact one 13, at about the same rounds, time and tokens.
+- **Check scripts:** both prompts tell the model not to change existing tests or check scripts unless asked and to put extra cases in a new file. On `hard-duration-spec` (Gemma, full) `checks.py` was rewritten in 1 of 5 attempts instead of 4 of 6.
 - **Sampling in the compact profile:** it no longer sends temperature 0.2; the server applies the model's own recommendation. On the `tool-*` probes Gemma passed 18/20 both at 0.2 and at 1.0.
 
 ### Fixed
 
 - **A tool call written as text:** Gemma 4 on vLLM ended final answers with a call in its own syntax (`show_file{path:<|"|>snake.html<|"|>}`) that the server's parser left in the text; the user saw it, nothing ran, and later turns copied it from the history. Such a call at the end of an answer is now cut out and journaled as `run.leaked_call`, never run; a reply that was nothing but such a call gets one note asking for a real call.
 - The hint for a long `old_text` that was not found suggested `edit_file`, which the compact profile does not have; it now names only tools the model has (in compact: smaller `replace_text` parts or `write_file`).
+- **An edit with the arguments of two operations:** `edit_file` with `op: replace` and `before_line` (meant as an insert) ran as a replace; live, it dropped the closing brace of a function in an 850-line page and the model reported the task done. Such an edit is now refused with a hint, and the schema says which argument belongs to which operation.
+- **A stale snapshot after the model's own edit:** `STALE_SNAPSHOT` told the model to read the file again even when its own last edit had returned the current `snapshot_id`; live, that cost a full re-read and an 11K-character rewrite. The hint now names that `snapshot_id`.
 - `search_text` with a line break in the query returned ripgrep's raw error; it now says that a search matches within one line and suggests one line of the text.
 
 ## [1.4.0-rc.1] — 2026-11-26
