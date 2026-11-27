@@ -408,7 +408,7 @@ val EVAL_TASKS: List<EvalTask> = listOf(
         },
         reference = { "The page contains no temperatures (they are loaded by a script), so weather.json was not written." },
     ),
- ) + LONG_EVAL_TASKS + TOOL_PROBE_TASKS + HARD_EVAL_TASKS
+ ) + LONG_EVAL_TASKS + TOOL_PROBE_TASKS + HARD_EVAL_TASKS + APP_EVAL_TASKS
 
 /**
  * Proves every check is meaningful: it fails on the untouched task and passes after the reference
@@ -438,4 +438,4 @@ fun verifyEvalChecks(workDir: Path): List<String> = EVAL_TASKS.mapNotNull { task
 }
 
 /** A PNG signature and IHDR for 512x512: enough for the generate-image check's type and size test. */
-private val REFERENCE_PNG = byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0x0D, 0x49, 0x48, 0x44, 0x52, 0, 0, 0x02, 0, 0, 0, 0x02, 0)
+internal val REFERENCE_PNG = byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0x0D, 0x49, 0x48, 0x44, 0x52, 0, 0, 0x02, 0, 0, 0, 0x02, 0)
