@@ -341,7 +341,7 @@ class LocalWorkspace(
         val file = resolve(request.path, true)
         val snap = requireSnapshot(request.snapshotId, file)
         val before = readBytes(file)
-        if (sha(before) != snap.hash) fail("STALE_SNAPSHOT", "File changed after it was read; no edit was applied")
+        if (sha(before) != snap.hash) stale(file, "File changed after it was read; no edit was applied")
         // Lines read under any snapshot of these exact bytes were seen: a model that read the file in parts and edits
         // with one part's snapshot_id is not sent back to read again.
         val observed = snapshots.values.filter { it.path == file && it.hash == snap.hash }.flatMapTo(HashSet(snap.observed)) { it.observed }
@@ -359,7 +359,7 @@ class LocalWorkspace(
             val file = resolve(path, true)
             val snap = lock.withLock { requireSnapshot(snapshotId, file) }
             val bytes = readBytes(file)
-            if (sha(bytes) != snap.hash) fail("STALE_SNAPSHOT", "File changed after it was read; no edit was applied")
+            if (sha(bytes) != snap.hash) stale(file, "File changed after it was read; no edit was applied")
             val text = decode(bytes)
             replacementEdits(text.lines, text.finalNewline, oldText, newText, expectedCount)
         }
@@ -404,7 +404,7 @@ class LocalWorkspace(
         val file = resolve(path, true)
         val snap = requireSnapshot(snapshotId, file)
         val before = readBytes(file)
-        if (sha(before) != snap.hash) fail("STALE_SNAPSHOT", "File changed after it was read; nothing was written")
+        if (sha(before) != snap.hash) stale(file, "File changed after it was read; nothing was written")
         val old = decode(before)
         unreadLines(file, snap.hash, old.lines.size)?.let { (first, last) ->
             throw ToolException("UNOBSERVED_RANGE", "Lines $first-$last were not read with this snapshot; write_file replaces the whole file, so every line must be read first",
@@ -485,7 +485,7 @@ class LocalWorkspace(
         val from = resolve(path, true); val to = resolve(destination, false)
         val snap = requireSnapshot(snapshotId, from); val before = readBytes(from)
         val sourceIdentity = fileIdentity(from)
-        if (sha(before) != snap.hash) fail("STALE_SNAPSHOT", "File changed after it was read")
+        if (sha(before) != snap.hash) stale(from, "File changed after it was read")
         if (Files.exists(to, LinkOption.NOFOLLOW_LINKS)) fail("ALREADY_EXISTS", "Destination already exists")
         val destinationParent = to.parent ?: fail("INVALID_PATH", "A destination directory is required")
         if (!Files.isDirectory(destinationParent, LinkOption.NOFOLLOW_LINKS)) throw ToolException("NOT_DIRECTORY", "Destination directory must already exist",
@@ -513,7 +513,7 @@ class LocalWorkspace(
     override suspend fun delete(path: String, snapshotId: String): FileChange = withContext(Dispatchers.IO) { lock.withLock {
         val file = resolve(path, true); val snap = requireSnapshot(snapshotId, file); val before = readBytes(file)
         val sourceIdentity = fileIdentity(file)
-        if (sha(before) != snap.hash) fail("STALE_SNAPSHOT", "File changed after it was read")
+        if (sha(before) != snap.hash) stale(file, "File changed after it was read")
         val id = UUID.randomUUID().toString(); durablePrepare(id, file, before, null, operation = "delete")
         if (sha(readBytes(file)) != snap.hash || !sameIdentity(sourceIdentity, fileIdentity(file))) fail("STALE_SNAPSHOT", "File changed while preparing delete")
         Files.delete(file); durableCommit(id, file, before, null, operation = "delete")
@@ -1122,6 +1122,13 @@ class LocalWorkspace(
             else "Read ${relative(path)} again and use the snapshot_id it returns"
     }
     private fun fail(code: String, message: String): Nothing = throw ToolException(code, message)
+
+    /**
+     * A snapshot older than the file. Live, Gemma sent write_file with the snapshot of a read made before its own
+     * replace_text, was told to read again, re-read the whole page and wrote 11K characters a second time. When the file's
+     * present bytes have a snapshot the model was given (here by that replace_text), the hint names it.
+     */
+    private fun stale(file: Path, message: String): Nothing = throw ToolException("STALE_SNAPSHOT", message, snapshotRecovery(file, null))
 }
 
 /** A generated image is a few megabytes; anything far larger is a bug or an abuse of the write path. */

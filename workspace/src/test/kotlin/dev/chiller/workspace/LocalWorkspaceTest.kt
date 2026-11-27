@@ -104,6 +104,24 @@ class LocalWorkspaceTest {
         expectError("NOT_FOUND") { ws.write("missing.txt", stale.snapshotId, "x\n") }
     }
 
+    @Test fun aSnapshotOlderThanTheModelsOwnEditNamesTheNewOne() = workspace { root, ws ->
+        val file = root.resolve("page.html")
+        Files.writeString(file, "<h1>Old</h1>\n<p>text</p>\n")
+        val read = ws.read(ReadFileRequest("page.html"))
+        val edit = ws.replaceText("page.html", read.snapshotId, "<h1>Old</h1>", "<h1>New</h1>")
+        try { ws.write("page.html", read.snapshotId, "<h1>New</h1>\n<p>more</p>\n"); error("A stale snapshot was written") }
+        catch (e: ToolException) {
+            assertEquals("STALE_SNAPSHOT", e.code)
+            assertEquals("The current snapshot_id of page.html is ${edit.snapshotId}; use it", e.recovery)
+        }
+        ws.write("page.html", edit.snapshotId!!, "<h1>New</h1>\n<p>more</p>\n")
+        // A change nobody gave the model a snapshot of still sends it to read the file.
+        val mine = ws.read(ReadFileRequest("page.html"))
+        Files.writeString(file, "user edit\n")
+        try { ws.write("page.html", mine.snapshotId, "model\n"); error("A user edit was overwritten") }
+        catch (e: ToolException) { assertEquals("Read page.html again and use the snapshot_id it returns", e.recovery) }
+    }
+
     @Test fun writeKeepsTheFilesCrLfAndBom() = workspace { root, ws ->
         val bom = byteArrayOf(0xef.toByte(), 0xbb.toByte(), 0xbf.toByte())
         Files.write(root.resolve("a.txt"), bom + "one\r\ntwo\r\n".toByteArray())
