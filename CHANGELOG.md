@@ -6,6 +6,23 @@ All notable changes to Chiller. The format follows [Keep a Changelog](https://ke
 
 ## [Unreleased]
 
+### Added
+
+- **A plan for every task:** a task that changes files starts with `update_plan`. Until the plan exists, a file change is refused with `PLAN_REQUIRED` and nothing is written. On Gemma 4 26B A4B with reasoning (6 hard tasks × 2) the model planned before its first change in 9 of 10 attempts instead of 4, one change was refused, and the run took 168 rounds and 993 s instead of 174 and 1091 s.
+- **A tool call being written:** while the model streams a call's arguments, the timeline shows a row under its reasoning with the tool, its target and the characters written so far ("Rewrite index.html · writing · 12.4K chars"). On the gateway's vLLM the arguments arrive in about a hundred pieces, so the count grows during the write.
+- Evals: `CHILLER_EVAL_REQUIRE_PLAN` for A/B runs of the plan rule, and the number of replies that ended with a call written as text in `report.md`.
+
+### Changed
+
+- **Auto profile for mixtures of experts:** a model is judged by its total size, so `gemma-4-26b-a4b` (and a catalog name like "Gemma 4 26B A4B") gets the full profile instead of the compact one. With reasoning the full profile passed 16 of 18 hard tasks and the compact one 13, at about the same rounds, time and tokens.
+- **Sampling in the compact profile:** it no longer sends temperature 0.2; the server applies the model's own recommendation. On the `tool-*` probes Gemma passed 18/20 both at 0.2 and at 1.0.
+
+### Fixed
+
+- **A tool call written as text:** Gemma 4 on vLLM ended final answers with a call in its own syntax (`show_file{path:<|"|>snake.html<|"|>}`) that the server's parser left in the text; the user saw it, nothing ran, and later turns copied it from the history. Such a call at the end of an answer is now cut out and journaled as `run.leaked_call`, never run; a reply that was nothing but such a call gets one note asking for a real call.
+- The hint for a long `old_text` that was not found suggested `edit_file`, which the compact profile does not have; it now names only tools the model has (in compact: smaller `replace_text` parts or `write_file`).
+- `search_text` with a line break in the query returned ripgrep's raw error; it now says that a search matches within one line and suggests one line of the text.
+
 ## [1.4.0-rc.1] — 2026-11-26
 
 The first candidate of 1.4: a whole file is rewritten in one step, large edits stay out of the model's context and can be undone again, the provider's prompt cache survives mode switches and long conversations, and any temperature can be typed in.

@@ -50,7 +50,7 @@ The image model is chosen in "Settings → Agent → Image model": "Auto" takes 
 
 ## Profiles and protocol
 
-The full/compact profile changes the tool set and how the agent works, not what the server can do. Automatic selection by ID is a heuristic; the settings can override it.
+The full/compact profile changes the tool set and how the agent works, not what the server can do. Automatic selection by ID is a heuristic: 14B or less is compact, and a mixture of experts counts by its total size (`26b-a4b` is full). The settings can override it.
 
 Sampling: both profiles leave it to the server, which on vLLM applies the model's own recommendation from its `generation_config.json` unless the server was started with `--generation-config vllm`; llama.cpp, OpenAI and DeepSeek use their own defaults. For a family with a known recommendation from its authors, Chiller sends that recommendation itself: Gemma (by ID or by name from the catalog) gets `temperature: 1.0`, `top_p: 0.95`, `top_k: 64`. The temperature chosen in settings and "Extra request fields (JSON)" are applied on top; a `null` value removes a default field, for example `{"top_k": null}` for a server that does not accept `top_k`. The request fields of each live eval are written to its `report.md`. Vision sends prepared images to models that support it; the support flag does not replace checking the server.
 

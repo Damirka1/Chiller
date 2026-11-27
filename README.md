@@ -65,7 +65,7 @@ The screenshots are rendered from the real app and the real agent loop on a demo
 ## Features
 
 - **OpenAI-compatible providers**: presets for vLLM, Ollama, LM Studio, DeepSeek, OpenAI, OpenRouter, Gemini, Groq, Mistral, xAI, Together, Fireworks. A key is bound to its origin; you can explicitly save it to the macOS Keychain or the Windows Credential Manager. Compatibility of each preset has not been confirmed separately.
-- **Model profiles**: "Full" for large models, "Compact" for small ones; "Auto" chooses by ID (for example, `gemma-4-26b-a4b` → compact) and, for gateway aliases, by the name in the catalog (`quasar` named "Gemma 4 26B A4B" → compact). Gemma by ID or name gets the recommended sampling (temperature 1.0, top_p 0.95, top_k 64); a temperature you choose and extra request fields take priority, and `null` in them removes a field the server does not accept. If the catalog does not name the model (an alias named like "Quasar"), choose the profile and temperature by hand.
+- **Model profiles**: "Full" for large models, "Compact" for small ones; "Auto" chooses by ID (for example, `gemma-4-e4b` → compact; a mixture of experts counts by its total size, so `gemma-4-26b-a4b` → full) and, for gateway aliases, by the name in the catalog (`nova` named "Gemma 4 26B A4B" → full). Gemma by ID or name gets the recommended sampling (temperature 1.0, top_p 0.95, top_k 64); a temperature you choose and extra request fields take priority, and `null` in them removes a field the server does not accept. If the catalog does not name the model (an alias named like "Quasar"), choose the profile and temperature by hand.
 - **Vision**: images from the clipboard and from files go to a model that understands them, downscaled and only with the latest messages.
 - **Image generation**: if the provider's catalog has an image model (for example, Flux 2 Klein), the agent gets `generate_image`. It draws a new picture or edits an attached or project picture and saves the result as a new file with a preview and undo. Images can be drawn through a different connected provider than the chat.
 - **Your own provider**: a company gateway or a home server (HTTP or HTTPS, for example llama.cpp on your local network) is added in settings with a name, an address and a key variable from `.env`; it is stored only in this computer's settings. A model of another provider can be picked right in the model menu, and requests can go through a corporate proxy.
@@ -96,7 +96,7 @@ A demo without a model or a key: "Demo scenario" on the start screen shows a scr
 
 ### Gemma on vLLM
 
-Start vLLM with the OpenAI-compatible API and tool calling on: `--enable-auto-tool-choice` and a `--tool-call-parser` that matches your model's chat template (see the vLLM documentation). In Chiller, set the address `http://<server>:8000/v1` and the model ID; the "Auto" profile turns on compact mode and vision. Chiller reads the context window, vision and reasoning from the `/models` catalog (`max_model_len`, `input_modalities`, `capabilities`; the fields are listed under [providers](docs/PROVIDERS.md#vllm-and-gateways)). For a model with `reasoning` in the catalog, the "Model reasoning" switch passes `chat_template_kwargs.enable_thinking`. The reasoning of such a model is sent back to it within the turn, as Gemma 4 requires. On 18 Gemma tasks this halved the generated tokens and cut the time by a third. Gemma requests get the recommended sampling: temperature 1.0, top_p 0.95, top_k 64. vLLM structured output can be passed through "Extra request fields (JSON)".
+Start vLLM with the OpenAI-compatible API and tool calling on: `--enable-auto-tool-choice` and a `--tool-call-parser` that matches your model's chat template (see the vLLM documentation). In Chiller, set the address `http://<server>:8000/v1` and the model ID; the "Auto" profile picks the full profile and turns on vision. Chiller reads the context window, vision and reasoning from the `/models` catalog (`max_model_len`, `input_modalities`, `capabilities`; the fields are listed under [providers](docs/PROVIDERS.md#vllm-and-gateways)). For a model with `reasoning` in the catalog, the "Model reasoning" switch passes `chat_template_kwargs.enable_thinking`. The reasoning of such a model is sent back to it within the turn, as Gemma 4 requires. On 18 Gemma tasks this halved the generated tokens and cut the time by a third. Gemma requests get the recommended sampling: temperature 1.0, top_p 0.95, top_k 64. vLLM structured output can be passed through "Extra request fields (JSON)".
 
 Live check on October 19, 2026: Gemma 4 26B A4B (MoE, ~4B active parameters) on vLLM 0.31 behind an HTTPS gateway, the `:evals:liveEval` task set.
 
@@ -129,6 +129,16 @@ Also: `liveVisionSmoke` passed (an image with a number was read, ~1.3 s); `liveI
 | `tool-*` probes, 10 × 2 | **20/20** | it was 18/20 without reasoning |
 | Hard `hard-*`, 6 × 2 | 9/12 | `hard-iso-dates` 0/2 → 2/2 after window-sized reads; failures are `hard-duration-spec` (reasoning was cut by the limit) and `hard-mutation-tests` (the model does not check withdrawing the whole balance) |
 | `hard-duration-spec` and `hard-mutation-tests` with 12288 reasoning headroom, × 3 | **6/6** | cuts 8 → 0, a `hard-duration-spec` attempt takes ~150 s instead of 300–600; `hard-mutation-tests` had no cuts before either, so it is more likely noise |
+
+**November 27, 2026**, reasoning on, sampling left to the server, the gateway alias `nova`:
+
+| Set | Compact | Full | Notes |
+|---|---|---|---|
+| `tool-rewrite`, `tool-chunked-write`, `tool-far-edits`, × 3 | **9/9** | **9/9** | no failed calls; `write_file` was used in 6 of 6 rewrites, always with a `snapshot_id` |
+| Hard `hard-*`, 6 × 2, plus 3 of them × 2 again | 13/18 | **16/18** | about the same rounds, time and tokens; the full profile is now chosen for a 26B mixture of experts |
+| Full with a plan required, `hard-*` 6 × 2 | — | 9/12 | a plan before the first change in 9/10 attempts instead of 4/10, 168 rounds and 993 s instead of 174 and 1091 s; the failures are the model rewriting `checks.py` and the untested withdrawal of the whole balance, which happened without the plan too |
+
+The most frequent failure left is the model changing a check script it was not asked to change (5 of 30 hard attempts).
 
 What we saw from the model: with reasoning it is noticeably more reliable (`locate-code` passes) but slower; it sometimes breaks a constraint it can see in context; in a multi-step edit `edit_file` may insert lines instead of replacing them. These are small runs, not a statistical evaluation.
 
