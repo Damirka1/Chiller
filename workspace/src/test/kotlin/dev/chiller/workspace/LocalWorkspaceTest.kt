@@ -639,6 +639,17 @@ class LocalWorkspaceTest {
         } finally { root.toFile().deleteRecursively() }
     }
 
+    @Test fun aSearchAcrossALineBreakGetsAHintInsteadOfRipgrepsError() = kotlinx.coroutines.runBlocking {
+        val root = Files.createTempDirectory("chiller-search-newline-")
+        try {
+            val ws = LocalWorkspace(root)
+            val literal = ws.searchPage("def \n", path = ".")
+            assertEquals("INVALID_QUERY", literal.error?.code)
+            assertEquals("Search for one line of the text, for example \"def\", then read around the lines it finds", literal.error?.recovery)
+            assertEquals("INVALID_QUERY", ws.searchPage("""return x\n\s+""", path = ".", regex = true).error?.code)
+        } finally { root.toFile().deleteRecursively() }
+    }
+
     @Test fun searchPagesReturnCapturedMatchesAfterWorkspaceChanges() = kotlinx.coroutines.runBlocking {
         val check = runCatching { ProcessBuilder("rg", "--version").start().waitFor() == 0 }.getOrDefault(false)
         org.junit.jupiter.api.Assumptions.assumeTrue(check, "ripgrep is required for workspace search")

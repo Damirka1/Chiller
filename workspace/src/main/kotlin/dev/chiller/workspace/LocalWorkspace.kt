@@ -194,6 +194,13 @@ class LocalWorkspace(
         val pageQuery = PageQuery("search", path, glob, query, regex, context.coerceIn(0, 5))
         if (cursor != null) return@withContext continuePage(pageQuery, limit, cursor, "matches")
         if (query.isEmpty()) return@withContext ToolResult.failure("INVALID_QUERY", "Search query must not be empty")
+        // Live, Gemma searched for "def \n" and got ripgrep's raw refusal with no hint.
+        // In a regex, \n is a line break too; as literal text it is a backslash and an n, which code does contain.
+        if ('\n' in query || regex && "\\n" in query) {
+            val line = query.split('\n').flatMap { if (regex) it.split("\\n") else listOf(it) }.map { it.trim() }.firstOrNull { it.isNotEmpty() }
+            return@withContext ToolResult.failure("INVALID_QUERY", "search_text matches within one line; the query must not contain a line break",
+                recovery = if (line != null) "Search for one line of the text, for example \"${line.take(80)}\", then read around the lines it finds" else "Search for the text of one line")
+        }
         val dir = resolve(path, true)
         val contextLines = context.coerceIn(0, 5)
         val args = mutableListOf(Ripgrep.executable(), "--no-config", "--json", "--line-number", "--color", "never", "--no-require-git", "--sort", "path", "--max-filesize", "2M", "--max-columns", "2000", "--max-columns-preview")
