@@ -104,6 +104,23 @@ class LocalWorkspaceTest {
         expectError("NOT_FOUND") { ws.write("missing.txt", stale.snapshotId, "x\n") }
     }
 
+    @Test fun anEditWithTheArgumentsOfTwoOperationsIsRefused() = workspace { root, ws ->
+        val file = root.resolve("player.js")
+        val original = "function renderList() {\n  draw();\n}\nfunction playTrack() {}\n"
+        Files.writeString(file, original)
+        val read = ws.read(ReadFileRequest("player.js"))
+        // Seen live: op replace with before_line too, meant as an insert; as a replace it dropped the closing brace.
+        try { ws.edit(EditFileRequest("player.js", read.snapshotId, listOf(FileEdit("replace", startLine = 3, endLine = 3, beforeLine = 3, content = "function shuffle() {}")))); error("An ambiguous edit ran") }
+        catch (e: ToolException) {
+            assertEquals("INVALID_EDIT", e.code)
+            assertTrue("op insert with before_line only" in e.recovery.orEmpty(), e.recovery)
+        }
+        expectError("INVALID_EDIT") { ws.edit(EditFileRequest("player.js", read.snapshotId, listOf(FileEdit("insert", startLine = 4, beforeLine = 4, content = "x")))) }
+        assertEquals(original, Files.readString(file))
+        ws.edit(EditFileRequest("player.js", read.snapshotId, listOf(FileEdit("insert", beforeLine = 4, content = "function shuffle() {}"))))
+        assertEquals("function renderList() {\n  draw();\n}\nfunction shuffle() {}\nfunction playTrack() {}\n", Files.readString(file))
+    }
+
     @Test fun aSnapshotOlderThanTheModelsOwnEditNamesTheNewOne() = workspace { root, ws ->
         val file = root.resolve("page.html")
         Files.writeString(file, "<h1>Old</h1>\n<p>text</p>\n")

@@ -38,7 +38,8 @@ class BuiltinTools(
         spec("edit_file", "Edit read lines of the exact snapshot by line number. 1-based inclusive ranges. For small changes replace_text is simpler. All edits use the original snapshot. The returned snapshot_id can be used for further edits without re-reading.", ToolEffect.FILE_WRITE,
             mapOf("path" to string(), "snapshot_id" to string(), "edits" to buildJsonObject { put("type", "array"); put("maxItems", 32); put("items", buildJsonObject {
                 put("type", "object"); put("additionalProperties", false)
-                put("properties", buildJsonObject { put("op", buildJsonObject { put("type", "string"); put("enum", JsonArray(listOf("replace", "insert", "delete").map(::JsonPrimitive))) }); put("start_line", integer()); put("end_line", integer()); put("before_line", integer()); put("content", string()) })
+                put("properties", buildJsonObject { put("op", buildJsonObject { put("type", "string"); put("enum", JsonArray(listOf("replace", "insert", "delete").map(::JsonPrimitive))) }); put("start_line", integer("For replace and delete: the first line")); put("end_line", integer("For replace and delete: the last line"))
+                    put("before_line", integer("For insert only: the new lines go before this line; omit it for replace and delete")); put("content", string()) })
                 put("required", JsonArray(listOf(JsonPrimitive("op"))))
             }) }), "path", "snapshot_id", "edits"),
         spec("replace_text", "Replace exact text in a file you have read. Copy old_text from read_file output without the line-number prefix, including indentation. Must match exactly expected_count times (default 1); otherwise nothing changes. Prefer this for small changes. Returns snapshot_id for further edits.", ToolEffect.FILE_WRITE,

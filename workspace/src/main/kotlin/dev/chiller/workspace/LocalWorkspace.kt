@@ -685,6 +685,13 @@ class LocalWorkspace(
 
     private fun applyEdits(f: TextFile, edits: List<FileEdit>, observed: Set<Int>): Applied {
         if (edits.isEmpty()) fail("EMPTY_EDIT", "At least one edit is required")
+        // Live, Gemma sent op replace with start_line, end_line and before_line all 810, meaning to insert before line 810.
+        // It ran as a replace, the closing brace on that line was lost, and the model reported the task done. Arguments of
+        // two operations make the intent ambiguous, so nothing is applied.
+        edits.firstOrNull { (it.op == "insert" && (it.startLine != null || it.endLine != null)) || (it.op != "insert" && it.beforeLine != null) }?.let { e ->
+            throw ToolException("INVALID_EDIT", "An edit with op ${e.op} also has ${if (e.op == "insert") "start_line/end_line" else "before_line"}; nothing was changed",
+                "To add lines and keep every existing one, use op insert with before_line only; to change lines, use op replace with start_line and end_line only")
+        }
         val ops = edits.map { e ->
             when (e.op) {
                 "replace", "delete" -> {
