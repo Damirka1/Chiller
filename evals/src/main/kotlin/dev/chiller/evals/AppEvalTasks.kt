@@ -254,8 +254,12 @@ private fun imagePageProblem(project: Path): String? {
     }
 }
 
+/** The app's default step limit per turn: these tasks are measured as the user runs them, not under the suite's 14. */
+private const val APP_MAX_ROUNDS = 24
+
 internal val APP_EVAL_TASKS: List<EvalTask> = listOf(
     EvalTask(
+        maxRounds = APP_MAX_ROUNDS,
         id = "app-weather-turns",
         title = "Приложение погоды на Tailwind в три хода, как в живой сессии",
         prompt = "Давай weather app. Сделай его на html и tailwind в одном файле weather.html, максимально красиво. Ключа к API нет, поэтому возьми образцы данных " +
@@ -290,6 +294,7 @@ internal val APP_EVAL_TASKS: List<EvalTask> = listOf(
         ),
     ),
     EvalTask(
+        maxRounds = APP_MAX_ROUNDS,
         id = "app-player-edits",
         title = "Три правки в большой странице плеера без порчи остального",
         prompt = "В player.html три правки: 1) акцентный цвет --accent поменяй на #0ea5e9; 2) название «Pulse Player» в <title> и в заголовке h1 замени на «Chiller Player»; " +
@@ -310,6 +315,7 @@ internal val APP_EVAL_TASKS: List<EvalTask> = listOf(
         },
     ),
     EvalTask(
+        maxRounds = APP_MAX_ROUNDS,
         id = "app-snake-game",
         title = "Змейка на canvas с рекордом",
         prompt = "Ок, змейку сделаешь? Максимально красивую, в одном файле snake.html. Для проверки: canvas с id=\"board\", счёт в элементе id=\"score\", " +
@@ -320,6 +326,7 @@ internal val APP_EVAL_TASKS: List<EvalTask> = listOf(
         reference = { project -> Files.writeString(project.resolve("snake.html"), snakePage()); "Сделал snake.html." },
     ),
     EvalTask(
+        maxRounds = APP_MAX_ROUNDS,
         id = "app-image-page",
         title = "Пиксель-арт логотип и стартовая страница с ним",
         prompt = "Нарисуй пиксель-арт логотип для моей игры Pixel Quest и сохрани в assets/logo.png. Потом сделай index.html — стартовый экран игры в том же пиксельном стиле: " +
