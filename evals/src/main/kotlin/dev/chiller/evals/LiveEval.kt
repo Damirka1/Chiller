@@ -55,6 +55,8 @@ data class EvalResult(
     val infrastructure: Boolean = false,
     /** Steps the model's last plan of the turn left neither done nor skipped. */
     val openPlanSteps: Int = 0,
+    /** Replies that ended with tool calls written as text (cut from the answer, never run). */
+    val leakedCalls: Int = 0,
 )
 
 @Serializable
@@ -214,6 +216,7 @@ internal suspend fun runTask(task: EvalTask, attempt: Int, provider: ChatComplet
         // A memory scenario that never compacted did not test memory: it cannot pass.
         if (verdict.passed && task.requireContextCompaction && store.read(session).none { it.type == "context.summary" })
             verdict = Verdict(false, "${verdict.detail}; the context was never compacted, so memory was not exercised")
+        val leakedCalls = store.read(session).count { it.type == "run.leaked_call" }
         val errors = state.activities.filter { it.status == "failed" }.mapNotNull { activity ->
             runCatching { Json.parseToJsonElement(activity.output).jsonObject["error"]?.jsonObject?.get("code")?.jsonPrimitive?.content }.getOrNull()?.let { "${activity.name}:$it" }
         }.groupingBy { it }.eachCount()
@@ -229,6 +232,7 @@ internal suspend fun runTask(task: EvalTask, attempt: Int, provider: ChatComplet
             loss = lossMetrics(state.messages, state.activities),
             infrastructure = state.status != "completed" && error?.substringBefore(':')?.trim() in INFRASTRUCTURE_CODES,
             openPlanSteps = openSteps,
+            leakedCalls = leakedCalls,
         )
     }
 }
@@ -252,7 +256,7 @@ internal fun renderMarkdown(report: EvalReport): String = buildString {
         "time ${"%.1f".format(results.sumOf { it.durationMs } / 1000.0)} s · prompt ${results.sumOf { it.promptTokens ?: 0 }} · completion ${results.sumOf { it.completionTokens ?: 0 }} · cached ${results.sumOf { it.cachedPromptTokens ?: 0 }} tokens")
     appendLine()
     appendLine("Losses: repeated reads ${results.sumOf { it.loss.repeatedReads }} · failed edits ${results.sumOf { it.loss.failedEdits }} · tool output sent ${results.sumOf { it.loss.toolOutputChars } / 1000}k chars" +
-        " · attempts ending with an open plan ${results.count { it.openPlanSteps > 0 }}")
+        " · attempts ending with an open plan ${results.count { it.openPlanSteps > 0 }} · replies with a call written as text ${results.sumOf { it.leakedCalls }}")
     appendLine()
     appendLine("| Task | # | Result | Rounds | Tools (failed) | Re-reads | Failed edits | Tool output, k chars | Helpers | Time, s | Prompt / completion tok. | Verdict |")
     appendLine("|---|---|---|---|---|---|---|---|---|---|---|---|")

@@ -454,6 +454,9 @@ class AgentCoordinator(
         // A final answer while the plan still has open steps gets a bounded reminder instead of ending the turn.
         var planNotice: AgentMessage? = null
         var planReminders = 0
+        // A reply holding nothing but tool calls written as text gets a bounded note (see leakedToolCalls).
+        var leakNotice: AgentMessage? = null
+        var leakedCallRecoveries = 0
         // The last round, or a run that stopped making progress, answers without tools instead of ending with an error.
         var answerOnly = false
         var noProgressTool: String? = null
@@ -514,7 +517,7 @@ class AgentCoordinator(
                 answerOnly = true
                 repeatNotice = AgentMessage("user", LAST_ROUND_NOTICE)
             }
-            val request = ModelRequest(model, withoutEmptyInterruptions(selection.messages) + listOfNotNull(truncationNotice, planNotice, repeatNotice),
+            val request = ModelRequest(model, withoutEmptyInterruptions(selection.messages) + listOfNotNull(truncationNotice, planNotice, repeatNotice, leakNotice),
                 if (answerOnly) emptyList() else offered, thinking && !thinkingPaused, reserve)
             var truncatedCall = false
             var truncatedText = false
@@ -586,10 +589,26 @@ class AgentCoordinator(
             val answeringReminder = planNotice != null
             planNotice = null
             repeatNotice = null
+            leakNotice = null
             // Recoveries are limited per streak: a model that makes progress between cut-offs keeps going.
             truncations = 0
             _state.update { it.copy(recoveryNotice = null) }
-            val response = completion ?: throw IllegalStateException("Stream interrupted before completion; no tool was executed")
+            val completed = completion ?: throw IllegalStateException("Stream interrupted before completion; no tool was executed")
+            // Calls written as text at the end of a reply never run: they are cut from the saved reply and journaled.
+            val leaked = leakedToolCalls(completed.content.orEmpty(), offered.mapTo(mutableSetOf()) { it.name })
+            if (leaked != null) events.append(sessionId, "run.leaked_call", buildJsonObject {
+                put("runId", id); put("round", round + 1); put("tools", JsonArray(leaked.tools.map(::JsonPrimitive)))
+            })
+            // A reply that was nothing but such calls gets one more round with a note instead of ending the turn without an answer.
+            if (leaked != null && leaked.text.isBlank() && completed.toolCalls.isEmpty() && !answerOnly && leakedCallRecoveries < MAX_LEAKED_CALL_RECOVERIES && round < maxRounds - 1) {
+                leakedCallRecoveries++
+                leakNotice = AgentMessage("user", leakedCallNotice(leaked.tools))
+                _state.update { it.copy(streamingText = "", recoveryNotice = tr("The reply held only a tool call written as text; it was not run. The agent was asked to make the call properly.",
+                    "В ответе был только вызов инструмента, записанный текстом; он не выполнялся. Агента попросили сделать вызов как положено.")) }
+                return@repeat
+            }
+            // With nothing else left, the written call stays: an empty answer would tell the user less.
+            val response = if (leaked == null || leaked.text.isBlank() && completed.toolCalls.isEmpty()) completed else completed.copy(content = leaked.text.ifBlank { null })
             // Each step keeps its own reasoning, so the dialog shows it next to that step's reply and tools.
             appendMessage(response.copy(origin = MessageOrigin(MessageOriginKind.MODEL, model), reasoning = roundReasoning()))
             _state.update { it.copy(streamingText = "") }
@@ -752,6 +771,35 @@ internal fun draftTarget(partialArguments: String): String {
         ?.let { raw -> runCatching { Json.parseToJsonElement("\"$raw\"").jsonPrimitive.content }.getOrNull() }?.takeIf { it.isNotBlank() }
     return (value("path")?.let { path -> value("destination")?.let { "$path → $it" } ?: path } ?: value("query")?.let { "«$it»" } ?: value("url") ?: "").take(160)
 }
+
+/** A reply's text without the tool calls written at its end, and those calls' tool names in order. */
+internal class LeakedCalls(val text: String, val tools: List<String>)
+
+/**
+ * Tool calls written as text at the end of a reply, in Gemma 4's own syntax (`show_file{path:<|"|>a.html<|"|>}`, with or
+ * without the `<|tool_call>call:` and `<tool_call|>` markers), one per line. Seen live on vLLM: the server's parser left them
+ * in the answer, so nothing ran, the user saw the syntax and later turns copied it from the history. Only a call to a
+ * tool the model has, carrying Gemma's string delimiter `<|"|>` (which prose and code never contain), is taken. Null when
+ * the text ends otherwise.
+ */
+internal fun leakedToolCalls(text: String, tools: Set<String>): LeakedCalls? {
+    var rest = text.trimEnd()
+    val found = mutableListOf<String>()
+    while (true) {
+        val line = rest.substringAfterLast('\n')
+        val match = LEAKED_CALL.matchEntire(line.trim()) ?: break
+        if (match.groupValues[1] !in tools) break
+        found.add(0, match.groupValues[1])
+        rest = rest.dropLast(line.length).trimEnd()
+    }
+    return if (found.isEmpty()) null else LeakedCalls(rest, found)
+}
+private val LEAKED_CALL = Regex("""(?:<\|tool_call>)?(?:call:)?([A-Za-z_][A-Za-z0-9_]*)\{.*<\|"\|>.*\}(?:<tool_call\|>)?""")
+/** At most this many rounds per run are spent on replies that held nothing but calls written as text. */
+private const val MAX_LEAKED_CALL_RECOVERIES = 1
+
+internal fun leakedCallNotice(tools: List<String>) = "[Chiller] Your previous reply held only ${tools.distinct().joinToString()} written as text, so nothing ran. " +
+    "Make tool calls as real tool calls, not in the reply text; if the work is done, give the final answer."
 
 internal fun truncatedCallNotice(replyTokens: Int, tools: Set<String> = emptySet(), again: Boolean = false): String {
     // About a character per token: digits and JSON escapes take a token each on Gemma, and a part that is cut off again costs a whole reply.

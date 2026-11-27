@@ -129,6 +129,56 @@ class AgentCoordinatorTest {
         assertEquals(4, calls, "one plan round, then the answer, two reminders and the answer that stands")
     }
 
+    @Test fun aCallWrittenAsTextIsCutFromTheAnswerAndNeverRun() = runTest {
+        // Seen live: Gemma 4 on vLLM ended final answers with a show_file call in its own syntax, left in the text.
+        val tools = ShowTools()
+        val provider = ScriptedProvider { _ -> flow {
+            emit(ModelEvent.Completed(AgentMessage("assistant", "Готово: змейка в snake.html.\n\nshow_file{path:<|\"|>snake.html<|\"|>}\n"), "stop"))
+        } }
+        val events = MemoryEvents()
+        val fixture = fixture(provider, tools, eventStore = events, dispatcher = StandardTestDispatcher(testScheduler))
+        fixture.coordinator.send("snake", ExecutionMode.WORKSPACE_EDIT)
+        advanceUntilIdle()
+        assertEquals("completed", fixture.coordinator.state.value.status)
+        assertEquals("Готово: змейка в snake.html.", fixture.coordinator.state.value.messages.last { it.role == "assistant" }.content)
+        assertEquals(0, tools.executed, "a call parsed out of text is not run")
+        val leak = events.records.single { it.type == "run.leaked_call" }
+        assertEquals(listOf("show_file"), leak.payload.getValue("tools").jsonArray.map { it.jsonPrimitive.content })
+    }
+
+    @Test fun aReplyThatIsOnlyACallWrittenAsTextGetsOneNote() = runTest {
+        val requests = mutableListOf<ModelRequest>()
+        val provider = ScriptedProvider { request -> flow {
+            requests += request
+            if (requests.size == 1) emit(ModelEvent.Completed(AgentMessage("assistant", "<|tool_call>call:show_file{path:<|\"|>a.png<|\"|>}<tool_call|>"), "stop"))
+            else emit(ModelEvent.Completed(AgentMessage("assistant", "Картинка готова."), "stop"))
+        } }
+        val fixture = fixture(provider, ShowTools(), dispatcher = StandardTestDispatcher(testScheduler))
+        fixture.coordinator.send("draw", ExecutionMode.WORKSPACE_EDIT)
+        advanceUntilIdle()
+        assertEquals("completed", fixture.coordinator.state.value.status)
+        assertEquals(2, requests.size)
+        assertTrue("show_file written as text" in requests[1].messages.last().content.orEmpty(), requests[1].messages.last().content)
+        assertEquals(listOf("Картинка готова."), fixture.coordinator.state.value.messages.filter { it.role == "assistant" }.map { it.content },
+            "the empty reply is not kept, nor the note")
+    }
+
+    @Test fun onlyTrailingCallsToKnownToolsInGemmaSyntaxAreTaken() {
+        val tools = setOf("show_file", "read_file")
+        val two = leakedToolCalls("Done.\nread_file{path:<|\"|>a<|\"|>}\nshow_file{path:<|\"|>b<|\"|>}", tools)!!
+        assertEquals("Done.", two.text); assertEquals(listOf("read_file", "show_file"), two.tools)
+        assertEquals(null, leakedToolCalls("Call show_file{path:<|\"|>a<|\"|>} next time, and done.", tools), "a call inside a line is prose")
+        assertEquals(null, leakedToolCalls("Done.\nunknown_tool{path:<|\"|>a<|\"|>}", tools), "only tools the model has")
+        assertEquals(null, leakedToolCalls("Example:\nshow_file{\"path\": \"a\"}", tools), "plain JSON in an answer is not Gemma's call syntax")
+        assertEquals(null, leakedToolCalls("All good.", tools))
+    }
+
+    private class ShowTools : ToolExecutor {
+        var executed = 0
+        override val specs = listOf(ToolSpec("show_file", "show", JsonObject(emptyMap()), ToolEffect.READ))
+        override suspend fun execute(call: ToolCall, context: ToolContext): ToolResult { executed++; return ToolResult(true, buildJsonObject { put("ok", true) }) }
+    }
+
     @Test fun capabilityLineFollowsTheEnabledTools() {
         val line = capabilityLine(setOf("generate_image", "web_search", "run_process", "show_file"))
         assertTrue("generate and edit images" in line && "search the web" in line && "run programs" in line, line)
