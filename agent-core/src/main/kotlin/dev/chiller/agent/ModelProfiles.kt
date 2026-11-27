@@ -67,12 +67,12 @@ object ModelProfiles {
     )
 
     val FULL = ModelProfile(
-        "full", "Full", "Every tool, helpers and the usual prompt. For large models (DeepSeek, GPT, Claude class).", tools = null,
+        "full", "Full", "Every tool, helpers and the usual prompt. For large models (DeepSeek, GPT, Claude class) and mixtures of experts like Gemma 26B-A4B.", tools = null,
     )
 
     val COMPACT = ModelProfile(
         "compact", "Compact",
-        "For small models (about 4–14B active parameters, for example Gemma 26B-A4B): ${CORE_TOOLS.size} core tools, a short step-by-step prompt, no helpers, one call per step.",
+        "For small models (up to about 14B parameters, for example Gemma E4B or Qwen 7B): ${CORE_TOOLS.size} core tools, a short step-by-step prompt, no helpers, one call per step.",
         // No temperature: the server applies the model's own recommended sampling (vLLM reads it from generation_config.json).
         // On the tool-* probes Gemma passed 18/20 both at 0.2 and at Google's 1.0, so a fixed 0.2 bought nothing.
         tools = CORE_TOOLS, systemPrompt = COMPACT_PROMPT, maxOutputTokens = 2048, parallelToolCalls = false, projectMap = true,
@@ -128,15 +128,17 @@ object ModelProfiles {
     }
 
     /**
-     * Heuristic from a model id or name: an active-parameter tag like "a4b", a size tag of 14B or less
-     * ("7b", "8b", "e4b"), or a known small family. Null when the text says nothing about size. It never inspects the endpoint.
+     * Heuristic from a model id or name: a size tag of 14B or less ("7b", "8b", "e4b"), or a known small family. A mixture
+     * of experts is judged by its total size: on Gemma 4 26B A4B with reasoning the full profile passed 16 of 18 hard tasks
+     * and the compact one 13 at the same cost (2026-11-27), so "26b-a4b" is not small. An active-parameter tag ("a3b")
+     * decides only when no total is named. Null when the text says nothing about size. It never inspects the endpoint.
      */
     private fun sizeHint(text: String): Boolean? {
         // Names use spaces ("Gemma 4 26B A4B"); ids use dashes. Both become token boundaries.
         val id = text.lowercase().replace(' ', '-')
-        Regex("""(?<![a-z0-9])a(\d+(?:\.\d+)?)b(?![a-z0-9])""").find(id)?.let { return it.groupValues[1].toDouble() <= 14 }
         if (Regex("""(?<![a-z0-9])e\d+(?:\.\d+)?b(?![a-z0-9])""").containsMatchIn(id)) return true
         Regex("""(?<![a-z0-9.])(\d+(?:\.\d+)?)b(?![a-z0-9])""").findAll(id).map { it.groupValues[1].toDouble() }.lastOrNull()?.let { return it <= 14 }
+        Regex("""(?<![a-z0-9])a(\d+(?:\.\d+)?)b(?![a-z0-9])""").find(id)?.let { return it.groupValues[1].toDouble() <= 14 }
         return if (listOf("phi-", "phi3", "phi4", "smollm", "tinyllama", "gemma-2b", "gemma-3n").any { it in id }) true else null
     }
 }

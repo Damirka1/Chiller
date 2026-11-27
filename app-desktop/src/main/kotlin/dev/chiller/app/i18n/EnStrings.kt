@@ -234,7 +234,7 @@ object EnStrings : Strings {
         override val whatWasChecked = "What was checked"
         override val whatWasCheckedNote = "Live: DeepSeek V4.1 Flash (eval tasks and helpers). Offline: the whole tool loop, undoing edits, journals. Not checked: Gemma/vLLM, the other providers in the list, Windows and Linux live."
         override fun profileName(id: String) = if (id == "compact") "compact" else "full"
-        override fun profileDescription(id: String, tools: Int) = if (id == "compact") "For small models (about 4–14B active parameters, for example Gemma 26B-A4B): $tools core tools, a short step-by-step prompt, no helpers, one call per step." else "Every tool, helpers and the usual prompt. For large models (DeepSeek, GPT, Claude class)."
+        override fun profileDescription(id: String, tools: Int) = if (id == "compact") "For small models (up to about 14B parameters, for example Gemma E4B or Qwen 7B): $tools core tools, a short step-by-step prompt, no helpers, one call per step." else "Every tool, helpers and the usual prompt. For large models (DeepSeek, GPT, Claude class) and mixtures of experts like Gemma 26B-A4B."
         override val today = "Today"
         override val yesterday = "Yesterday"
         override val earlier = "Earlier"

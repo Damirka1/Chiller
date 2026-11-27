@@ -7,26 +7,29 @@ import kotlin.test.assertTrue
 
 class ModelProfilesTest {
     @Test fun `small models are recognised from their id`() {
-        listOf("gemma-4-26b-a4b", "google/gemma-4-26B-A4B-it", "qwen2.5-coder-7b-instruct", "llama-3.1-8b", "gemma-4-e4b", "Qwen3-30B-A3B", "phi-4-mini").forEach {
+        listOf("qwen2.5-coder-7b-instruct", "llama-3.1-8b", "gemma-4-e4b", "phi-4-mini", "moe-a3b").forEach {
             assertTrue(ModelProfiles.isSmall(it), it)
         }
-        listOf("deepseek-flash", "deepseek-v4-pro", "llama-3.1-70b", "gpt-4o-mini", "mistral-small-24b", "gemma-3-27b-it", "Qwen3-235B-A22B").forEach {
+        // A mixture of experts counts by its total size, whatever its active parameters.
+        listOf("deepseek-flash", "deepseek-v4-pro", "llama-3.1-70b", "gpt-4o-mini", "mistral-small-24b", "gemma-3-27b-it", "Qwen3-235B-A22B",
+            "gemma-4-26b-a4b", "google/gemma-4-26B-A4B-it", "Qwen3-30B-A3B").forEach {
             assertFalse(ModelProfiles.isSmall(it), it)
         }
     }
 
     @Test fun `auto resolves by model and explicit ids win`() {
-        assertEquals("compact", ModelProfiles.resolve("auto", "gemma-4-26b-a4b").id)
+        assertEquals("full", ModelProfiles.resolve("auto", "gemma-4-26b-a4b").id)
+        assertEquals("compact", ModelProfiles.resolve("auto", "gemma-4-e4b").id)
         assertEquals("full", ModelProfiles.resolve("auto", "deepseek-flash").id)
         assertEquals("compact", ModelProfiles.resolve("compact", "deepseek-flash").id)
         assertEquals("full", ModelProfiles.resolve("unknown", "gemma-4-26b-a4b").id)
         // A gateway alias says nothing about size; the catalog name decides, the id wins when it does say.
-        assertEquals("compact", ModelProfiles.resolve("auto", "quasar", "Gemma 4 26B A4B").id)
-        assertEquals("compact", ModelProfiles.resolve("auto", "nebula", "Qwen 3.6 35B A3B").id)
+        assertEquals("full", ModelProfiles.resolve("auto", "quasar", "Gemma 4 26B A4B").id)
+        assertEquals("compact", ModelProfiles.resolve("auto", "spark", "Qwen 2.5 7B").id)
         assertEquals("full", ModelProfiles.resolve("auto", "quasar", null).id)
         assertEquals("full", ModelProfiles.resolve("auto", "quasar", "Quasar").id)
         // A branded name keeps working when it also names the model.
-        assertEquals("compact", ModelProfiles.resolve("auto", "quasar", "Quasar (Gemma 4 26B A4B)").id)
+        assertEquals("compact", ModelProfiles.resolve("auto", "quasar", "Quasar (Llama 3.1 8B)").id)
         assertEquals(ModelProfiles.GEMMA_SAMPLING, ModelProfiles.recommendedSampling("quasar", "Quasar (Gemma 4 26B A4B)"))
         assertEquals("full", ModelProfiles.resolve("auto", "qwen3-235b-a22b", "Tiny 7B").id)
         assertFalse("spawn_agent" in ModelProfiles.COMPACT.tools!!, "compact profile has no helpers")
